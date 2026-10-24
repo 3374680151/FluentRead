@@ -18,7 +18,7 @@ afterEach(async () => {
 })
 
 // 直接导入实际客户端 SFC，覆盖率归因到生产源码；只替换浏览器、配置、展示与异步模块边界。
-async function mountLearning(initialTab?: string, options: {listGate?: Tab; browser?: string} = {}) {
+async function mountLearning(initialTab?: string, options: {listGate?: Tab; browser?: string; parentGate?: Promise<void>; parentVisibility?: boolean} = {}) {
   const {window, document} = parseHTML('<html><body></body></html>')
   for (const key of ['window', 'document', 'Node', 'Element', 'HTMLElement', 'SVGElement', 'Event'])
     vi.stubGlobal(key, key === 'window' ? window : window[key as keyof typeof window])
@@ -69,8 +69,9 @@ async function mountLearning(initialTab?: string, options: {listGate?: Tab; brow
   const client = await import('../src/features/reading-assistant/client')
   const i18n = {useUiI18n: () => ({language, t: (key: string) => `${language.value}:${key}`, translateLegacy: (text: string) => text})}
   const display = runtime.defineComponent({setup: (_, {slots}) => () => runtime.h('span', slots.default?.())})
-  const saved = runtime.defineComponent({setup: (_, {emit}) => () => runtime.h('section', {class: 'saved-display-port'},
-    runtime.h('button', {onClick: () => emit('navigate', 'settings-data')}, 'Saved navigate'))})
+  const savedVisibility:Array<(() => boolean) | undefined>=[]
+  const saved = runtime.defineComponent({props:['isVisible'],setup: (props, {emit}) => {savedVisibility.push(props.isVisible);return () => runtime.h('section', {class: 'saved-display-port','data-visible':String(props.isVisible?.())},
+    runtime.h('button', {onClick: () => emit('navigate', 'settings-data')}, 'Saved navigate'))}})
   const materialMount = vi.fn()
   const material = runtime.defineComponent({setup: (_, {emit}) => {materialMount();return () => runtime.h('section', {class: 'material-display-port'}, [
     runtime.h('button', {onClick: () => emit('navigate', 'settings-data')}, 'Material navigate'),
@@ -126,10 +127,13 @@ async function mountLearning(initialTab?: string, options: {listGate?: Tab; brow
       return [first, last]
     },
   })
+  const mountedParent=options.parentGate?runtime.defineAsyncComponent(async()=>{await options.parentGate;return parent}):parent
+  const isVisible=()=>shown.value
+  const warnings:string[]=[]
   const otherPage = {render: () => null}, host = document.createElement('main');document.body.append(host)
   const app: App = renderer.createApp({setup: () => () => runtime.h(runtime.KeepAlive, null, {default: () => shown.value
-    ? runtime.h(parent, {...props, onNavigate: (section: string) => navigations.push(section), onReload: (tab: string) => reloads.push(tab)}) : runtime.h(otherPage)})})
-  app.config.errorHandler = error => clientErrors.push(error);app.config.warnHandler = () => undefined
+    ? runtime.h(mountedParent, {...props, ...(options.parentVisibility===false?{}:{isVisible}), onNavigate: (section: string) => navigations.push(section), onReload: (tab: string) => reloads.push(tab)}) : runtime.h(otherPage)})})
+  app.config.errorHandler = error => clientErrors.push(error);app.config.warnHandler = message => warnings.push(message)
   const settle = async () => {for (let i = 0; i < 12; i++) {await Promise.resolve();await runtime.nextTick()}}
   function stop() {if (!stopped) {stopped = true;app.unmount()}}
   disposers.push(async () => {stop();for (const tab of ['history', 'memory'] as const) for (const gate of gates[tab]) gate.resolve(namespaces[tab])
@@ -139,7 +143,7 @@ async function mountLearning(initialTab?: string, options: {listGate?: Tab; brow
   const choose = async (tab: 'saved' | Tab) => {host.querySelector<HTMLButtonElement>(`[data-option-index="${(options.browser === 'userscript' ? ['saved', 'history', 'memory'] : ['saved', 'materials', 'history', 'memory']).indexOf(tab)}"]`)!.click();await settle()}
   const resolvePanel = async (tab: Tab) => {gates[tab].at(-1)?.resolve(namespaces[tab]);await settle()}
   const actions = (action: string) => send.mock.calls.filter(([message]) => message.action === action)
-  return {host, props, shown, language, loads, gates, namespaces, clientErrors, navigations, reloads, send, configListeners, config, materialMount,
+  return {host, props, shown, language, loads, gates, namespaces, clientErrors, navigations, reloads, send, configListeners, config, materialMount, savedVisibility, warnings,
     memories, sessions, memory, session, listGate, writeGate, settle, choose, resolvePanel, stop, actions,
     pendingWrite: () => {pendingWrite = true}, listReply: () => ({success: true, memories: [...memories], sessions: [...sessions], hasMore: false}),
     notifyMemory: (enabled: boolean) => {config.harness.memoryEnabled = enabled;for (const listener of configListeners) listener(normalizeConfig(config))},
@@ -423,5 +427,33 @@ describe('LearningCenter actual client pane loading and lifetime', () => {
     h.host.querySelector<HTMLButtonElement>('.harness-history-heading button')!.click();await h.settle()
     pending.resolve({success: true, session: {...h.session, turns: []}});await h.settle()
     expect(h.host.querySelector('.harness-history-detail')).toBeNull();expect(h.host.querySelector('.harness-history-row')).not.toBeNull()
+  })
+})
+
+
+describe('LearningCenter saved visibility forwarding',()=>{
+  it('passes one live getter to the saved child across outer KeepAlive hides without remounting it',async()=>{
+    const h=await mountLearning();const getter=h.savedVisibility[0];expect(typeof getter).toBe('function');expect(getter?.()).toBe(true)
+    h.shown.value=false;await h.settle();expect(getter?.()).toBe(false);expect(h.savedVisibility).toHaveLength(1)
+    h.shown.value=true;await h.settle();expect(getter?.()).toBe(true);expect(h.savedVisibility).toEqual([getter])
+    expect(h.warnings).toEqual([]);expect(h.clientErrors).toEqual([])
+  })
+  it('gives a late-mounted actual parent a live false saved getter until the outer page returns',async()=>{
+    const gate=deferred<void>();const h=await mountLearning(undefined,{parentGate:gate.promise})
+    expect(h.savedVisibility).toEqual([]);h.shown.value=false;await h.settle();gate.resolve();await h.settle()
+    expect(h.savedVisibility).toHaveLength(1);const getter=h.savedVisibility[0];expect(getter?.()).toBe(false)
+    h.shown.value=true;await h.settle();expect(getter?.()).toBe(true);expect(h.savedVisibility).toHaveLength(1)
+    expect(h.warnings).toEqual([]);expect(h.clientErrors).toEqual([])
+  })
+})
+
+
+describe('LearningCenter saved visibility forwarding without an outer getter',()=>{
+  it('defaults to visible and still follows its own KeepAlive lifetime when the optional getter is absent',async()=>{
+    const h=await mountLearning(undefined,{parentVisibility:false});const getter=h.savedVisibility[0]
+    expect(typeof getter).toBe('function');expect(getter?.()).toBe(true)
+    h.shown.value=false;await h.settle();expect(getter?.()).toBe(false)
+    h.shown.value=true;await h.settle();expect(getter?.()).toBe(true);expect(h.savedVisibility).toHaveLength(1)
+    expect(h.warnings).toEqual([]);expect(h.clientErrors).toEqual([])
   })
 })
