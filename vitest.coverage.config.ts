@@ -32,6 +32,7 @@ export default defineConfig({
                 'userscript/storage.ts',
                 'userscript/uiLanguageBundles.ts',
                 'userscript/languageData.ts',
+                'userscript/defaultMessageData.ts',
                 'userscript/readingStorage.ts',
                 'userscript/dataEncoding.ts',
                 'userscript/buildDataEncoding.ts',

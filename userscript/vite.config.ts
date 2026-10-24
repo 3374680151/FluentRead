@@ -14,7 +14,7 @@ import {createUserscriptInlineCssCompressionPlugin} from './inlineCssPlugin';
 import {createUserscriptAboutImagesCompressionPlugin} from './aboutImagesPlugin';
 import {createUserscriptServiceBrandIconsCompressionPlugin} from './serviceBrandIconsPlugin';
 import {createUserscriptSettingsDataPlugin} from './settingsDataPlugin';
-import {packUiLanguageBundle} from './languageData';
+import {packMessageCatalog, packUiLanguageBundle} from './languageData';
 import {gzipUserscriptBuildData} from './buildGzip';
 import {encodeUserscriptData} from './buildDataEncoding';
 import {UI_LANGUAGE_BUNDLES, zhCNMessages, currentUserscriptLanguageBundle, createUserscriptLanguageUpdate, userscriptPageMessages} from './languageBundles';
@@ -82,13 +82,14 @@ function serializeUiMessages(value: unknown): string {
         ? Object.fromEntries(Object.entries(item).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0)) : item);
 }
 // 与中文内嵌目录一致，仅投影扩展文档页专用 key；固定远程与外部资源继续使用原 bundle。
+const defaultMessageColumns = packMessageCatalog(userscriptPageMessages(zhCNMessages));
 const compressedUiLanguageBundles = greasyForkSource ? {} : Object.fromEntries(Object.entries(UI_LANGUAGE_BUNDLES)
     .filter(([language]) => language === 'en-US')
     .map(([language, bundle]) => [
     language,
     ((bytes: Uint8Array) => bundleLibraries ? encodeUserscriptData(bytes) : Buffer.from(bytes).toString('base64'))(
         gzipUserscriptBuildData(Buffer.from(serializeUiMessages(packUiLanguageBundle({...bundle,
-            messages: userscriptPageMessages(bundle.messages)}))))),
+            messages: userscriptPageMessages(bundle.messages)}, bundleLibraries ? defaultMessageColumns[0] : undefined))))),
 ]));
 const remoteUiLanguageBundles = Object.fromEntries(Object.entries(UI_LANGUAGE_BUNDLES)
     .filter(([language]) => language !== 'en-US')
@@ -164,16 +165,18 @@ export function createUserscriptCatalogCompressionPlugin(): Plugin {
                         'export const zhCNMessages = {...globalThis.__FLUENTREAD_USERSCRIPT_DATA__.zhCNMessages, ...update};',
                     ].join('\n');
                 }
-                const contents = serializeUiMessages(userscriptPageMessages(zhCNMessages));
+                const contents = serializeUiMessages(bundleLibraries ? defaultMessageColumns : userscriptPageMessages(zhCNMessages));
                 const compressedBytes = gzipUserscriptBuildData(Buffer.from(contents));
                 const compressed = bundleLibraries ? encodeUserscriptData(compressedBytes) : compressedBytes.toString('base64');
                 return [
                     `/* Non-code Chinese UI messages; sha256 ${createHash('sha256').update(contents).digest('hex')}. */`,
                     "import {inflateWithPako} from '@/userscript/pakoRuntime';",
-                    ...(bundleLibraries ? ["import {decodeUserscriptData} from '@/userscript/dataEncoding';"] : []),
+                    ...(bundleLibraries ? ["import {decodeUserscriptData} from '@/userscript/dataEncoding';",
+                        "import {restoreDefaultMessageColumns} from '@/userscript/defaultMessageData';"] : []),
                     bundleLibraries ? `const bytes = decodeUserscriptData(${JSON.stringify(compressed)});`
                         : `const bytes = Uint8Array.from(atob(${JSON.stringify(compressed)}), (character) => character.charCodeAt(0));`,
-                    'export const zhCNMessages = JSON.parse(inflateWithPako(bytes));',
+                    bundleLibraries ? 'export const zhCNMessages = restoreDefaultMessageColumns(JSON.parse(inflateWithPako(bytes)));'
+                        : 'export const zhCNMessages = JSON.parse(inflateWithPako(bytes));',
                 ].join('\n');
             }
             if (!id.startsWith(compressedCatalogPrefix)) return null;

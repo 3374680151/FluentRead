@@ -593,6 +593,10 @@ pnpm test tests/pr906SchedulerAudit.test.ts tests/pr906SdkAudit.test.ts tests/pr
 
 标准 userscript 复用已有 `francDataPlugin` 压缩锁定的 franc-min 纯模型字符串，通过已有 pako 端口同步恢复；`userscriptViteConfig` 对四种构建模式和全部 66 个模型的字符串、属性顺序及 Unicode 字节逐项检查。算法、模型内容、许可和 Greasy Fork 固定资源不变，普通产物继续通过原体积预算与兼容性 verifier。
 
+standalone 的中英文消息目录采用键值分列；英文键列与默认中文逐项同序时复用中文已还原的键，键不一致则保留完整列。中文虚拟模块通过局部 provider 发布不可变键副本，英文仍按需解包；不引入核心 i18n 的反向依赖。合法旧对象与完整列、标准脚本、Greasy Fork 数据和固定远程 JSON 保持原格式。显式列与共享列都检查长度和字符串类型，损坏列会被拒绝，失败不替换有效键；重复键及特殊属性沿用 `Object.fromEntries` 语义。
+
+运行 `pnpm test tests/userscriptLanguageBundles.test.ts tests/userscriptViteConfig.test.ts`。真实 Vite 消费者夹具在未预热 provider 时，沿 loader、核心 i18n、中文虚拟模块完成初始化并加载英文，核对模块唯一性、逐 key 文案与零语言请求；另外覆盖键不等回退、旧格式、Unicode、模板顺序、失败重试及五语离线缓存。2026-10-24 的配对构建将 standalone 从 3,619,122B 减至 3,598,956B，中英文完整数据还原后字节一致，其余 35 份 gzip 资源保持一致。原 3,600,000B 门禁通过，余量为 1,044B；CI 同时构建并校验标准和 standalone 产物。provider 额外保留一份有序键引用，实际堆占用和浏览器启动表现未量化；这些构建和 Node 夹具不代替脚本管理器验收。
+
 ## 按需运行
 
 测试、类型检查和生产构建的 package scripts 统一经过
@@ -649,7 +653,7 @@ node scripts/verify-userscript-build.mjs  # userscript 元数据与产物边界
 
 ### PR 的扩展质量检查
 
-`.github/workflows/extension-quality.yml` 在面向 `main` 的 PR、主线提交和手动运行时检查扩展。使用锁文件安装与 pnpm 缓存，单个 Vitest worker、一个资源槽和串行构建；同一 PR 的新提交取消旧检查。工作流先执行测试登记审计，再由 `scripts/testing/run-affected-tests.mjs` 将完整架构组与受影响行为测试合并去重，统一执行一次。架构组中已有真实 runtime 消费者；它们在同一覆盖率运行中贡献执行证据，不能按分类标签排除。涉及扩展、共享源码、测试、资源或构建脚本时，继续检查 TypeScript/Vue、Chrome 与 Firefox 构建、生成清单，以及 userscript 构建和产物验证。文档内容独立变化仍执行架构门禁，不触发这些扩展构建。
+`.github/workflows/extension-quality.yml` 在面向 `main` 的 PR、主线提交和手动运行时检查扩展。使用锁文件安装与 pnpm 缓存，单个 Vitest worker、一个资源槽和串行构建；同一 PR 的新提交取消旧检查。工作流先执行测试登记审计，再由 `scripts/testing/run-affected-tests.mjs` 将完整架构组与受影响行为测试合并去重，统一执行一次。架构组中已有真实 runtime 消费者；它们在同一覆盖率运行中贡献执行证据，不能按分类标签排除。涉及扩展、共享源码、测试、资源或构建脚本时，继续检查 TypeScript/Vue、Chrome 与 Firefox 构建、生成清单，以及标准和 standalone userscript 的构建、元数据与原有体积门禁。文档内容独立变化仍执行架构门禁，不触发这些扩展构建。
 
 影响规划以 PR 基线到实际检出提交的 Git diff 为准，跟踪静态 import、使用明确路径的动态 import、barrel、CSS、夹具路径，以及现有组件测试直接读取 SFC 的文件路径；删除和重命名的旧路径同样参与追踪。测试归类复用 `tests/test-matrix.json`，架构组只执行一次。单纯新增测试登记或覆盖率清单保持定向范围；共享依赖、TypeScript/Vitest 执行环境变化则显式扩大到全部受影响行为套件，计划记录扩大原因。改动的严格覆盖模块没有可追踪行为测试时检查失败，不能以空选择通过。
 
