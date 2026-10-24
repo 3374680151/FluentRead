@@ -5,12 +5,12 @@ import {resolve} from 'node:path';
 import {runInNewContext} from 'node:vm';
 import {afterEach, beforeEach, describe, expect, it, vi} from 'vitest';
 // 脚本发布的语言资源不含智能高亮文案；摘要必须按脚本实际使用的投影计算。
-import {UI_LANGUAGE_BUNDLES, currentUserscriptLanguageBundle, createUserscriptLanguageUpdate} from '../userscript/languageBundles';
+import {UI_LANGUAGE_BUNDLES, currentUserscriptLanguageBundle, createUserscriptLanguageUpdate, userscriptPageMessages, zhCNMessages} from '../userscript/languageBundles';
 import {gzipUserscriptBuildData} from '../userscript/buildGzip';
 import {UI_LANGUAGE_BUNDLES as extensionBundles} from '@/src/core/i18n/bundles';
 import {aiRequestTimeoutMessages} from '@/src/core/i18n/messages/aiRequestTimeout';
 import {ungzip} from 'pako';
-import {packUiLanguageBundle, unpackUiLanguageBundle} from '@/userscript/languageData';
+import {packMessageCatalog, packUiLanguageBundle, unpackMessageCatalog, unpackUiLanguageBundle} from '@/userscript/languageData';
 import userscriptConfig from '../userscript/vite.config';
 
 const languageDir = resolve(process.cwd(), 'userscript/languages');
@@ -30,6 +30,87 @@ describe('embedded language columns', () => {
         expect(unpackUiLanguageBundle(JSON.parse(JSON.stringify(packed)))).toEqual(bundle);
         expect(unpackUiLanguageBundle(bundle)).toBe(bundle);
         expect(packUiLanguageBundle({...bundle, messages: {a: 'first', z: '末尾'}})).toEqual(packed);
+    });
+
+    it('shares only an identical ordered message-key vector and falls back to complete columns otherwise', () => {
+        const bundle = {messages: {z: '🌏末尾', a: '{name} first'}, legacyText: {'旧文案': 'legacy'}, legacyPatterns: {
+            early: [['^same$', 'localized'], ['^same$', 'fallback', []]], late: [['^(.+)$', '{1}', [1]]],
+        }} as const;
+        const original = JSON.stringify(bundle);
+        const shared = packUiLanguageBundle(bundle, ['a', 'z']);
+        expect(shared[0][0]).toBeNull();
+        expect(unpackUiLanguageBundle(JSON.parse(JSON.stringify(shared)), ['a', 'z'])).toEqual(bundle);
+        for (const keys of [[], ['a'], ['z', 'a'], ['a', 'other'], ['a', 'z', 'extra']]) {
+            expect(packUiLanguageBundle(bundle, keys)).toEqual(packUiLanguageBundle(bundle));
+        }
+        expect(unpackUiLanguageBundle(bundle)).toBe(bundle);
+        expect(unpackUiLanguageBundle(packUiLanguageBundle(bundle))).toEqual(bundle);
+        expect(JSON.stringify(bundle)).toBe(original);
+    });
+
+    it.each([undefined, [], ['a'], ['a', 'z', 'extra'], ['a', 2]].map(keys => ({keys})))('rejects missing or malformed shared keys: $keys', ({keys}) => {
+        const packed = packUiLanguageBundle({messages: {a: 'A', z: 'Z'}, legacyText: {}, legacyPatterns: {early: [], late: []}}, ['a', 'z']);
+        expect(() => unpackUiLanguageBundle(packed, keys as readonly string[] | undefined)).toThrow(TypeError);
+    });
+
+    it('preserves duplicate and special keys with Object.fromEntries semantics', () => {
+        const keys = ['constructor', '__proto__', 'toString', 'repeat', 'repeat'];
+        const texts = ['构造', '原型', '字符串', '旧值', '新值🌏'];
+        const result = unpackMessageCatalog([keys, texts]);
+        expect(result).toEqual(Object.fromEntries(keys.map((key, index) => [key, texts[index]])));
+        expect(Object.keys(result)).toEqual(['constructor', '__proto__', 'toString', 'repeat']);
+        expect(Object.hasOwn(result, '__proto__')).toBe(true);
+        expect(Object.getPrototypeOf(result)).toBe(Object.prototype);
+        expect(unpackMessageCatalog(packMessageCatalog(result))).toEqual(result);
+    });
+
+    it('distinguishes a valid shared empty catalog from an uninitialized provider', () => {
+        const bundle = {messages: {}, legacyText: {}, legacyPatterns: {early: [], late: []}};
+        const packed = packUiLanguageBundle(bundle, []);
+        expect(packed[0][0]).toBeNull();
+        expect(unpackUiLanguageBundle(packed, [])).toEqual(bundle);
+        expect(() => unpackUiLanguageBundle(packed)).toThrow(TypeError);
+    });
+
+    it.each([null, {}, [], [['key']], [['key'], ['text'], []], ['keys', ['text']], [['key'], 'texts'],
+        [['key'], []], [['key'], ['text', 'extra']], [[1], ['text']], [['key'], [null]],
+        [Array(1), ['text']], [['key'], Array(1)]].map(value => ({value})))('rejects malformed catalog columns: $value', ({value}) => {
+        expect(() => unpackMessageCatalog(value)).toThrow(TypeError);
+    });
+});
+
+describe('standalone default message provider', () => {
+    afterEach(() => vi.resetModules());
+
+    it('starts uninitialized while old objects and complete language columns remain usable', async () => {
+        vi.resetModules();
+        const provider = await import('@/userscript/defaultMessageData');
+        expect(provider.readDefaultMessageKeys()).toBeUndefined();
+        const bundle = {messages: {key: '文案'}, legacyText: {}, legacyPatterns: {early: [], late: []}};
+        expect(unpackUiLanguageBundle(bundle, provider.readDefaultMessageKeys())).toBe(bundle);
+        expect(unpackUiLanguageBundle(packUiLanguageBundle(bundle), provider.readDefaultMessageKeys())).toEqual(bundle);
+        expect(() => unpackUiLanguageBundle(packUiLanguageBundle(bundle, ['key']), provider.readDefaultMessageKeys())).toThrow(TypeError);
+    });
+
+    it('publishes an immutable ordered key copy only after complete restoration succeeds', async () => {
+        vi.resetModules();
+        const provider = await import('@/userscript/defaultMessageData');
+        expect(() => provider.restoreDefaultMessageColumns([['bad'], [false]])).toThrow(TypeError);
+        expect(provider.readDefaultMessageKeys()).toBeUndefined();
+        const keys = ['__proto__', 'repeat', 'repeat', 'constructor'];
+        const texts = ['🌏原型', 'first', 'last', '{name}'];
+        expect(provider.restoreDefaultMessageColumns([keys, texts])).toEqual(Object.fromEntries(keys.map((key, index) => [key, texts[index]])));
+        const published = provider.readDefaultMessageKeys();
+        expect(published).toEqual(keys);
+        expect(Object.isFrozen(published)).toBe(true);
+        keys[0] = 'changed';
+        expect(published?.[0]).toBe('__proto__');
+        expect(() => provider.restoreDefaultMessageColumns([['new'], []])).toThrow(TypeError);
+        expect(provider.readDefaultMessageKeys()).toBe(published);
+        provider.restoreDefaultMessageColumns([['next'], ['next text']]);
+        expect(provider.readDefaultMessageKeys()).toEqual(['next']);
+        provider.restoreDefaultMessageColumns([[], []]);
+        expect(provider.readDefaultMessageKeys()).toEqual([]);
     });
 });
 
@@ -131,6 +212,85 @@ describe('userscript remote UI language data', () => {
         } finally {
             register.mockRestore();
         }
+    });
+
+    it('feeds the actual standalone Chinese virtual module to core and shares its provider with the actual English define', async () => {
+        vi.stubEnv('FLUENTREAD_USERSCRIPT_STANDALONE', '1');
+        vi.resetModules();
+        try {
+            const {default: standalone, createUserscriptCatalogCompressionPlugin: createPlugin} = await import('@/userscript/vite.config');
+            const {transformWithEsbuild} = await import('vite');
+            const provider = await import('@/userscript/defaultMessageData');
+            const encoding = await import('@/userscript/dataEncoding');
+            expect(provider.readDefaultMessageKeys()).toBeUndefined();
+            const plugin = createPlugin() as unknown as {resolveId: (source: string, importer: string) => string; load: (id: string) => string};
+            const generated = plugin.load(plugin.resolveId('./messages/zh-CN', resolve(process.cwd(), 'src/core/i18n/index.ts')));
+            const compiled = await transformWithEsbuild(generated, 'standalone-default-messages.js', {format: 'cjs', target: 'es2018'});
+            const realm = {module: {exports: {} as {zhCNMessages: Record<string, string>}}, require: (id: string) => {
+                if (id === '@/userscript/pakoRuntime') return {inflateWithPako: (bytes: Uint8Array) => ungzip(bytes, {to: 'string'})};
+                if (id === '@/userscript/dataEncoding') return encoding;
+                if (id === '@/userscript/defaultMessageData') return provider;
+                throw new Error(`Unexpected generated import: ${id}`);
+            }};
+            runInNewContext(compiled.code, realm, {timeout: 5000});
+            const chinese = realm.module.exports.zhCNMessages;
+            const expectedChinese = userscriptPageMessages(zhCNMessages);
+            expect(chinese).toEqual(expectedChinese);
+            expect(provider.readDefaultMessageKeys()).toEqual(packMessageCatalog(expectedChinese)[0]);
+            // 核心消费真实虚拟模块输出；不能用未投影 raw 中文目录补足省略的键。
+            vi.doMock('@/src/core/i18n/messages/zh-CN', () => ({zhCNMessages: chinese}));
+            const core = await import('@/src/core/i18n');
+            for (const [key, text] of Object.entries(expectedChinese)) expect(core.translate(key, 'zh-CN')).toBe(text);
+            expect(core.translate('document.config.offline.help', 'zh-CN')).toBe('document.config.offline.help');
+            const defines = (standalone as {define: Record<string, string>}).define;
+            const compressed = JSON.parse(defines.__FLUENTREAD_USERSCRIPT_LANGUAGE_BUNDLES__);
+            const packedEnglish = JSON.parse(ungzip(encoding.decodeUserscriptData(compressed['en-US']), {to: 'string'}) as string);
+            expect(packedEnglish[0][0]).toBeNull();
+            vi.stubGlobal('__FLUENTREAD_USERSCRIPT_LANGUAGE_BUNDLES__', compressed);
+            vi.stubGlobal('__FLUENTREAD_USERSCRIPT_REMOTE_LANGUAGES__', JSON.parse(defines.__FLUENTREAD_USERSCRIPT_REMOTE_LANGUAGES__));
+            vi.stubGlobal('__FLUENTREAD_USERSCRIPT_LANGUAGE_UPDATES__', JSON.parse(defines.__FLUENTREAD_USERSCRIPT_LANGUAGE_UPDATES__));
+            const requests: string[] = [];
+            globalThis.GM = {xmlHttpRequest(details) {requests.push(details.url); throw new Error('unexpected request');}};
+            const register = vi.spyOn(core, 'registerUiLanguageBundle');
+            try {
+                const loader = await import('@/userscript/uiLanguageBundles');
+                await expect(loader.ensureUiLanguageBundle('en-US')).resolves.toBe(true);
+                const expected = {...UI_LANGUAGE_BUNDLES['en-US'], messages: userscriptPageMessages(UI_LANGUAGE_BUNDLES['en-US'].messages)};
+                expect(register).toHaveBeenCalledTimes(1);
+                expect(register).toHaveBeenCalledWith('en-US', expected);
+                for (const [key, text] of Object.entries(expected.messages)) expect(core.translate(key, 'en-US')).toBe(text);
+                expect(core.translateLegacyText('翻译连接：Google；自定义服务：2；凭据和地址已隐藏', 'en-US'))
+                    .toBe('Connection: Google; custom services: 2; credentials and addresses hidden');
+                expect(requests).toEqual([]);
+            } finally {register.mockRestore();}
+        } finally {
+            vi.doUnmock('@/src/core/i18n/messages/zh-CN');
+            vi.unstubAllEnvs();
+        }
+    });
+
+    it('rejects uninitialized shared columns through the loader and retries after valid provider initialization', async () => {
+        vi.resetModules();
+        const bundle = {messages: {key: 'English 🌏 {name}'}, legacyText: {}, legacyPatterns: {early: [], late: []}};
+        const compressed = gzipUserscriptBuildData(Buffer.from(JSON.stringify(packUiLanguageBundle(bundle, ['key'])))).toString('base64');
+        vi.stubGlobal('__FLUENTREAD_USERSCRIPT_LANGUAGE_BUNDLES__', {'en-US': compressed});
+        vi.stubGlobal('__FLUENTREAD_USERSCRIPT_REMOTE_LANGUAGES__', {});
+        const warning = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+        const provider = await import('@/userscript/defaultMessageData');
+        const core = await import('@/src/core/i18n');
+        const register = vi.spyOn(core, 'registerUiLanguageBundle');
+        try {
+            const loader = await import('@/userscript/uiLanguageBundles');
+            await expect(loader.ensureUiLanguageBundle('en-US')).resolves.toBe(false);
+            expect(provider.readDefaultMessageKeys()).toBeUndefined();
+            expect(register).not.toHaveBeenCalled();
+            provider.restoreDefaultMessageColumns([['key'], ['中文']]);
+            await expect(loader.ensureUiLanguageBundle('en-US')).resolves.toBe(true);
+            expect(register).toHaveBeenCalledTimes(1);
+            expect(register).toHaveBeenCalledWith('en-US', bundle);
+            expect(core.translate('key', 'en-US', {name: 'Alice'})).toBe('English 🌏 Alice');
+            expect(warning).toHaveBeenCalledTimes(1);
+        } finally {register.mockRestore();warning.mockRestore();}
     });
 
     it('downloads a generated language resource once and loads it from private GM cache next time', async () => {

@@ -1,7 +1,7 @@
 /**
  * @file userscript/uiLanguageBundles.ts
  * 文件职责：按需加载并注册 userscript 的六种非中文界面语言。
- * 主要内容：英文内嵌 gzip；其他语言从静态 JSON 获取并缓存在 GM 私有存储中。注册前按构建期自动生成的本地 gzip 增量更新稳定 key、旧文案和模板，覆盖所有新增与修订文案；原始远程资源和私有缓存保持不变，保留已发布文件内容与提交号。
+ * 主要内容：英文内嵌 gzip，standalone 同序键列复用已恢复的默认中文；合法旧对象与完整列格式不依赖共享状态。其他语言从静态 JSON 获取并缓存在 GM 私有存储中，注册前应用本地 gzip 增量；保留固定远程资源、私有缓存与发布提交号。
  * 模块边界：只注册核心 i18n 资源，不访问宿主网页存储；扩展继续使用自己的按需资源加载器。
  */
 import {
@@ -17,6 +17,7 @@ import {userscriptFetch} from './http';
 import {getStoredValue, setStoredValue} from './storage';
 import type {UserscriptLanguageUpdate} from './languageBundles';
 import {unpackUiLanguageBundle} from './languageData';
+import {readDefaultMessageKeys} from './defaultMessageData';
 
 const pending = new Map<RegisteredUiLanguage, Promise<boolean>>();
 
@@ -52,7 +53,7 @@ function applyUpdate(bundle: UiLanguageBundle, update: UserscriptLanguageUpdate 
 }
 
 async function inflateBundle(base64: string): Promise<UiLanguageBundle> {
-    return unpackUiLanguageBundle(JSON.parse(await inflateGzipBase64(base64)));
+    return unpackUiLanguageBundle(JSON.parse(await inflateGzipBase64(base64)), readDefaultMessageKeys());
 }
 
 function isBundle(value: unknown): value is UiLanguageBundle {

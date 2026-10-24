@@ -723,10 +723,20 @@ describe('userscript browser shim injection', () => {
             vi.resetModules();
             const {default: standalone, createUserscriptCatalogCompressionPlugin: createPlugin} = await import('@/userscript/vite.config');
             const defines = (standalone as {define: Record<string, string>}).define;
-            const english = unpackUiLanguageBundle(JSON.parse(gunzipSync(decodeUserscriptData(JSON.parse(defines.__FLUENTREAD_USERSCRIPT_LANGUAGE_BUNDLES__)['en-US'])).toString('utf8')));
             const plugin = createPlugin() as unknown as {resolveId: (source: string, importer: string) => string; load: (id: string) => string};
             const source = plugin.load(plugin.resolveId('./messages/zh-CN', resolve(process.cwd(), 'src/core/i18n/index.ts')));
-            const chinese = JSON.parse(gunzipSync(decodeUserscriptData(JSON.parse(source.match(/decodeUserscriptData\(("(?:[^"\\]|\\.)*")\)/u)![1]))).toString('utf8'));
+            const {transformWithEsbuild} = await import('vite');
+            const provider = await import('@/userscript/defaultMessageData');
+            const compiled = await transformWithEsbuild(source, 'standalone-chinese.js', {format: 'cjs', target: 'es2018'});
+            const realm = {module: {exports: {} as {zhCNMessages: Record<string, string>}}, require: (id: string) => {
+                if (id === '@/userscript/pakoRuntime') return {inflateWithPako: (bytes: Uint8Array) => ungzip(bytes, {to: 'string'})};
+                if (id === '@/userscript/dataEncoding') return {decodeUserscriptData};
+                if (id === '@/userscript/defaultMessageData') return provider;
+                throw new Error(`Unexpected generated import: ${id}`);
+            }};
+            runInNewContext(compiled.code, realm, {timeout: 5000});
+            const chinese = realm.module.exports.zhCNMessages;
+            const english = unpackUiLanguageBundle(JSON.parse(gunzipSync(decodeUserscriptData(JSON.parse(defines.__FLUENTREAD_USERSCRIPT_LANGUAGE_BUNDLES__)['en-US'])).toString('utf8')), provider.readDefaultMessageKeys());
             for (const [original, restored] of [[UI_LANGUAGE_BUNDLES['en-US'].messages, english.messages], [zhCNMessages, chinese]]) {
                 const keys = Object.keys(original).filter(key => key.startsWith('translationStats.'));
                 expect(keys.length).toBeGreaterThan(100);
@@ -736,6 +746,56 @@ describe('userscript browser shim injection', () => {
             }
             expect(defines.__FLUENTREAD_USERSCRIPT_REMOTE_LANGUAGES__).toBe((userscriptConfig as {define: Record<string, string>}).define.__FLUENTREAD_USERSCRIPT_REMOTE_LANGUAGES__);
         } finally {vi.unstubAllEnvs();vi.resetModules();}
+    });
+
+    it('initializes shared keys through the actual standalone loader dependency graph without provider prewarming', async () => {
+        vi.stubEnv('FLUENTREAD_USERSCRIPT_STANDALONE', '1');
+        const fixture = mkdtempSync(resolve(tmpdir(), 'fluentread-language-owner-'));
+        try {
+            vi.resetModules();
+            const {default: standalone, createUserscriptCatalogCompressionPlugin: createPlugin} = await import('@/userscript/vite.config');
+            const config = standalone as import('vite').UserConfig;
+            const entry = resolve(fixture, 'entry.mjs');
+            writeFileSync(entry, [
+                'import {ensureUiLanguageBundle} from "@/userscript/uiLanguageBundles";',
+                'import {readDefaultMessageKeys} from "@/userscript/defaultMessageData";',
+                'import {translate,translateLegacyText,hasUiLanguageBundle} from "@/src/core/i18n";',
+                'globalThis.languageOwner={ensureUiLanguageBundle,readDefaultMessageKeys,translate,translateLegacyText,hasUiLanguageBundle};',
+            ].join('\n'));
+            const {build} = await import('vite');
+            const result = await build({root: process.cwd(), configFile: false, publicDir: false, logLevel: 'silent',
+                plugins: [createPlugin()], resolve: config.resolve, define: config.define,
+                build: {...config.build, write: false, outDir: resolve(fixture, 'unused-output'),
+                    lib: {entry, name: 'LanguageOwner', formats: ['iife']},
+                    rollupOptions: {output: {inlineDynamicImports: true}}}});
+            const output = Array.isArray(result) ? result : [result];
+            expect(output).toHaveLength(1);
+            if (!('output' in output[0])) throw new Error('Expected bundled language owner');
+            expect(output[0].output).toHaveLength(1);
+            const chunk = output[0].output[0];
+            if (chunk.type !== 'chunk') throw new Error('Expected complete language owner chunk');
+            expect(chunk.imports).toEqual([]);expect(chunk.dynamicImports).toEqual([]);
+            expect(chunk.moduleIds.filter(id => id.endsWith('/userscript/defaultMessageData.ts'))).toHaveLength(1);
+            expect(chunk.moduleIds).toContain('\0fluentread-userscript-zh-cn.js');
+            expect(chunk.moduleIds.some(id => id.endsWith('/src/core/i18n/messages/zh-CN.ts')
+                || id.endsWith('/userscript/languageBundles.ts') || id.includes('/userscript/languages/'))).toBe(false);
+            const request = vi.fn(() => {throw new Error('Unexpected language request');});
+            const realm = {languageOwner: undefined as any, Uint8Array, ArrayBuffer, TextDecoder, atob, console,
+                DecompressionStream: undefined, GM: {xmlHttpRequest: request}};
+            runInNewContext(chunk.code, realm, {timeout: 5000});
+            const api = realm.languageOwner;
+            const expectedChinese = Object.fromEntries(Object.entries(zhCNMessages).filter(([key]) => !key.startsWith('document.') && !key.startsWith('translationStats.')));
+            expect(Array.from(api.readDefaultMessageKeys())).toEqual(Object.keys(expectedChinese).sort());
+            expect(api.hasUiLanguageBundle('en-US')).toBe(false);
+            for (const [key, text] of Object.entries(expectedChinese)) expect(api.translate(key, 'zh-CN')).toBe(text);
+            await expect(api.ensureUiLanguageBundle('en-US')).resolves.toBe(true);
+            const expectedEnglish = Object.fromEntries(Object.entries(UI_LANGUAGE_BUNDLES['en-US'].messages).filter(([key]) => !key.startsWith('document.') && !key.startsWith('translationStats.')));
+            for (const [key, text] of Object.entries(expectedEnglish)) expect(api.translate(key, 'en-US')).toBe(text);
+            expect(api.translateLegacyText('翻译连接：Google；自定义服务：2；凭据和地址已隐藏', 'en-US'))
+                .toBe('Connection: Google; custom services: 2; credentials and addresses hidden');
+            expect(api.hasUiLanguageBundle('fr-FR')).toBe(false);
+            expect(request).not.toHaveBeenCalled();
+        } finally {rmSync(fixture, {recursive: true, force: true});vi.unstubAllEnvs();vi.resetModules();}
     });
 
     it('keeps all site rule JSON data intact when embedding compressed offline catalogs', () => {
