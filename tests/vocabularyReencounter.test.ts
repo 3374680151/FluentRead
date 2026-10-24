@@ -94,6 +94,71 @@ describe('saved expressions match real reading text', () => {
   });
 });
 
+describe('reading index reuse keeps fresh records and ordered matching inputs', () => {
+  it('reuses an unchanged 5000-entry index while clearing old paint and rescanning fresh metadata and DOM', async () => {
+    vi.useFakeTimers(); const {document, window} = dom('<p>expression 4999.</p>'); const changed = vi.fn();
+    const scanner = installReencounterScanner(document, {changed, open: vi.fn()});
+    const entries = Array.from({length: 5000}, (_, i) => saved(`expression ${i}`));
+    scanner.setEntries(entries); await vi.advanceTimersByTimeAsync(180);
+    const previous = changed.mock.calls.at(-1)![0][0].entry;
+    const next = entries.map(entry => ({...entry, sourceLanguage: 'fr', reference: 'fresh reference', savedSentence: 'Fresh saved sentence.', savedTitle: 'Fresh title'}));
+    document.querySelector('p')!.textContent = 'A new expression 4999 sentence.';
+    const normalize = vi.spyOn(String.prototype, 'normalize'); scanner.setEntries(next);
+    expect(normalize).not.toHaveBeenCalled(); expect(changed.mock.calls.at(-1)![0]).toEqual([]);
+    expect(window.CSS.highlights.get(REENCOUNTER_HIGHLIGHT)?.size).toBe(0);
+    next[4999].sourceLanguage = 'caller mutation';
+    await vi.advanceTimersByTimeAsync(180);
+    const [hit] = changed.mock.calls.at(-1)![0];
+    expect(hit.sentence).toBe('A new expression 4999 sentence.');
+    expect(hit.entry).toEqual({...entries[4999], sourceLanguage: 'fr', reference: 'fresh reference', savedSentence: 'Fresh saved sentence.', savedTitle: 'Fresh title'});
+    expect(hit.entry).not.toBe(previous); expect(hit.entry).not.toBe(next[4999]); scanner.dispose();
+  });
+  it.each([
+    {name: 'identity', before: [saved('art', 'a')], next: [saved('art', 'b')], ids: ['b']},
+    {name: 'raw expression', before: [saved('art', 'a')], next: [saved('craft', 'a')], ids: ['a']},
+    {name: 'added expression', before: [saved('art', 'a')], next: [saved('art', 'a'), saved('craft', 'b')], ids: ['a', 'b']},
+    {name: 'removed expression', before: [saved('art', 'a'), saved('craft', 'b')], next: [saved('art', 'a')], ids: ['a']},
+    {name: 'normalized duplicate priority', before: [saved('Art', 'a'), saved('art', 'b')], next: [saved('art', 'b'), saved('Art', 'a')], ids: ['b']},
+    {name: 'Unicode spelling', before: [saved('café', 'a')], next: [saved('cafe\u0301', 'a')], ids: ['a']},
+  ])('rebuilds after an in-place $name change and publishes the new matches', async ({before, next, ids}) => {
+    vi.useFakeTimers(); const {document} = dom('<p>art craft café.</p>'); const changed = vi.fn();
+    const scanner = installReencounterScanner(document, {changed, open: vi.fn()});
+    scanner.setEntries(before); await vi.advanceTimersByTimeAsync(180);
+    // 保留同一个数组及已有条目对象，验证不是仅凭引用身份判断词书变更。
+    before.splice(next.length);
+    next.forEach((entry, i) => {if (before[i]) Object.assign(before[i], entry); else before.push(entry);});
+    const normalize = vi.spyOn(String.prototype, 'normalize'); scanner.setEntries(before);
+    expect(normalize).toHaveBeenCalled(); await vi.advanceTimersByTimeAsync(180);
+    expect(changed.mock.calls.at(-1)![0].map((hit: {entry: ReencounterEntry}) => hit.entry.id)).toEqual(ids);
+    scanner.dispose();
+  });
+  it.each(['art', 'craft'])('keeps private compiled inputs when a delivered entry is mutated before replacing it with %s', async term => {
+    vi.useFakeTimers(); const {document} = dom('<p>art craft.</p>'); const changed = vi.fn();
+    const scanner = installReencounterScanner(document, {changed, open: vi.fn()});
+    scanner.setEntries([saved('art')]); await vi.advanceTimersByTimeAsync(180);
+    Object.assign(changed.mock.calls.at(-1)![0][0].entry, saved('craft'));
+    const normalize = vi.spyOn(String.prototype, 'normalize'); scanner.setEntries([saved(term)]);
+    expect(normalize.mock.calls.length > 0).toBe(term === 'craft');
+    await vi.advanceTimersByTimeAsync(180);
+    const [hit] = changed.mock.calls.at(-1)![0]; expect(hit.entry).toEqual(saved(term)); expect(hit.ranges[0].toString()).toBe(term);
+    scanner.dispose();
+  });
+  it('keeps the newest reentrant replacement and ignores all updates after disposal', async () => {
+    vi.useFakeTimers(); const {document, window} = dom('<p>art craft.</p>'); let replace = false;
+    let scanner!: ReturnType<typeof installReencounterScanner>; const changed = vi.fn(hits => {
+      if (!hits.length && replace) {replace = false; scanner.setEntries([saved('craft')]);}
+    });
+    scanner = installReencounterScanner(document, {changed, open: vi.fn()});
+    scanner.setEntries([saved('art')]); await vi.advanceTimersByTimeAsync(180);
+    replace = true; scanner.setEntries([saved('art')]); await vi.advanceTimersByTimeAsync(180);
+    expect(changed.mock.calls.at(-1)![0].map((hit: {entry: ReencounterEntry}) => hit.entry.term)).toEqual(['craft']);
+    const normalize = vi.spyOn(String.prototype, 'normalize'); scanner.setEntries([saved('craft')]); expect(normalize).not.toHaveBeenCalled();
+    scanner.dispose(); const calls = changed.mock.calls.length;
+    scanner.setEntries([saved('art')]); await vi.runAllTimersAsync();
+    expect(changed).toHaveBeenCalledTimes(calls); expect(window.CSS.highlights.has(REENCOUNTER_HIGHLIGHT)).toBe(false);
+  });
+});
+
 describe('paint-only reading text and lifecycle', () => {
   it('reuses verified document rules, owns only missing shadow rules and preserves the shared stylesheet on disposal', async () => {
     vi.useFakeTimers(); const {document, window} = dom('<p>art</p><div id="host"></div>');
@@ -439,6 +504,17 @@ describe('reading work stops and yields before blocking the page', () => {
     f.scanner.setEntries([saved('other')]); expect(f.frames.size).toBe(0); await vi.advanceTimersByTimeAsync(180);
     const reads = f.style.mock.calls.length; callback(0); expect(f.style).toHaveBeenCalledTimes(reads);
     f.finish(); expect(f.changed.mock.calls.at(-1)![0]).toEqual([]); f.scanner.dispose();
+  });
+  it('cancels an old frame even when reusing its index and publishes only fresh metadata', async () => {
+    const f = sliced(); f.scanner.setEntries([saved('art')]); await vi.advanceTimersByTimeAsync(180);
+    const callback = f.frames.values().next().value!;
+    const normalize = vi.spyOn(String.prototype, 'normalize');
+    f.scanner.setEntries([{...saved('art'), sourceLanguage: 'fr'}]);
+    expect(normalize).not.toHaveBeenCalled(); expect(f.frames.size).toBe(0);
+    const reads = f.style.mock.calls.length; callback(0); expect(f.style).toHaveBeenCalledTimes(reads);
+    await vi.advanceTimersByTimeAsync(180); f.finish();
+    const hits = f.changed.mock.calls.at(-1)![0]; expect(hits).toHaveLength(2);
+    expect(hits.every((hit: {entry: ReencounterEntry}) => hit.entry.sourceLanguage === 'fr')).toBe(true); f.scanner.dispose();
   });
   it('cancels obsolete DOM work, closes an old card immediately and resumes the latest text', async () => {
     const f = sliced('<p id="owner">art</p><section id="wide"></section><p id="dynamic">art.</p>');
