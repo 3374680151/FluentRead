@@ -21,7 +21,7 @@ vi.mock('webextension-polyfill', () => ({default: {runtime: {sendMessage: (...ar
 vi.mock('@/src/ui/i18n', () => ({useUiI18n: () => ({translateLegacy: (text: string) => text, t: (key: string, parameters: any) => translateMessage(key, 'zh-CN', parameters)})}));
 
 /** 仅替代扩展通信、剪贴板和可见视口；组件模板、生命周期、几何与配置判断使用生产实现。 */
-export function mountAreaTranslator() {
+export function mountAreaTranslator(component: typeof AreaTranslator = AreaTranslator) {
   ports = createPorts();
   const {window, document} = parseHTML('<html><head><title>Area fixture</title></head><body><h1>Title</h1></body></html>');
   Object.defineProperty(document, 'visibilityState', {value: 'visible', configurable: true});
@@ -48,7 +48,7 @@ export function mountAreaTranslator() {
     },
   });
   const host = document.createElement('div'); host.id = 'fluent-read-area-translator-container'; document.body.append(host);
-  const app = renderer.createApp(AreaTranslator); app.directive('ui-i18n', {}); app.mount(host);
+  const app = renderer.createApp(component); app.directive('ui-i18n', {}); app.mount(host);
   const state = (app as any)._instance.setupState;
   const dispatch = (target: EventTarget, type: string, fields: Record<string, unknown> = {}) => {
     const event = new window.Event(type, {bubbles: true, cancelable: true});
