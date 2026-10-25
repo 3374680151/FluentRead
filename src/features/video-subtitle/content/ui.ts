@@ -2,7 +2,7 @@
  * @file src/features/video-subtitle/content/ui.ts
  *
  * 文件职责：封装视频字幕 content UI 的界面语言转换、可访问名称刷新及桌面/触屏安全视口菜单样式，避免 YouTube 播放器运行时承载重复的文案拼装。
- * 主要内容：提供视频菜单本地化、局部外观变量、显式读音开关与示例说明、紧凑下载折叠入口、独立纯文本读音行及按语言命名；双语按偏好交换原译文顺序，读音始终紧跟原文并计入字幕布局，防止缩成不可读小字；菜单仅管理自身交互，不参与字幕的宽度与水平居中计算；保留逐字高亮、校时与就地模型选择控件，过滤 YouTube 滚动窗口旧行，按实际画面及同视频可见底控约束字幕几何、换行与大字号完整高度，并封装字幕清理、媒体时钟读取、样式及字幕下载。
+ * 主要内容：提供视频菜单本地化、局部外观变量、显式读音开关与示例说明、紧凑下载折叠入口、独立纯文本读音行及按语言命名；双语顺序用原文与译文双行示意并标记暂未生效的偏好，字幕按偏好交换原译文顺序，读音始终紧跟原文并计入字幕布局，防止缩成不可读小字；菜单仅管理自身交互，不参与字幕的宽度与水平居中计算；保留逐字高亮、校时与就地模型选择控件，过滤 YouTube 滚动窗口旧行，按实际画面及同视频可见底控约束字幕几何、换行与大字号完整高度，并封装字幕清理、媒体时钟读取、样式及字幕下载。
  * 模块边界：只读取界面配置并操作视频 feature 拥有的节点、样式和下载链接，不发起翻译或识别请求；任务生命周期由 runtime 管理。
  */
 
@@ -1242,6 +1242,14 @@ export function installVideoSubtitleStyle(): HTMLStyleElement {
     #${VIDEO_TRANSLATION_MENU_ID}[data-layout="wide"] .fluent-read-video-menu-ai { min-height: 30px !important; }
 
     #${VIDEO_TRANSLATION_MENU_ID} .fluent-read-video-menu-order-controls { min-width: 0 !important; flex: 1 1 auto !important; }
+    #${VIDEO_TRANSLATION_MENU_ID} .fluent-read-video-menu-order-setting { display: grid !important; gap: 3px !important; min-width: 0 !important; }
+    #${VIDEO_TRANSLATION_MENU_ID} .fluent-read-video-menu-order-choice { display: inline-flex !important; align-items: center !important; justify-content: center !important; gap: 5px !important; }
+    #${VIDEO_TRANSLATION_MENU_ID} .fluent-read-video-menu-order-choice > span:last-child { min-width: 0 !important; overflow: hidden !important; text-overflow: ellipsis !important; }
+    #${VIDEO_TRANSLATION_MENU_ID} .fluent-read-video-menu-order-diagram { display: grid !important; gap: 3px !important; flex: 0 0 12px !important; width: 12px !important; }
+    #${VIDEO_TRANSLATION_MENU_ID} .fluent-read-video-menu-order-diagram > span { display: block !important; height: 2px !important; border-radius: 1px !important; }
+    #${VIDEO_TRANSLATION_MENU_ID} .fluent-read-video-menu-order-original { background: var(--fr-video-menu-text) !important; }
+    #${VIDEO_TRANSLATION_MENU_ID} .fluent-read-video-menu-order-translation { background: var(--fr-video-menu-brand-text) !important; width: 9px !important; }
+    #${VIDEO_TRANSLATION_MENU_ID} .fluent-read-video-menu-order-setting[data-active="false"] .fluent-read-video-menu-mode[aria-checked="true"] { background: var(--fr-video-menu-control) !important; box-shadow: inset 0 0 0 1px var(--fr-video-menu-border) !important; color: var(--fr-video-menu-muted) !important; }
     #${VIDEO_TRANSLATION_MENU_ID} .fluent-read-video-menu-mode-group,
     #${VIDEO_TRANSLATION_MENU_ID} .fluent-read-video-menu-order-controls {
       display: flex !important;

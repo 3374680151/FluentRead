@@ -101,7 +101,7 @@
     "settings.services.prompts.syncDone": "Synchronisé avec {count} services d’IA",
     "settings.services.visionProbeShort": "Tester",
     "settings.fullPage.multiSegmentDescription": "Regroupe les courts paragraphes voisins en une seule requête lors de la traduction de la page entière par un service IA",
-    "settings.fullPage.multiSegmentHelp": "S’applique uniquement aux services IA compatibles avec les prompts génériques. La traduction automatique, au survol, de la sélection et des champs de saisie n’est pas concernée.",
+    "settings.fullPage.multiSegmentHelp": "Réservé aux services IA compatibles avec les prompts génériques ; les services combinés ne sont pas pris en charge. Rétablissez la page originale et relancez sa traduction complète pour appliquer les modifications.",
     "glossary.builtin.helpDisabled": "Le glossaire est désactivé. Activez l’interrupteur ci-dessus pour que les glossaires ajoutés s’appliquent.",
     "image.settings.languageServiceTitle": "Langues et service",
     "settings.floatingBall.disabledNote": "Le bouton flottant est désactivé. Ces préférences sont conservées et s’appliqueront à sa réactivation.",

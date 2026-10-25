@@ -199,6 +199,33 @@ const faqs = [
       </div>
       <FeatureDemo :kind="feature.kind" :en="en" />
     </section>
+    <section id="sponsors" class="bv-section bv-sponsors" aria-labelledby="bv-sponsors-title">
+      <div>
+        <span class="bv-section-number">{{ t('企业与项目赞助', 'SPONSOR FLUENTREAD') }}</span>
+        <h2 id="bv-sponsors-title">{{ t('支持开源，让世界更大', 'Support open source. A bigger world.') }}</h2>
+        <p>{{
+          t(
+            '项目目前主要由个人支持，每月为开源开发投入数万美元的 API Token 费用。我们相信，流畅阅读能为世界带来更多美好。',
+            'The project is currently funded mainly out of pocket, with tens of thousands of US dollars spent each month on API tokens for open-source development. We believe FluentRead can make the world a little better.'
+          )
+        }}</p>
+        <div class="bv-sponsor-contact">
+          <a class="bv-text-link" href="mailto:a1914493943@gmail.com?subject=FluentRead%20sponsorship">{{ t('邮件联系', 'Email us') }} →</a>
+          <a class="bv-text-link" :href="withBase('/support/wechat-contact.jpg')" target="_blank" rel="noopener noreferrer">{{ t('添加微信', 'Add on WeChat') }} ↗</a>
+        </div>
+      </div>
+      <a
+        class="fr-sponsor-slot"
+        href="mailto:a1914493943@gmail.com?subject=FluentRead%20sponsorship"
+      >
+        <span class="fr-sponsor-plus" aria-hidden="true">+</span>
+        <span class="fr-sponsor-copy">
+          <strong>{{ en ? 'Your brand here' : '虚位以待' }}</strong>
+          <span>{{ en ? 'Become our first sponsor' : '成为首位赞助伙伴' }}</span>
+        </span>
+        <span class="fr-sponsor-arrow" aria-hidden="true">↗</span>
+      </a>
+    </section>
     <section class="bv-section bv-faq">
       <div>
         <span class="bv-section-number">{{ t('使用须知', 'GETTING STARTED') }}</span>
@@ -228,7 +255,7 @@ const faqs = [
         <a :href="link('/docs/')">{{ t('使用指南', 'User guide') }}</a
         ><a :href="link('/guide/privacy')">{{ t('隐私政策', 'Privacy policy') }}</a
         ><a href="https://github.com/FluentRead/FluentRead">GitHub</a
-        ><a href="https://github.com/FluentRead/FluentRead#support">{{
+        ><a :href="link('/guide/support')">{{
           t('支持项目', 'Support the project')
         }}</a>
       </div>
@@ -236,3 +263,83 @@ const faqs = [
     </footer>
   </div>
 </template>
+
+<style scoped>
+.fr-sponsor-slot {
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  width: 100%;
+  min-width: 0;
+  min-height: 144px;
+  padding: 28px;
+  border: 1px dashed #c9b7bf;
+  border-radius: 18px;
+  background: #fcf9fa;
+  color: var(--vp-c-text-1);
+  text-decoration: none !important;
+  transition: border-color 160ms, background-color 160ms;
+}
+.fr-sponsor-slot:hover {
+  border-color: var(--vp-c-brand-1);
+  background: #fbf3f6;
+}
+.fr-sponsor-slot:focus-visible {
+  outline: 2px solid var(--vp-c-brand-1);
+  outline-offset: 4px;
+}
+.fr-sponsor-plus {
+  display: grid;
+  place-items: center;
+  flex: 0 0 48px;
+  height: 48px;
+  border: 1px solid #e4d8de;
+  border-radius: 12px;
+  color: var(--vp-c-brand-1);
+  background: white;
+  font-size: 28px;
+  font-weight: 400;
+  line-height: 1;
+}
+.fr-sponsor-copy {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  gap: 5px;
+  line-height: 1.6;
+}
+.fr-sponsor-copy strong {
+  font-size: 20px;
+  font-weight: 650;
+  color: var(--vp-c-text-1);
+}
+.fr-sponsor-copy > span {
+  font-size: 14px;
+  color: var(--vp-c-brand-1);
+}
+.fr-sponsor-arrow {
+  align-self: flex-start;
+  margin-left: auto;
+  color: var(--vp-c-brand-1);
+  font-size: 20px;
+}
+@media (max-width: 480px) {
+  .fr-sponsor-slot {
+    gap: 14px;
+    padding: 22px 18px;
+  }
+  .fr-sponsor-plus {
+    flex-basis: 36px;
+    height: 36px;
+    font-size: 24px;
+  }
+  .fr-sponsor-copy strong {
+    font-size: 18px;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .fr-sponsor-slot {
+    transition: none;
+  }
+}
+</style>

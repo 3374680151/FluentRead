@@ -1,10 +1,11 @@
 /**
  * @file src/app/content/hotkeyRuntime.ts
  * 文件职责：在宿主页面统一接管 FluentRead 的键盘与鼠标快捷手势，并按配置、站点禁用状态和冲突优先级路由到相应翻译动作。
- * 主要内容：复用 core 记录组合键并仲裁划词优先级，将待回退的全文手势绑定主键/code 与全文、划词、悬浮快捷键身份；额外组合、不可用状态、失焦、中止和文档路由变化取消旧手势，同语言选区默认跳过，中英双向划词可保留反向候选。
+ * 主要内容：复用 core 记录组合键并仲裁两点选取及划词优先级，将待回退的全文手势绑定主键/code 与全文、划词、悬浮快捷键身份；额外组合、不可用状态、失焦、中止和文档路由变化取消旧手势，同语言选区默认跳过，中英双向划词可保留反向候选。
  * 模块边界：这里判定并分派手势，不实现语言检测算法、翻译请求、UI 挂载或配置持久化；具体动作由注入/导入的 feature 公共函数完成。
  */
 import {config} from '@/src/services/config/store';
+import {matchesClickSelectionShortcut} from '@/src/core/config/clickSelection';
 import {shouldSkipChineseSelection, shouldSkipTranslationForTarget} from '@/src/core/language/detect';
 import {readSelectionText, selectionReverseTarget, shouldIgnoreSelection} from '@/src/features/selection-translation/core';
 import {
@@ -66,6 +67,8 @@ export function createContentHotkeyRuntime(isSiteDisabled: () => boolean,
     };
 
     const shouldReserveSelectionShortcut = (event: KeyboardEvent): boolean => {
+        // 两点选取尚未产生选区，先占有自己的快捷键，防止同轮触发悬浮或全文翻译。
+        if (options.selectionAvailable !== false && !isSiteDisabled() && matchesClickSelectionShortcut(event, config)) return true;
         if (!isSelectionTranslatorEnabled()) return false;
         return shouldClaimConfiguredHotkey(
             event,

@@ -1,11 +1,13 @@
 import {afterEach, describe, expect, it, vi} from 'vitest';
 import {mountAreaTranslator} from './helpers/areaTranslatorHarness';
+import AreaTranslator from '@/src/features/area-translation/ui/AreaTranslator.vue';
+import {claimPointerSelectionSession} from '@/src/shared/dom/pointerSelectionSession';
 import {shouldStartAreaTranslationFromHotkey} from '@/src/features/area-translation/content/areaHotkey';
 
 let close: (() => void) | undefined;
 afterEach(() => {close?.(); vi.unstubAllGlobals();});
 function mountTranslator() {
-  const fixture = mountAreaTranslator(); close = fixture.unmount;
+  const fixture = mountAreaTranslator(AreaTranslator); close = fixture.unmount;
   const {config, document} = fixture;
   const press = (overrides: Record<string, unknown> = {}) => {
     const target = overrides.target ?? document.activeElement ?? document.body;
@@ -26,6 +28,22 @@ function mountTranslator() {
 }
 
 describe('圈选翻译快捷键触发', () => {
+  it('未确认的圈选与另一种指针选取互斥，已释放的旧会话不影响下一轮', () => {
+    const f = mountTranslator();
+    const cancelTextSelection = vi.fn();
+    const releaseText = claimPointerSelectionSession(cancelTextSelection);
+    f.beginSelection();
+    expect(cancelTextSelection).toHaveBeenCalledOnce();
+    releaseText();
+    const cancelNext = vi.fn();
+    const releaseNext = claimPointerSelectionSession(cancelNext);
+    expect(f.state.phase).toBe('idle');
+    f.state.clearResult();
+    f.beginSelection();
+    expect(cancelNext).toHaveBeenCalledOnce();
+    releaseNext();
+  });
+
   it('默认 Shift+Z 在正文按下时进入选区模式，Esc 退出', () => {
     const f = mountTranslator();
     const event = f.press();

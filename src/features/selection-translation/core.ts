@@ -1,7 +1,7 @@
 /**
  * @file src/features/selection-translation/core.ts
  * 文件职责：集中划词翻译的纯交互与内容算法，包括请求代次、词典回退、触发展示状态、选区过滤、上下文摘要、弹窗锚点和语音语言规范化。
- * 主要内容：定义 SelectionRequestTokenGate、Presentation 状态机、选区/视口类型，处理中英划词反向目标、同语种判断、文本清理、公式单份文本提取、正文中的行内代码片段保护、主动代码选区提取、敏感区域排除、多矩形选择、按页面缩放补偿的弹窗定位及仅用于朗读的普通话语言别名。
+ * 主要内容：定义 SelectionRequestTokenGate、Presentation 状态机、选区/视口类型，处理中英划词反向目标、同语种判断、文本清理、公式单份文本提取、正文中的行内代码片段保护、主动代码选区提取、按实际 Range 边界遍历的敏感区域排除及单遍祖先保护检查（不扫描未选中的共同祖先子树）、多矩形选择、按页面缩放补偿的弹窗定位及仅用于朗读的普通话语言别名。
  * 模块边界：本模块不监听 document selection、不发消息、不渲染 Vue 或播放音频；组件负责连接 DOM，词典和 TTS 由 services/background 提供，函数保持确定性以供单元测试。DOM 安全判断直接复用 translation/dom 的同一实现，不初始化翻译候选或站点规则 registry。
  */
 import {getElementTagName, isTopLevelApplicationShell} from '@/src/core/translation/dom';
@@ -189,6 +189,7 @@ export function summarizeSelectionContext(
 
 // 只把有明确渲染器身份的数学子树视为原子，不能放开普通 aria-hidden/SVG 控件。
 const selectionFormulaSelector = 'math, mjx-container, .MathJax, .MathJax_Display, .MathJax_SVG, .MathJax_CHTML, .katex';
+const selectionSemanticSelector = `${selectionFormulaSelector}, code`;
 
 export interface SelectionTextPart {
     kind: 'text' | 'code';
@@ -202,7 +203,7 @@ export function readSelectionParts(range: Range, browserText: string): Selection
     const plainText = () => [{kind: 'text' as const, text: normalizeSelectionText(browserText)}];
     // 用户主动选中的代码文字可以翻译；正文跨行内代码时仍保留代码快照。
     if (ancestor?.closest('pre, code')) return plainText();
-    if (!ancestor?.querySelector(`${selectionFormulaSelector}, code`)) return plainText();
+    if (!ancestor || !hasSelectionSemanticParts(range)) return plainText();
     const fragment = ancestor.ownerDocument.createElement('div');
     fragment.append(range.cloneContents());
     const formulas = Array.from(fragment.querySelectorAll(selectionFormulaSelector))
@@ -320,6 +321,7 @@ const selectionExcludedSelector = [
     '[contenteditable="plaintext-only"]',
     ...Array.from(selectionExcludedTagNames),
 ].join(',');
+const selectionExcludedDescendantSelector = `${selectionExcludedSelector},[role]`;
 export function isSelectionExcludedTagName(tagName: string): boolean {
     return selectionExcludedTagNames.has(tagName.trim().toLowerCase());
 }
@@ -349,7 +351,11 @@ function isSelectionExcludedElement(element: Element | null): boolean {
     if (!element) return false;
     let current: Element | null = element;
     while (current) {
-        if (isIntrinsicallyExcludedSelectionElement(current)) return true;
+        // 每层只检查自身，不能为每个祖先再次向上寻找编辑状态；外层编辑器仍保持严格排除。
+        const role = current.getAttribute('role')?.trim().toLowerCase();
+        if (isSelectionExcludedTagName(getElementTagName(current)) || role && selectionExcludedRoles.has(role)
+            || (current as HTMLElement).isContentEditable
+            || current.hasAttribute('contenteditable') && current.getAttribute('contenteditable')?.trim().toLowerCase() !== 'false') return true;
         current = current.parentElement;
     }
 
@@ -365,11 +371,45 @@ function elementFromSelectionNode(node: Node | null): Element | null {
     return node.nodeType === 1 ? node as Element : node.parentElement;
 }
 
-function selectionExcludedDescendants(range: Range): Element[] {
-    const commonAncestor = range.commonAncestorContainer;
-    const queryRoot = commonAncestor.nodeType === 3 ? commonAncestor.parentElement : commonAncestor;
-    if (!queryRoot || !('querySelectorAll' in queryRoot)) return [];
-    return Array.from((queryRoot as ParentNode).querySelectorAll(`${selectionExcludedSelector},[role]`));
+/** 跳过已访问的子树；只沿祖先回退，绝不越过当前选区的共同祖先。 */
+function nextSelectionSibling(node: Node, root: Node): Node | null {
+    let current: Node | null = node;
+    while (current && current !== root) {
+        if (current.nextSibling) return current.nextSibling;
+        current = current.parentNode;
+    }
+    return null;
+}
+
+/** 由原生 Range 的半开边界定位遍历区间，不枚举共同祖先内未选中的前后兄弟树。 */
+function* selectionRangeNodes(range: Range): Generator<Node> {
+    const root = range.commonAncestorContainer;
+    const start = range.startContainer;
+    const end = range.endContainer;
+    const endIsText = end.nodeType === 3;
+    const stop = endIsText ? end : end.childNodes[range.endOffset] ?? nextSelectionSibling(end, root);
+    let node: Node | null = start.nodeType === 3 ? start
+        : start.childNodes[range.startOffset] ?? nextSelectionSibling(start, root);
+    while (node && (endIsText || node !== stop)) {
+        yield node;
+        if (node === end && endIsText) break;
+        node = node.firstChild ?? nextSelectionSibling(node, root);
+    }
+}
+
+/** 部分选区从 code/公式内部起步时，祖先包装不在向前遍历中，须先审核两端语义。 */
+function hasSelectionSemanticParts(range: Range): boolean {
+    if ([range.startContainer, range.endContainer].some(node => elementFromSelectionNode(node)?.closest(selectionSemanticSelector))) return true;
+    for (const node of selectionRangeNodes(range)) {
+        if (node.nodeType === 1 && (node as Element).matches(selectionSemanticSelector)) return true;
+    }
+    return false;
+}
+
+function* selectionExcludedDescendants(range: Range): Generator<Element> {
+    for (const node of selectionRangeNodes(range)) {
+        if (node.nodeType === 1 && node !== range.commonAncestorContainer && (node as Element).matches(selectionExcludedDescendantSelector)) yield node as Element;
+    }
 }
 
 function containsNonZeroClientRect(rects: DOMRectList): boolean {
@@ -398,17 +438,18 @@ export function shouldIgnoreSelection(range: Range): boolean {
         !(element && isInlineSelectionFormulaPart(element)))) return true;
 
     try {
-        return selectionExcludedDescendants(range).some((element) => {
+        for (const element of selectionExcludedDescendants(range)) {
             try {
                 if (!isIntrinsicallyExcludedSelectionElement(element) &&
-                    isTopLevelApplicationShell(element)) return false;
-                if (!isSelectionExcludedElement(element)) return false;
-                if (isInlineSelectionFormulaPart(element)) return false;
-                return range.intersectsNode(element) && hasNonZeroClientRect(element);
+                    isTopLevelApplicationShell(element)) continue;
+                if (!isSelectionExcludedElement(element)) continue;
+                if (isInlineSelectionFormulaPart(element)) continue;
+                if (range.intersectsNode(element) && hasNonZeroClientRect(element)) return true;
             } catch {
-                return false;
+                // 单个失效节点不能阻止后续仍有效的受保护内容被识别。
             }
-        });
+        }
+        return false;
     } catch {
         return false;
     }

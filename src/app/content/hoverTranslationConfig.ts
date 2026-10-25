@@ -1,7 +1,7 @@
 /**
  * @file src/app/content/hoverTranslationConfig.ts
  * 文件职责：在内容脚本配置同步边界撤销已失效的悬浮待触发任务，防止设置改变后仍按旧语言、服务或候选范围翻译。
- * 主要内容：仅在订阅回调中比较手势、候选、请求和展示配置的无凭据身份，包含快捷悬浮方案继承的服务/模型与能力设置，同值回声及无关界面设置保持待触发任务；有效变化交给现有取消端口处理。
+ * 主要内容：仅在订阅回调中比较手势、候选、请求和展示配置的无凭据身份，包含快捷悬浮方案继承的服务/模型与能力设置，同值回声、全文专用多段偏好及无关界面设置保持待触发任务；有效变化交给现有取消端口处理。
  * 模块边界：不持有鼠标或译文状态，不订阅存储，不取消已启动请求；顶层与受支持 frame 的组合根共享此配置同步适配器。
  */
 import type {Config} from '@/src/core/config/model';
@@ -22,7 +22,7 @@ function hoverConfigIdentity(source: Config): string {
         source.translationScope, source.minTranslationTextLength, source.sidebarTranslationEnabled,
         service, model, isModelThinkingEnabled(source.modelThinking, service, model),
         source.from, source.to, source.excludedLanguages, source.useCache,
-        source.enableAIContext, source.enableAIMultiSegment, source.nativeBatchTranslationEnabled[service],
+        source.enableAIContext, source.nativeBatchTranslationEnabled[service],
         buildGlossaryRevision(source.glossaryLibraries, source.glossaryEnabled),
         source.display, source.style, source.longParagraphLineBreakEnabled, source.translationBeforeOriginal,
     ]);

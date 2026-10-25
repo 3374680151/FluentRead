@@ -2,6 +2,8 @@
 
 // 使用临时 Edge profile 验证划词翻译的触发矩阵；--context-menu-only 只运行右键入口专项，
 // --lifecycle-only 仅检查宿主节点恢复、启停、路由、失败重试与键盘/窄屏界面。
+// --click-selection-only 只验证按需两点选取；通过 --runtime-diagnostics 传入 CDP 诊断收集器。
+// --click-selection-stress-only 只诊断滚动后立即确认终点的重复手势与事件时序。
 // Popup 快捷抽屉提供独立启用开关与双语/仅译文选择；触发方式、显示延迟和自定义快捷键在完整设置页修改，
 // 两个真实扩展页面同时打开，断言设置页写入、Popup 模式同步与网页中的真实划词手势结果一致。
 // 该脚本只操作本次创建的隔离 profile，不连接用户正在使用的浏览器。
@@ -44,7 +46,13 @@ function parseArgs(argv) {
     zoomOnly: argv.includes('--zoom-only'),
     scrollOnly: argv.includes('--scroll-only'),
     inlineCodeOnly: argv.includes('--inline-code-only'),
+    clickSelectionOnly: argv.includes('--click-selection-only') || argv.includes('--click-selection-stress-only'),
+    clickSelectionStressOnly: argv.includes('--click-selection-stress-only'),
+    runtimeDiagnostics: readArg(argv, 'runtime-diagnostics', ''),
   };
+  if (args.clickSelectionOnly && (!args.runtimeDiagnostics || !fs.existsSync(args.runtimeDiagnostics))) {
+    throw new Error('两点选取专项需要 --runtime-diagnostics <runtime-diagnostics.cjs> 以采集扩展隔离世界及后台诊断');
+  }
   if (!args.playwrightRoot) throw new Error('必须传入 --playwright-root，或设置 PLAYWRIGHT_ROOT');
   args.extensionDir = path.resolve(args.extensionDir);
   args.artifactsDir = path.resolve(args.artifactsDir);
@@ -1188,6 +1196,646 @@ async function triggerShortcut(page, label, settleMs = 450) {
   await page.waitForTimeout(settleMs);
 }
 
+// 两点选取使用真实 CDP 鼠标/键盘创建原生选区；只用 DOM Range 读取字形坐标，不代替被测手势。
+// 性能探针只装在本次扩展的 isolated world，保留原 API 行为和产品诊断。
+async function createClickSelectionPerformanceProbe(context, page, extensionId) {
+  const session = await context.newCDPSession(page), worlds = new Map();
+  session.on('Runtime.executionContextCreated', ({context: world}) => worlds.set(world.id, world));
+  session.on('Runtime.executionContextDestroyed', ({executionContextId}) => worlds.delete(executionContextId));
+  await session.send('Runtime.enable');
+  let world;
+  const deadline = Date.now() + 5000;
+  while (!world && Date.now() < deadline) {
+    for (const candidate of worlds.values()) {
+      if (candidate.auxData?.type !== 'isolated') continue;
+      const identity = await session.send('Runtime.evaluate', {contextId: candidate.id,
+        expression: 'globalThis.chrome?.runtime?.id || null', returnByValue: true});
+      if (identity.result.value === extensionId) {world = candidate; break;}
+    }
+    if (!world) await page.waitForTimeout(35);
+  }
+  if (!world) {await session.detach(); throw new Error('性能探针没有找到本次扩展的 isolated world');}
+  const evaluate = async expression => {
+    const response = await session.send('Runtime.evaluate', {contextId: world.id, expression, returnByValue: true});
+    assert(!response.exceptionDetails, `性能探针执行失败：${JSON.stringify(response.exceptionDetails)}`);
+    return response.result.value;
+  };
+  await evaluate(`(${function installProbe() {
+    const restorers = [];
+    let active = false, sample, observer;
+    const isSelectionSelector = selectors => typeof selectors === 'string' && selectors.includes('.fluent-read-bilingual-content')
+      && selectors.includes('.fluent-read-retry-wrapper') && selectors.includes('[data-fluent-read-ui]');
+    const isSemanticSelector = selectors => typeof selectors === 'string'
+      && (selectors.includes('MathJax') || /(^|,)\s*code(?:\s|,|$)/u.test(selectors));
+    const isBroadQuery = root => ['before', 'after'].some(suffix => {
+      const unrelated = document.getElementById(`click-selection-unrelated-${suffix}`);
+      return Boolean(unrelated && (root === document || root === unrelated || root.contains?.(unrelated)));
+    });
+    const newSample = () => ({querySelectorAllCalls: 0, broadQueryCalls: 0, unrelatedMatches: 0, elementChecks: 0, unrelatedElementChecks: 0,
+      semanticQuerySelectorCalls: 0, semanticQuerySelectorAllCalls: 0, semanticBroadQueryCalls: 0,
+      semanticUnrelatedMatches: 0, semanticElementChecks: 0, unrelatedSemanticElementChecks: 0, rangeCloneContentsCalls: 0, semanticQueries: [],
+      queryRoots: [], eventTrace: [], pointerupAt: null, nativeSelectionMs: null, nativeOperationMs: null,
+      nextFrameMs: null, longTasks: []});
+    sample = newSample();
+    for (const prototype of [Document.prototype, DocumentFragment.prototype, Element.prototype]) {
+      const descriptor = Object.getOwnPropertyDescriptor(prototype, 'querySelectorAll');
+      if (!descriptor?.value) continue;
+      const nativeQuery = descriptor.value;
+      Object.defineProperty(prototype, 'querySelectorAll', {...descriptor, value: function(selectors) {
+        const found = Reflect.apply(nativeQuery, this, [selectors]);
+        if (active && isSelectionSelector(selectors)) {
+          sample.querySelectorAllCalls += 1;
+          const broad = isBroadQuery(this);
+          if (broad) sample.broadQueryCalls += 1;
+          sample.queryRoots.push({tag: this.nodeName, id: this.id || '', matches: found.length, broad});
+          for (const element of found) if (element.closest('[data-click-selection-unrelated]')) sample.unrelatedMatches += 1;
+        }
+        if (active && isSemanticSelector(selectors)) {
+          sample.semanticQuerySelectorAllCalls += 1;
+          const broad = isBroadQuery(this);
+          if (broad) sample.semanticBroadQueryCalls += 1;
+          sample.semanticQueries.push({method: 'querySelectorAll', tag: this.nodeName, id: this.id || '', matches: found.length, broad});
+          for (const element of found) if (element.closest('[data-click-selection-unrelated]')) sample.semanticUnrelatedMatches += 1;
+        }
+        return found;
+      }});
+      restorers.push(() => Object.defineProperty(prototype, 'querySelectorAll', descriptor));
+      const queryDescriptor = Object.getOwnPropertyDescriptor(prototype, 'querySelector');
+      const nativeSingleQuery = queryDescriptor.value;
+      Object.defineProperty(prototype, 'querySelector', {...queryDescriptor, value: function(selectors) {
+        const found = Reflect.apply(nativeSingleQuery, this, [selectors]);
+        if (active && isSemanticSelector(selectors)) {
+          sample.semanticQuerySelectorCalls += 1;
+          const broad = isBroadQuery(this);
+          if (broad) sample.semanticBroadQueryCalls += 1;
+          sample.semanticQueries.push({method: 'querySelector', tag: this.nodeName, id: this.id || '', matches: found ? 1 : 0, broad});
+          if (found?.closest('[data-click-selection-unrelated]')) sample.semanticUnrelatedMatches += 1;
+        }
+        return found;
+      }});
+      restorers.push(() => Object.defineProperty(prototype, 'querySelector', queryDescriptor));
+    }
+    const matchesDescriptor = Object.getOwnPropertyDescriptor(Element.prototype, 'matches');
+    Object.defineProperty(Element.prototype, 'matches', {...matchesDescriptor, value: function(selectors) {
+      if (active && isSelectionSelector(selectors)) {
+        sample.elementChecks += 1;
+        if (this.closest('[data-click-selection-unrelated]')) sample.unrelatedElementChecks += 1;
+      }
+      if (active && isSemanticSelector(selectors)) {
+        sample.semanticElementChecks += 1;
+        if (this.closest('[data-click-selection-unrelated]')) sample.unrelatedSemanticElementChecks += 1;
+      }
+      return Reflect.apply(matchesDescriptor.value, this, [selectors]);
+    }});
+    restorers.push(() => Object.defineProperty(Element.prototype, 'matches', matchesDescriptor));
+    const cloneDescriptor = Object.getOwnPropertyDescriptor(Range.prototype, 'cloneContents');
+    Object.defineProperty(Range.prototype, 'cloneContents', {...cloneDescriptor, value: function(...args) {
+      if (active) sample.rangeCloneContentsCalls += 1;
+      return Reflect.apply(cloneDescriptor.value, this, args);
+    }});
+    restorers.push(() => Object.defineProperty(Range.prototype, 'cloneContents', cloneDescriptor));
+    const selectionDescriptor = Object.getOwnPropertyDescriptor(Selection.prototype, 'setBaseAndExtent');
+    if (!selectionDescriptor?.value) throw new Error('当前浏览器缺少原生 Selection.setBaseAndExtent');
+    Object.defineProperty(Selection.prototype, 'setBaseAndExtent', {...selectionDescriptor, value: function(...args) {
+      const before = performance.now();
+      const value = Reflect.apply(selectionDescriptor.value, this, args);
+      if (active && sample.pointerupAt !== null) {
+        const observed = sample;
+        observed.eventTrace.push({type: 'native-selection-completed', at: performance.now(), scrollY});
+        observed.nativeOperationMs = performance.now() - before;
+        observed.nativeSelectionMs = performance.now() - observed.pointerupAt;
+        requestAnimationFrame(() => {observed.nextFrameMs = performance.now() - observed.pointerupAt;});
+      }
+      return value;
+    }});
+    restorers.push(() => Object.defineProperty(Selection.prototype, 'setBaseAndExtent', selectionDescriptor));
+    const pointerdown = event => {if (active && event.isTrusted) sample.eventTrace.push({type: 'pointerdown', at: performance.now(), scrollY});};
+    const pointerup = event => {
+      if (active && event.isTrusted) {
+        sample.pointerupAt = performance.now();
+        sample.eventTrace.push({type: 'pointerup', at: sample.pointerupAt, scrollY});
+      }
+    };
+    const scrolled = event => {if (active) sample.eventTrace.push({type: 'scroll', at: performance.now(), scrollY, trusted: event.isTrusted});};
+    window.addEventListener('pointerdown', pointerdown, true);
+    window.addEventListener('pointerup', pointerup, true);
+    window.addEventListener('scroll', scrolled, true);
+    if (PerformanceObserver.supportedEntryTypes?.includes('longtask')) {
+      observer = new PerformanceObserver(list => {
+        if (active) sample.longTasks.push(...list.getEntries().map(entry => ({durationMs: entry.duration, startTime: entry.startTime})));
+      });
+      observer.observe({type: 'longtask'});
+    }
+    globalThis.__fluentReadClickSelectionProbe = {
+      reset() {sample = newSample(); active = true;},
+      read() {active = false; return sample;},
+      calibrate() {
+        sample = newSample(); active = true;
+        const selectors = '.fluent-read-bilingual-content,.fluent-read-retry-wrapper,[data-fluent-read-ui],button,input,[role]';
+        document.getElementById('selection-test-fixture').querySelectorAll(selectors);
+        document.getElementById('click-selection-unrelated-before').firstElementChild.matches(selectors);
+        const semanticSelector = 'math, mjx-container, .MathJax, .katex, code';
+        document.getElementById('selection-test-fixture').querySelector(semanticSelector);
+        document.getElementById('click-selection-unrelated-before').firstElementChild.matches(semanticSelector);
+        const selectedOnly = document.createRange(); selectedOnly.selectNodeContents(document.getElementById('target')); selectedOnly.cloneContents();
+        active = false; return sample;
+      },
+      stop() {
+        active = false;
+        observer?.disconnect(); window.removeEventListener('pointerdown', pointerdown, true); window.removeEventListener('pointerup', pointerup, true);
+        window.removeEventListener('scroll', scrolled, true);
+        for (const restore of restorers.reverse()) restore();
+        delete globalThis.__fluentReadClickSelectionProbe;
+      },
+    };
+    return true;
+  }.toString()})()`);
+  return {
+    world: {id: world.id, origin: world.origin, name: world.name},
+    reset: () => evaluate('globalThis.__fluentReadClickSelectionProbe.reset(); true'),
+    read: () => evaluate('globalThis.__fluentReadClickSelectionProbe.read()'),
+    calibrate: () => evaluate('globalThis.__fluentReadClickSelectionProbe.calibrate()'),
+    stop: async () => {try {await evaluate('globalThis.__fluentReadClickSelectionProbe.stop(); true');} finally {await session.detach();}},
+  };
+}
+
+function summarizeClickSelectionTiming(samples) {
+  const values = samples.map(sample => sample.nativeSelectionMs).sort((left, right) => left - right);
+  const percentile = fraction => values[Math.max(0, Math.ceil(values.length * fraction) - 1)];
+  return {samples: values.length, p50Ms: percentile(.5), p95Ms: percentile(.95),
+    minMs: values[0], maxMs: values.at(-1),
+    querySelectorAllCalls: samples.reduce((sum, sample) => sum + sample.querySelectorAllCalls, 0),
+    broadQueryCalls: samples.reduce((sum, sample) => sum + sample.broadQueryCalls, 0),
+    unrelatedMatches: samples.reduce((sum, sample) => sum + sample.unrelatedMatches, 0),
+    elementChecks: samples.reduce((sum, sample) => sum + sample.elementChecks, 0),
+    unrelatedElementChecks: samples.reduce((sum, sample) => sum + sample.unrelatedElementChecks, 0),
+    semanticQuerySelectorCalls: samples.reduce((sum, sample) => sum + sample.semanticQuerySelectorCalls, 0),
+    semanticQuerySelectorAllCalls: samples.reduce((sum, sample) => sum + sample.semanticQuerySelectorAllCalls, 0),
+    semanticBroadQueryCalls: samples.reduce((sum, sample) => sum + sample.semanticBroadQueryCalls, 0),
+    semanticUnrelatedMatches: samples.reduce((sum, sample) => sum + sample.semanticUnrelatedMatches, 0),
+    semanticElementChecks: samples.reduce((sum, sample) => sum + sample.semanticElementChecks, 0),
+    unrelatedSemanticElementChecks: samples.reduce((sum, sample) => sum + sample.unrelatedSemanticElementChecks, 0),
+    rangeCloneContentsCalls: samples.reduce((sum, sample) => sum + sample.rangeCloneContentsCalls, 0),
+    longTaskCount: samples.reduce((sum, sample) => sum + sample.longTasks.length, 0)};
+}
+
+async function runClickSelectionCases({page, popup, context, extensionId, result, args, runtimeDiagnostics}) {
+  const hotkey = 'Alt+Shift+S';
+  const initial = await readStoredConfig(popup);
+  assert(initial.selectionClickSelectEnabled === false && initial.selectionClickSelectHotkey === hotkey,
+    '新临时配置没有保留两点选取默认关闭及推荐快捷键');
+  await patchStoredConfig(popup, {
+    on: true, disableSelectionTranslator: false, selectionTranslatorMode: 'bilingual',
+    selectionTranslatorTrigger: 'icon', selectionTranslatorDelay: 0, selectionTranslatorAutoDismiss: false,
+    selectionClickSelectEnabled: false, selectionClickSelectHotkey: hotkey,
+    from: 'auto', to: 'zh-Hans', hotkey: 'none', floatingBallHotkey: 'none',
+    harness: {...initial.harness, enabled: false},
+  });
+  await resetFixture(page);
+  await page.evaluate(() => {
+    const main = document.querySelector('#selection-test-fixture');
+    main.style.maxWidth = '960px';
+    main.insertAdjacentHTML('beforeend', `
+      <p id="second">Another paragraph keeps its own words and punctuation for reading.</p>
+      <p><a id="click-link" href="#click-result">Follow this link</a>
+      <button id="click-button" type="button">Count click</button>
+      <input id="click-input" aria-label="Host editor" value="Host input" /></p>
+      <p id="click-editable" contenteditable="true">An editable paragraph stays editable.</p>
+      <p id="click-long" style="max-width:720px;word-break:break-all;font-size:14px;line-height:1.2"></p>
+      <p id="click-protected"><span id="click-protected-before">Words before a control</span><button type="button">Protected action</button><span id="click-protected-after">Words after a control</span></p>
+      <div id="click-shadow-editor"></div>
+      <p id="click-result">Link target</p>`);
+    document.querySelector('#click-long').textContent = 'abcdefghijklmnopqrst'.repeat(260);
+    document.querySelector('#click-shadow-editor').attachShadow({mode: 'open'}).innerHTML = '<input aria-label="Shadow host editor" value="Shadow input" />';
+    document.querySelector('#click-button').addEventListener('click', () => {
+      document.querySelector('#click-button').dataset.clicks = String(Number(document.querySelector('#click-button').dataset.clicks || 0) + 1);
+    });
+  });
+  const text = await page.locator('#target').textContent();
+  const secondText = await page.locator('#second').textContent();
+  const check = (id, evidence = {}) => result.cases.push({id: `click-selection.${id}`, status: 'passed', ...evidence});
+  const state = async () => {
+    const {root} = await getSelectionUiTree(page);
+    const node = findCdpNode(root, candidate => ['start', 'end'].includes(cdpAttribute(candidate, 'data-click-selection-state')));
+    return {state: cdpAttribute(node, 'data-click-selection-state') || 'idle', text: cdpText(node)};
+  };
+  const waitState = async expected => {
+    const deadline = Date.now() + 5000;
+    let current;
+    do {
+      current = await state();
+      if (current.state === expected) return current;
+      await page.waitForTimeout(35);
+    } while (Date.now() < deadline);
+    throw new Error(`两点选取应为 ${expected}，实际为 ${JSON.stringify(current)}`);
+  };
+  const waitAreaSelecting = async expected => {
+    const deadline = Date.now() + 10000;
+    do {
+      const {root} = await getSelectionUiTree(page);
+      const selecting = Boolean(findCdpNode(root, node => hasCdpClass(node, 'fr-area-selecting')));
+      if (selecting === expected) return;
+      await page.waitForTimeout(35);
+    } while (Date.now() < deadline);
+    throw new Error(`圈选选择阶段没有变为 ${expected}`);
+  };
+  const selection = () => page.evaluate(() => {
+    const current = window.getSelection();
+    return {text: current?.toString() || '', collapsed: current?.isCollapsed, anchor: current?.anchorOffset, focus: current?.focusOffset,
+      anchorId: current?.anchorNode?.parentElement?.id, focusId: current?.focusNode?.parentElement?.id};
+  });
+  const point = async (selector, offset, end = false, reveal = false) => {
+    const locate = () => page.locator(selector).evaluate((element, {offset, end}) => {
+      const node = element.firstChild;
+      if (!node || node.nodeType !== Node.TEXT_NODE || offset < 0 || offset >= node.textContent.length) throw new Error('缺少字形坐标');
+      const range = document.createRange(); range.setStart(node, offset); range.setEnd(node, offset + 1);
+      const rect = range.getClientRects()[0];
+      return {x: rect.left + rect.width * (end ? .9 : .1), y: rect.top + rect.height / 2};
+    }, {offset, end});
+    let position = await locate();
+    if (reveal) {
+      await page.evaluate(({y}) => window.scrollBy(0, y - innerHeight / 2), position);
+      position = await locate();
+    }
+    return position;
+  };
+  const clickText = async (selector, offset, end = false, reveal = false) => {
+    const position = await point(selector, offset, end, reveal);
+    await page.mouse.click(position.x, position.y);
+  };
+  const begin = async () => {
+    await activateInputPage(page);
+    await page.evaluate(() => {
+      let active = document.activeElement;
+      while (active?.shadowRoot?.activeElement) active = active.shadowRoot.activeElement;
+      if (active instanceof HTMLElement) active.blur();
+    });
+    await page.keyboard.press(hotkey);
+    return waitState('start');
+  };
+  const screenshot = async label => {
+    const screenshotPath = path.join(args.artifactsDir, `${label}.png`);
+    await page.screenshot({path: screenshotPath}); result.screenshots.push(screenshotPath);
+  };
+
+  if (args.clickSelectionStressOnly) {
+    runtimeDiagnostics.setPhase('scroll-immediately-before-endpoint-stress-only');
+    await patchStoredConfig(popup, {selectionClickSelectEnabled: true}); await page.waitForTimeout(150);
+    await page.evaluate(() => {
+      const main = document.getElementById('selection-test-fixture');
+      for (const suffix of ['before', 'after']) {
+        const section = document.createElement('section'); section.id = `click-selection-unrelated-${suffix}`;
+        section.dataset.clickSelectionUnrelated = ''; section.style.cssText = 'font:12px/1.2 Arial,sans-serif';
+        section.innerHTML = Array.from({length: 2000}, (_, index) => `<div><button>Unrelated ${index}</button><input/><span role="checkbox">Choice</span></div>`).join('');
+        if (suffix === 'before') main.insertBefore(section, document.getElementById('target'));
+        else document.getElementById('neighbor').after(section);
+      }
+    });
+    const probe = await createClickSelectionPerformanceProbe(context, page, extensionId), samples = [];
+    result.scrollRaceDiagnostic = {samples, probeWorld: probe.world};
+    try {
+      for (let index = 0; index < 20; index++) {
+        await begin(); await clickText('#target', 8, false, true); await waitState('end');
+        await probe.reset();
+        const endpoint = await point('#neighbor', 20, true, true);
+        await page.mouse.click(endpoint.x, endpoint.y); await waitState('idle');
+        try {await waitForSelectionUi(page, {indicator: true, tooltip: false}, `快速滚动第${index + 1}轮入口`);}
+        catch (error) {
+          result.scrollRaceDiagnostic.failedSample = {iteration: index + 1, probe: await probe.read(), selected: await selection()};
+          await screenshot('click-selection-scroll-race-failure'); throw error;
+        }
+        samples.push({...await probe.read(), selected: await selection()});
+      }
+      check('scroll-immediately-before-endpoint-stress-only', {iterations: samples.length});
+    } finally {await probe.stop();}
+    await assertBackgroundFocus('click selection stress final'); await runtimeDiagnostics.flush(); runtimeDiagnostics.assertClean();
+    result.runtimeDiagnostics = runtimeDiagnostics.snapshot(); result.ok = result.consoleErrors.length === 0;
+    fs.writeFileSync(path.join(args.artifactsDir, 'report.json'), `${JSON.stringify(result, null, 2)}\n`);
+    process.stdout.write(`${JSON.stringify(result, null, 2)}\n`); return;
+  }
+
+  runtimeDiagnostics.setPhase('default-disabled');
+  await activateInputPage(page);
+  await page.keyboard.press(hotkey);
+  await clickText('#target', 0);
+  assert((await state()).state === 'idle', '默认关闭时快捷键不应开始选取');
+  check('disabled-by-default');
+
+  runtimeDiagnostics.setPhase('settings-persistence');
+  let options = await openSelectionOptions(context, extensionId, result);
+  await activateInputPage(options);
+  await options.getByRole('switch', {name: '两点选取', exact: true}).locator('xpath=ancestor::div[contains(concat(" ", normalize-space(@class), " "), " el-switch " )][1]').click();
+  // 开关刚反馈就关闭页面，验证已有配置保存管线能处理短生命周期页面。
+  await options.close();
+  const persistDeadline = Date.now() + 10000;
+  while (!(await readStoredConfig(popup)).selectionClickSelectEnabled) {
+    assert(Date.now() < persistDeadline, '两点选取开关关闭设置页后没有持久化');
+    await page.waitForTimeout(50);
+  }
+  options = await openSelectionOptions(context, extensionId, result);
+  const reopened = await options.getByRole('switch', {name: '两点选取', exact: true}).getAttribute('aria-checked');
+  assert(reopened === 'true', '重新打开设置页后两点选取丢失');
+  const optionsShot = path.join(args.artifactsDir, 'click-selection-settings-reopened.png');
+  await options.screenshot({path: optionsShot}); result.screenshots.push(optionsShot);
+  result.persistenceCases = [{field: 'selectionClickSelectEnabled', before: false, after: true, reopened: true, quickClose: true}];
+  result.quickClose = true;
+  result.crossPageSync = {optionsToStoredConfig: true, pageShortcut: 'verified below'};
+  result.latestWriteWins = 'existing persistence pipeline; this suite checks the new boolean only';
+  await options.close();
+  await page.waitForTimeout(300);
+  check('settings-enable-quick-close-reopen');
+
+  runtimeDiagnostics.setPhase('native-selection-forward-reverse');
+  await begin();
+  await screenshot('click-selection-start');
+  await clickText('#target', 5);
+  await waitState('end');
+  await screenshot('click-selection-end');
+  await clickText('#target', 35, true);
+  await waitState('idle');
+  let selected = await selection();
+  assert(selected.text === text.slice(5, 36) && selected.anchor === 5 && selected.focus === 36,
+    `正向选区错误：${JSON.stringify(selected)}`);
+  await waitForSelectionUi(page, {indicator: true, tooltip: false}, '两点选取复用原划词图标');
+  await screenshot('click-selection-completed');
+  check('forward-native-selection-and-existing-entry', {selected});
+  result.crossPageSync.pageShortcut = true;
+  await begin(); await clickText('#target', 35, true);
+  await waitState('end'); selected = await selection();
+  assert(selected.collapsed === true && selected.anchor === 36 && selected.focus === 36,
+    `重启后第一点未清除旧高亮：${JSON.stringify(selected)}`);
+  check('new-anchor-collapses-previous-native-selection', {selected});
+  await clickText('#target', 5);
+  await waitState('idle'); selected = await selection();
+  assert(selected.text === text.slice(5, 36) && selected.anchor === 36 && selected.focus === 5,
+    `反向选区错误：${JSON.stringify(selected)}`);
+  check('reverse-native-selection', {selected});
+
+  await begin(); await clickText('#target', 8); await clickText('#second', 20, true);
+  await waitState('idle'); selected = await selection();
+  assert(selected.anchorId === 'target' && selected.focusId === 'second'
+    && selected.text.startsWith(text.slice(8)) && selected.text.endsWith(secondText.slice(0, 21)),
+    `跨段选区错误：${JSON.stringify(selected)}`);
+  check('cross-paragraph', {selected});
+
+  runtimeDiagnostics.setPhase('cancel-and-safe-host-interactions');
+  await begin(); await clickText('#target', 4); await page.keyboard.press('Escape');
+  await waitState('idle'); check('escape-cancel');
+  await begin(); await page.keyboard.press(hotkey); await waitState('idle'); check('shortcut-toggle-cancel');
+  await begin(); await page.keyboard.press('PageDown');
+  // 浏览器的可信翻页有动画尾段，先等其完成再测试下一轮字形坐标。
+  await page.waitForTimeout(500); await waitState('start');
+  await page.keyboard.press('a'); await waitState('idle');
+  await page.evaluate(() => window.scrollTo(0, 0));
+  await page.waitForFunction(() => window.scrollY === 0);
+  check('paging-preserves-mode-and-main-key-cancels');
+  await begin(); await clickText('#target', 9); await clickText('#target', 9);
+  const samePointHint = await waitState('end');
+  assert(samePointHint.text.includes('起点与终点相同，请换一个位置'), `同点点击缺少反馈：${JSON.stringify(samePointHint)}`);
+  await clickText('#target', 25, true); await waitState('idle');
+  selected = await selection(); assert(selected.text === text.slice(9, 26), '同点点击后没有保留有效起点');
+  check('same-point-retry', {hint: samePointHint.text, selected});
+  await begin(); await page.mouse.click(8, 30);
+  const blankStartHint = await waitState('start');
+  assert(blankStartHint.text.includes('未点中文字，请点击起点'), `空白起点缺少反馈：${JSON.stringify(blankStartHint)}`);
+  await clickText('#target', 0); await waitState('end'); await page.mouse.click(8, 30);
+  const blankEndHint = await waitState('end');
+  assert(blankEndHint.text.includes('未点中文字，请点击终点'), `空白终点缺少反馈：${JSON.stringify(blankEndHint)}`);
+  await clickText('#target', 15, true); await waitState('idle'); selected = await selection();
+  assert(selected.text === text.slice(0, 16), '空白点击提示后没有保留有效起点');
+  check('blank-space-keeps-stage', {hints: [blankStartHint.text, blankEndHint.text], selected});
+  await begin(); await clickText('#target', 2); await page.keyboard.press('Tab'); await waitState('idle');
+  const tabFocus = await page.evaluate(() => ({id: document.activeElement?.id, tag: document.activeElement?.tagName,
+    hostControl: document.activeElement?.matches('a[href],button,input,textarea,select,[contenteditable]')}));
+  assert(tabFocus.hostControl, `Tab退出后未把焦点交给宿主控件：${JSON.stringify(tabFocus)}`);
+  check('tab-cancels-without-trapping-focus', {activeElement: tabFocus});
+  for (const selector of ['#click-button', '#click-input', '#click-editable']) {
+    await begin(); await page.locator(selector).click(); await waitState('idle');
+    if (selector === '#click-button') assert(await page.locator(selector).getAttribute('data-clicks') === '1', '按钮原点击被吞');
+    else assert(await page.locator(selector).evaluate(element => document.activeElement === element), '编辑区原焦点被吞');
+    check(`host-${selector.slice(1)}-passes-through`);
+  }
+  await begin(); await page.locator('#click-link').click(); await waitState('idle');
+  assert(page.url().endsWith('#click-result'), '两点模式吞掉了链接导航');
+  check('host-link-navigation');
+  await page.evaluate(() => {window.scrollTo(0, 0); history.replaceState(null, '', '/');});
+  await page.locator('#click-shadow-editor input').click(); await page.keyboard.press(hotkey);
+  await waitState('idle');
+  assert(await page.locator('#click-shadow-editor input').evaluate(element => element.getRootNode().activeElement === element), '两点快捷键抢走 Shadow DOM 输入框焦点');
+  check('shadow-editor-shortcut-passes-through');
+  await page.evaluate(() => window.scrollTo(0, 0));
+
+  runtimeDiagnostics.setPhase('dynamic-source-scroll-and-limits');
+  await begin(); await clickText('#target', 4);
+  await page.locator('#target').evaluate(element => {element.firstChild.replaceWith(document.createTextNode(element.textContent));});
+  await clickText('#second', 15); await waitState('idle');
+  assert((await selection()).text === '', '已移除的起点被复用');
+  check('replaced-anchor-cancels');
+  await begin(); await clickText('#target', 3);
+  await page.evaluate(() => window.scrollBy(0, 160));
+  await clickText('#second', 30, true); await waitState('idle'); selected = await selection();
+  assert(selected.anchorId === 'target' && selected.focusId === 'second', '滚动使有效起点丢失');
+  check('scroll-between-clicks', {selected});
+  await page.evaluate(() => window.scrollTo(0, 0));
+  await begin(); await clickText('#click-long', 0, false, true); await clickText('#click-long', 4500, true, true);
+  assert((await selection()).text.length <= 4096, '超过4096字符的选区没有被拒绝');
+  const longHint = await waitState('end');
+  assert(longHint.text.includes('选区过长，请点击较近的终点'), `长选区缺少反馈：${JSON.stringify(longHint)}`);
+  await clickText('#click-long', 30, true, true); await waitState('idle'); selected = await selection();
+  assert(selected.text.length === 31 && selected.anchor === 0 && selected.focus === 31, '过长拒绝后未保留起点供重试');
+  check('long-range-rejected', {hint: longHint.text, retriedSelection: selected});
+  await begin(); await clickText('#click-protected-before', 1, false, true); await clickText('#click-protected-after', 8, true);
+  const protectedHint = await waitState('end');
+  assert(protectedHint.text.includes('此范围不支持，请换一个终点'), `保护内容缺少反馈：${JSON.stringify(protectedHint)}`);
+  await clickText('#click-protected-before', 14, true); await waitState('idle'); selected = await selection();
+  assert(selected.anchorId === 'click-protected-before' && selected.focusId === 'click-protected-before' && selected.anchor === 1 && selected.focus === 15,
+    `保护内容拒绝后未保留起点：${JSON.stringify(selected)}`);
+  check('protected-range-rejected-with-retry', {hint: protectedHint.text, selected});
+  await page.evaluate(() => window.scrollTo(0, 0));
+
+  runtimeDiagnostics.setPhase('bounded-selection-performance');
+  const probe = await createClickSelectionPerformanceProbe(context, page, extensionId);
+  const performanceGroups = [];
+  result.clickSelectionPerformance = {probeWorld: probe.world, groups: performanceGroups,
+    metric: 'Trusted pointerup capture to native Selection.setBaseAndExtent completion in the extension isolated world; CDP/DOM polling time excluded. Next-frame and long-task observations are diagnostic.',
+    acceptance: 'Native range boundaries, zero unrelated-control queries/checks, zero broad formula/code queries and zero plain-range cloneContents are asserted. Test-owned canaries prove the probes see the old broad queries, outside matches and cloneContents. p50/p95 are recorded without a brittle wall-clock gate; small sample counts and fixture-only results do not establish all-site latency.'};
+  try {
+    const measure = async (id, startSelector, endSelector, repetitions = 9, settleReveal = true) => {
+      const samples = [], group = {id, samples, settleReveal};
+      performanceGroups.push(group);
+      for (let index = 0; index < repetitions; index++) {
+        try {
+          await begin(); await clickText(startSelector, 8, false, true); await waitState('end');
+          if (!settleReveal) await probe.reset();
+          const endpoint = await point(endSelector, 20, true, true);
+          if (settleReveal) {
+            await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+            await probe.reset();
+          }
+          await page.mouse.click(endpoint.x, endpoint.y);
+          await waitState('idle');
+          await waitForSelectionUi(page, {indicator: true, tooltip: false}, `${id} 第${index + 1}轮原生选区入口`);
+          await page.waitForTimeout(35);
+          const sample = await probe.read(), selected = await selection();
+          assert(Number.isFinite(sample.nativeSelectionMs), `${id} 缺少真实 pointerup 到原生选区测量：${JSON.stringify(sample)}`);
+          const expected = await page.evaluate(({startSelector, endSelector}) => ({
+            start: document.querySelector(startSelector).firstChild.data.slice(8),
+            end: document.querySelector(endSelector).firstChild.data.slice(0, 21),
+            same: document.querySelector(startSelector).firstChild.data.slice(8, 21),
+          }), {startSelector, endSelector});
+          assert(selected.anchorId === startSelector.slice(1) && selected.focusId === endSelector.slice(1)
+            && selected.anchor === 8 && selected.focus === 21 && selected.text.length > 0,
+            `${id} 第${index + 1}轮原生选区错误：${JSON.stringify(selected)}`);
+          assert(startSelector === endSelector ? selected.text === expected.same : selected.text.startsWith(expected.start) && selected.text.endsWith(expected.end),
+            `${id} 第${index + 1}轮原生文本错误：${JSON.stringify(selected)}`);
+          samples.push({...sample, selected});
+        } catch (error) {
+          group.failedSample = {iteration: index + 1, probe: await probe.read(), selected: await selection(), error: String(error.stack || error)};
+          fs.writeFileSync(path.join(args.artifactsDir, 'click-selection-performance-failure.json'), `${JSON.stringify(result.clickSelectionPerformance, null, 2)}\n`);
+          await screenshot('click-selection-performance-failure');
+          throw error;
+        }
+      }
+      group.summary = summarizeClickSelectionTiming(samples);
+      return group;
+    };
+    await measure('short-adjacent-paragraphs', '#target', '#neighbor');
+    const unrelatedFixture = await page.evaluate(() => {
+      const main = document.getElementById('selection-test-fixture');
+      const build = suffix => {
+        const container = document.createElement('section');
+        container.id = `click-selection-unrelated-${suffix}`; container.dataset.clickSelectionUnrelated = '';
+        container.style.cssText = 'font:12px/1.2 Arial,sans-serif';
+        container.innerHTML = Array.from({length: 2000}, (_, index) => `<div><button type="button">Unrelated ${suffix} ${index}</button><input aria-label="Unrelated field ${suffix} ${index}"/><span role="checkbox" aria-checked="false">Choice</span></div>`).join('');
+        return container;
+      };
+      main.insertBefore(build('before'), document.getElementById('target'));
+      document.getElementById('neighbor').after(build('after'));
+      const range = document.createRange(); range.setStart(document.getElementById('target').firstChild, 8); range.setEnd(document.getElementById('neighbor').firstChild, 21);
+      return {commonAncestorId: range.commonAncestorContainer.id, unrelatedElements: main.querySelectorAll('[data-click-selection-unrelated] *').length,
+        unrelatedControls: main.querySelectorAll('[data-click-selection-unrelated] button,[data-click-selection-unrelated] input,[data-click-selection-unrelated] [role]').length};
+    });
+    assert(unrelatedFixture.commonAncestorId === 'selection-test-fixture' && unrelatedFixture.unrelatedControls === 12000,
+      `大页面未建立 main 共同祖先和前后无关控件：${JSON.stringify(unrelatedFixture)}`);
+    const calibration = await probe.calibrate();
+    assert(calibration.broadQueryCalls === 1 && calibration.unrelatedMatches === unrelatedFixture.unrelatedControls
+      && calibration.unrelatedElementChecks === 1 && calibration.semanticQuerySelectorCalls === 1
+      && calibration.semanticBroadQueryCalls === 1 && calibration.unrelatedSemanticElementChecks === 1
+      && calibration.rangeCloneContentsCalls === 1, `isolated-world探针未捕获测试自检扫描：${JSON.stringify(calibration)}`);
+    const large = await measure('adjacent-paragraphs-with-unrelated-controls', '#target', '#neighbor');
+    assert(large.summary.broadQueryCalls === 0 && large.summary.unrelatedMatches === 0 && large.summary.unrelatedElementChecks === 0,
+      `短跨段选区仍扫描无关控件：${JSON.stringify(large.summary)}`);
+    check('large-page-selection-does-not-scan-unrelated-controls', {fixture: unrelatedFixture, testOwnedProbeCalibration: calibration, timing: large.summary});
+    await screenshot('click-selection-large-page');
+    const outsideSemantics = await page.evaluate(() => {
+      for (const suffix of ['before', 'after']) {
+        const container = document.getElementById(`click-selection-unrelated-${suffix}`);
+        for (let index = 0; index < container.children.length; index += 10) {
+          container.children[index].insertAdjacentHTML('beforeend', '<code data-click-selection-outside-semantic>outside = 1 + 2;</code><span class="MathJax" data-click-selection-outside-semantic>x + y = z</span>');
+        }
+      }
+      return {outsideSemanticNodes: document.querySelectorAll('[data-click-selection-outside-semantic]').length,
+        beforeNodes: document.getElementById('click-selection-unrelated-before').querySelectorAll('[data-click-selection-outside-semantic]').length,
+        afterNodes: document.getElementById('click-selection-unrelated-after').querySelectorAll('[data-click-selection-outside-semantic]').length};
+    });
+    assert(outsideSemantics.outsideSemanticNodes === 800 && outsideSemantics.beforeNodes === 400 && outsideSemantics.afterNodes === 400,
+      `未在选区前后建立公式与代码节点：${JSON.stringify(outsideSemantics)}`);
+    const semanticCalibration = await probe.calibrate();
+    assert(semanticCalibration.semanticQuerySelectorCalls === 1 && semanticCalibration.semanticBroadQueryCalls === 1
+      && semanticCalibration.semanticUnrelatedMatches === 1 && semanticCalibration.unrelatedSemanticElementChecks === 1
+      && semanticCalibration.rangeCloneContentsCalls === 1,
+      `公式/代码查询与cloneContents探针自检失败：${JSON.stringify(semanticCalibration)}`);
+    const semanticGroup = await measure('adjacent-paragraphs-with-outside-formulas-and-code', '#target', '#neighbor');
+    assert(semanticGroup.summary.semanticBroadQueryCalls === 0 && semanticGroup.summary.semanticUnrelatedMatches === 0
+      && semanticGroup.summary.unrelatedSemanticElementChecks === 0 && semanticGroup.summary.rangeCloneContentsCalls === 0,
+      `选区外公式/代码触发整页查询、遍历或选区克隆：${JSON.stringify(semanticGroup.summary)}`);
+    assert(semanticGroup.summary.semanticElementChecks > 0, '没有观测到选区内公式/代码局部检查，无法证明链路已完成');
+    check('outside-formulas-and-code-do-not-trigger-scan-or-clone', {fixture: outsideSemantics,
+      testOwnedProbeCalibration: semanticCalibration, timing: semanticGroup.summary});
+    runtimeDiagnostics.setPhase('scroll-immediately-before-endpoint');
+    const quickScroll = await measure('scroll-immediately-before-endpoint', '#target', '#neighbor', 20, false);
+    check('scroll-immediately-before-endpoint-keeps-completed-entry', {iterations: quickScroll.samples.length, timing: quickScroll.summary});
+    await page.evaluate(() => {
+      document.getElementById('click-selection-unrelated-before').remove(); document.getElementById('click-selection-unrelated-after').remove();
+      const paragraph = document.createElement('p'); paragraph.id = 'click-single-long';
+      paragraph.style.cssText = 'max-width:720px;word-break:break-all;font:14px/1.2 Arial,sans-serif';
+      paragraph.textContent = 'abcdefghijklmnopqrst'.repeat(10000);
+      document.getElementById('selection-test-fixture').append(paragraph);
+    });
+    const single = await measure('short-range-in-200000-character-text-node', '#click-single-long', '#click-single-long', 5);
+    check('long-single-text-node-short-range', {textNodeLength: 200000, timing: single.summary});
+  } finally {
+    await probe.stop();
+    await page.evaluate(() => {
+      for (const id of ['click-selection-unrelated-before', 'click-selection-unrelated-after', 'click-single-long']) document.getElementById(id)?.remove();
+      window.scrollTo(0, 0);
+    });
+  }
+
+  runtimeDiagnostics.setPhase('pointer-session-mutual-exclusion');
+  const sectionHost = page.locator('[data-fluent-read-ui="section-picker"]');
+  const sectionProfile = {id: 'click-selection-section', enabled: true, action: 'section', hotkey: 'Alt+Shift+R',
+    service: 'microsoft', model: '', targetLanguage: 'zh-Hans', displayMode: 'bilingual', fullPageMode: 'inherit'};
+  const hoverProfile = {...sectionProfile, id: 'click-selection-hover', action: 'hover', hotkey: 'Alt+Shift+H'};
+  await begin();
+  await patchStoredConfig(popup, {sectionTranslationHotkeyEnabled: false, quickTranslationProfiles: [sectionProfile, hoverProfile]});
+  await page.waitForTimeout(200); await waitState('start');
+  await page.keyboard.press(sectionProfile.hotkey);
+  await sectionHost.waitFor({state: 'attached'}); await waitState('idle');
+  check('section-profile-replaces-click-selection', {sectionHosts: await sectionHost.count()});
+  await page.keyboard.press(hotkey);
+  await sectionHost.waitFor({state: 'detached'}); await waitState('start');
+  await clickText('#target', 3); await waitState('end'); await clickText('#target', 22, true);
+  await waitState('idle'); selected = await selection();
+  assert(selected.text === text.slice(3, 23) && await sectionHost.count() === 0,
+    `两点选取接管局部选择器后未独占手势：${JSON.stringify(selected)}`);
+  await page.keyboard.press('Escape'); await waitState('idle');
+  assert(await sectionHost.count() === 0, '退出两点选择后仍残留局部选择器');
+  check('click-selection-replaces-section-picker', {selected});
+  await begin();
+  const hoverPoint = await point('#neighbor', 8);
+  await page.mouse.move(hoverPoint.x, hoverPoint.y);
+  await page.keyboard.press(hoverProfile.hotkey); await waitState('idle');
+  await page.locator('#neighbor .fluent-read-bilingual-content').waitFor({state: 'attached', timeout: 15000});
+  assert(await sectionHost.count() === 0, '悬停方案执行后仍残留局部选择器');
+  check('hover-profile-cancels-click-selection', {fixtureTranslation: await page.locator('#neighbor .fluent-read-bilingual-content').innerText()});
+  await patchStoredConfig(popup, {quickTranslationProfiles: []});
+  await page.waitForTimeout(150);
+  await patchStoredConfig(popup, {selectionAreaEnabled: true, selectionAreaHotkey: 'Shift+Z'});
+  await page.waitForTimeout(150); await begin();
+  await page.keyboard.press('Shift+Z'); await waitState('idle'); await waitAreaSelecting(true);
+  check('area-selection-replaces-click-selection');
+  await page.keyboard.press(hotkey); await waitAreaSelecting(false); await waitState('start');
+  await page.keyboard.press('Escape'); await waitState('idle'); await waitAreaSelecting(false);
+  assert(await sectionHost.count() === 0, '圈选与两点选取切换后仍残留局部选择器');
+  check('click-selection-replaces-area-selection');
+  await patchStoredConfig(popup, {selectionAreaEnabled: false});
+  await page.waitForTimeout(150);
+
+  runtimeDiagnostics.setPhase('disable-unmount-and-native-drag');
+  await begin(); await clickText('#target', 2);
+  await patchStoredConfig(popup, {selectionClickSelectEnabled: false});
+  await waitState('idle'); await page.keyboard.press(hotkey); await waitState('idle');
+  check('config-disable-cancels');
+  const start = await point('#target', 0), end = await point('#target', 20, true);
+  await page.mouse.move(start.x, start.y); await page.mouse.down(); await page.mouse.move(end.x, end.y, {steps: 8}); await page.mouse.up();
+  selected = await selection(); assert(selected.text === text.slice(0, 21), `普通拖选回归：${JSON.stringify(selected)}`);
+  check('ordinary-drag-selection', {selected});
+  await patchStoredConfig(popup, {selectionClickSelectEnabled: true});
+  await page.waitForTimeout(150); await begin(); await clickText('#target', 2);
+  await patchStoredConfig(popup, {disableSelectionTranslator: true, selectionTranslatorMode: 'disabled'});
+  await page.locator('#fluent-read-selection-translator-container').waitFor({state: 'detached'});
+  await page.keyboard.press(hotkey); check('feature-unmount');
+  await assertBackgroundFocus('click selection final');
+  await runtimeDiagnostics.flush(); runtimeDiagnostics.assertClean();
+  result.runtimeDiagnostics = runtimeDiagnostics.snapshot();
+  result.providerEvidence = 'Production extension in temporary isolated Edge, trusted CDP input and native Selection. Pointer-session takeover uses a local Microsoft HTTP response fixture for the hover profile; no live-provider, system shortcut, Firefox, Safari, mobile hardware or cross-frame selection claim.';
+  result.ok = result.consoleErrors.length === 0;
+  assert(result.ok, `两点选取控制台异常：${JSON.stringify(result.consoleErrors)}`);
+  fs.writeFileSync(path.join(args.artifactsDir, 'report.json'), `${JSON.stringify(result, null, 2)}\n`);
+  process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+}
+
 async function main() {
   const args = parseArgs(process.argv.slice(2));
   fs.mkdirSync(args.artifactsDir, { recursive: true });
@@ -1198,12 +1846,13 @@ async function main() {
   let closeBrowser;
   let browserStartAttempted = false;
   let primaryError;
+  let runtimeDiagnostics;
   const result = {
     ok: false,
     extensionDir: args.extensionDir,
     artifactsDir: args.artifactsDir,
     browser: 'Microsoft Edge',
-    testScope: args.lifecycleOnly ? 'selection-host-lifecycle-only'
+    testScope: args.clickSelectionStressOnly ? 'click-selection-scroll-race-only' : args.clickSelectionOnly ? 'click-selection-only' : args.lifecycleOnly ? 'selection-host-lifecycle-only'
       : args.contextMenuOnly ? 'context-menu-only' : 'selection-trigger-filter-or-matrix',
     profileMode: 'temporary-isolated',
     windowMode: args.headed ? 'headed-dedicated-profile' : 'background-visible-no-focus',
@@ -1293,7 +1942,7 @@ async function main() {
       context = browserSession.context;
       createIsolatedPage = () => focusSafe.newPageWithoutForeground(context);
       activateInputPage = page => focusSafe.activateExtensionTabWithoutForeground(context, page);
-      if (args.contextMenuOnly || args.lifecycleOnly) {
+      if (args.contextMenuOnly || args.lifecycleOnly || args.clickSelectionOnly) {
         const browserPid = await getGuardedBrowserPid(browserSession);
         result.ownedBrowserPid = browserPid;
         assertBackgroundFocus = async label => {
@@ -1320,10 +1969,17 @@ async function main() {
       result.focusPolicy = 'foreground-authorized';
       result.windowPlacement = { mode: 'headed-explicit-foreground', windowState: 'normal', viewport: { width: 1280, height: 900 } };
     }
+    if (args.clickSelectionOnly) {
+      runtimeDiagnostics = require(path.resolve(args.runtimeDiagnostics)).createRuntimeDiagnostics();
+      await runtimeDiagnostics.start(context);
+    }
     const {worker, extensionId} = await waitForWorker(context);
+    runtimeDiagnostics?.setExtensionId(extensionId);
     const attachWorkerDiagnostics = (target) => {
       target.on('console', (message) => {
-        recordConsoleIssue(`worker ${message.type()}: ${message.text()}`);
+        if (!args.clickSelectionOnly || ['error', 'warning', 'warn'].includes(message.type())) {
+          recordConsoleIssue(`worker ${message.type()}: ${message.text()}`);
+        }
       });
     };
     attachWorkerDiagnostics(worker);
@@ -1377,6 +2033,11 @@ async function main() {
     page.on('console', (message) => { if (message.type() === 'error') recordConsoleIssue(`console: ${message.text()}`); });
     await page.goto('https://example.com/', { waitUntil: 'domcontentloaded', timeout: 60000 });
     await waitForContentScript(page);
+
+    if (args.clickSelectionOnly) {
+      await runClickSelectionCases({page, popup, context, extensionId, result, args, runtimeDiagnostics});
+      return;
+    }
 
     if (args.lifecycleOnly) {
       const saved = await readStoredConfig(popup);
@@ -3160,6 +3821,17 @@ async function main() {
     primaryError = error;
     result.ok = false;
     result.error = error.stack || error.message || String(error);
+    if (args.clickSelectionOnly && context) {
+      for (const [index, failedPage] of context.pages().entries()) {
+        try {
+          const screenshot = path.join(args.artifactsDir, `click-selection-failure-${index}.png`);
+          await failedPage.screenshot({path: screenshot, timeout: 5000});
+          result.screenshots.push(screenshot);
+        } catch (captureError) {
+          (result.captureGaps ||= []).push({surface: `page-${index}`, error: String(captureError.message || captureError)});
+        }
+      }
+    }
     process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
     process.exitCode = 1;
   } finally {
@@ -3174,6 +3846,13 @@ async function main() {
         if (resource === 'profile') result.retainedProfile = profileDir;
       }
     };
+    if (runtimeDiagnostics) {
+      await cleanup('runtime diagnostics', async () => {
+        await runtimeDiagnostics.flush();
+        runtimeDiagnostics.write(args.artifactsDir, result);
+        await runtimeDiagnostics.stop();
+      });
+    }
     let browserClosed = !browserStartAttempted;
     await cleanup('browser', async () => {
       if (closeBrowser) {await closeBrowser(); browserClosed = true;}
