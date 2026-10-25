@@ -13,6 +13,7 @@ import {describe, expect, it} from 'vitest';
 import {builtinSiteRulePack} from '@/src/core/site-adaptation/catalog';
 import {compileSiteRulePack, getSiteAdapterAttributeFilter} from '@/src/core/site-adaptation/compiler';
 import {validateSelectors} from '@/src/core/site-adaptation/schema';
+import {createTranslationMutationObserverOptions} from '@/src/features/full-page-translation/content/mutationObservation';
 import {shouldSkipTranslationForTarget} from '@/src/core/language/detect';
 import {
     applyTranslationsToSnapshot, createTranslationSourceSnapshot,
@@ -516,10 +517,16 @@ describe('X modern public DOM functional regression', () => {
         expect(hasDistinctTranslation(english, undefined)).toBe(false);
     });
 
-    it('uses valid bounded selectors without widening the observed attribute filter', () => {
+    it('keeps valid selectors and the conservative observer fallback for relational author protection', () => {
         const document = publicPage();
         expect(validateSelectors(xPack, document)).toEqual([]);
         expect(getSiteAdapterAttributeFilter(xAdapters)).toEqual(getSiteAdapterAttributeFilter(legacyAdapters));
-        expect(getSiteAdapterAttributeFilter(xAdapters)).not.toBeNull();
+        // Both content variants retain the current :has() author protection. The
+        // compiler conservatively observes all attributes for relational selectors.
+        expect(getSiteAdapterAttributeFilter(xAdapters)).toBeNull();
+        expect(createTranslationMutationObserverOptions(xAdapters)).toEqual({
+            childList: true, subtree: true, characterData: true, characterDataOldValue: true,
+            attributes: true, attributeOldValue: true,
+        });
     });
 });
