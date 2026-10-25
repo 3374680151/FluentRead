@@ -2231,7 +2231,7 @@
       },
       {
         "name": "formula-definition-list",
-        "selector": "#mw-content-text .mw-parser-output li",
+        "selector": "#mw-content-text .mw-parser-output li:not([role=\"navigation\"]):not([role=\"navigation\"] li)",
         "sourceIncludes": [
           "It is also called the posterior probability"
         ],
@@ -2264,7 +2264,8 @@
       "h1#firstHeading",
       "#mw-content-text .mw-parser-output p",
       "#mw-content-text h2",
-      "#mw-content-text figcaption"
+      "#mw-content-text figcaption",
+      "#mw-content-text .mw-parser-output ol.references > li > span.mw-reference-text:has(> ul)"
     ],
     "coverageRules": [
       {
@@ -2311,9 +2312,23 @@
       },
       {
         "name": "article-reading-list-items",
-        "selector": "#mw-content-text .mw-parser-output li",
+        "selector": "#mw-content-text .mw-parser-output li:not([role=\"navigation\"]):not([role=\"navigation\"] li)",
         "kind": "content",
         "minInitial": 50
+      },
+      {
+        "name": "nested-reference-introduction",
+        "selector": "#mw-content-text .mw-parser-output ol.references > li > span.mw-reference-text:has(> ul)",
+        "kind": "content",
+        "minInitial": 1,
+        "sourceIncludes": [
+          "Laplace refined Bayes's theorem over a period of decades:"
+        ],
+        "sourcePartition": {
+          "excludeSelectors": [
+            "ul"
+          ]
+        }
       },
       {
         "name": "figure-descriptions",
@@ -2333,7 +2348,8 @@
       "nav",
       "#vector-toc",
       "input[name=\"search\"]",
-      "button"
+      "button",
+      "#mw-content-text [role=\"navigation\"]"
     ],
     "forbiddenMustExistSelectors": [
       ".mwe-math-element",
@@ -2343,7 +2359,8 @@
       "nav",
       "#vector-toc",
       "input[name=\"search\"]",
-      "button"
+      "button",
+      "#mw-content-text [role=\"navigation\"]"
     ],
     "interactionSelectors": [
       "#mw-content-text a[href]"
@@ -2357,7 +2374,7 @@
     "hoverHotkey": "Control",
     "fullPageHotkey": "Alt+T",
     "service": "freeTranslation",
-    "notes": "Bounded initial loaded Wikipedia mathematical article: freeze all eligible configured prose paragraphs, section headings, reading list items and descriptive captions; require two real full cycles and native restoration. Native52P includes4 formula-only roots; core sees48P, so do not attach unfiltered full paragraph Text+BR sourcePartition. Strict ledgers cover title/headings/captions and selected formula-bearing hover P/LI. Table headers/labels, hatnotes and interwiki sidebar text are not separately mandatory completion groups; no claim that every English string, bibliography item, or table cell has been individually accepted. Formula/citation/edit/backlink/nav/search/button guards use the existing standard signature without a new class/HTML exemption. Broad interaction selector records total matching count plus representative interaction; no individual all551 href/structure proof claim. This candidate is unrun, not an accepted page or additional priority host."
+    "notes": "Bounded initial loaded Wikipedia mathematical article: freeze all eligible configured prose paragraphs, section headings, non-navigation reading list items, the independently owned nested-reference introduction and descriptive captions; require two real full cycles and native restoration. Native52P includes4 formula-only roots; core sees48P, so do not attach unfiltered full paragraph Text+BR sourcePartition. Strict ledgers cover title/headings/captions, the complete direct introduction run in the nested reference, and selected formula-bearing hover P/LI. The introduction ledger excludes its UL only because its three child LI owners remain independently mandatory in the unchanged minimum50 list group; a hover of the introduction translates that run only. Table headers/labels, hatnotes and interwiki sidebar text are not separately mandatory completion groups; no claim that every English string, bibliography item, or table cell has been individually accepted. Formula/citation/edit/backlink/nav/search/button guards use the existing standard signature without a new class/HTML exemption. Broad interaction selector records total matching count plus representative interaction; no individual all551 href/structure proof claim. The wave5 original hover PASS and full FAIL remain historical evidence. The corrected navigation contract and nested-reference product rule await fresh-build standard hover/full; this case does not yet establish an accepted pair or additional priority host."
   },
   "github-vue-computed-issue": {
     "url": "https://github.com/vuejs/core/issues/1932",

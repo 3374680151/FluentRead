@@ -2924,6 +2924,12 @@
           ".mw-parser-output h2"
         ],
         "atomic": false
+      },
+      {
+        "css": [
+          ".mw-parser-output ol.references > li > span.mw-reference-text:has(> ul)"
+        ],
+        "atomic": false
       }
     ],
     "protect": [
