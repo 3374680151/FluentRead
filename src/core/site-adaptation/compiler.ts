@@ -1,11 +1,12 @@
 /**
  * @file src/core/site-adaptation/compiler.ts
  * 文件职责：将网站适配 JSON 编译为既有候选引擎使用的适配器，并组合内置与用户规则。
- * 主要内容：展开单层模板、按域名和路径匹配规则、保护原文并执行自定义整条覆盖；内置 Mastodon 策略发现顶层应用外壳中的公开正文，内置 man7 策略授予预格式说明段准备能力，用户覆盖与停用会撤销这些能力。
+ * 主要内容：展开单层模板、匹配域名和路径并执行自定义整条覆盖；内置 Mastodon 策略发现应用外壳正文，man7 策略授予手册准备能力，BBC 策略保护已核实的纯图片署名图注；用户覆盖与停用会撤销内置能力。
  * 模块边界：仅匹配 URL 与声明内容边界，不注入脚本或样式，不监听页面生命周期。
  */
 
 import {isLiteralLabel, isLiteralToken} from './literalLabel';
+import {withBbcCreditCaptionProtection} from './bbcCreditCaption';
 import {createDeclarativeAdapter} from '@/src/core/translation/adapters/declarative';
 import {hasContentEditableMarker, isHiddenTranslationElement} from '@/src/core/translation/dom';
 import type {AdapterContext, TranslationSiteAdapter} from '@/src/core/translation/types';
@@ -199,6 +200,8 @@ export function composeSiteAdapters(builtinPack: SiteRulePack, settings: SiteAda
     if (mastodon) mastodon.discoverApplicationShellTargets = discoverMastodonApplicationShellTargets;
     const manpage = adapters.get('man7');
     if (manpage) manpage.preformattedProse = 'manpage';
+    const bbc = adapters.get('bbc-news');
+    if (bbc) adapters.set('bbc-news', withBbcCreditCaptionProtection(bbc));
     compileSiteRulePack(settings.custom).forEach((adapter) => adapters.set(adapter.id, adapter));
     return [...adapters.values()].filter((adapter) => !disabled.has(adapter.id));
 }

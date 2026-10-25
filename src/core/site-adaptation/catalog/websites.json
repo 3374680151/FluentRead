@@ -2186,11 +2186,13 @@
     "profile": "article",
     "exclude": [
       "article [data-testid=\"byline\"]",
-      "article [data-testid=\"image\"] > span"
+      "article [data-testid=\"image\"] > span",
+      "article [data-testid=\"hero-image\"] > span"
     ],
     "watchIgnore": [
       "article [data-testid=\"byline\"]",
-      "article [data-testid=\"image\"] > span"
+      "article [data-testid=\"image\"] > span",
+      "article [data-testid=\"hero-image\"] > span"
     ]
   },
   {

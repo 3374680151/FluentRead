@@ -7,8 +7,314 @@ import {parseHTML} from 'linkedom';
 import {describe, expect, it, vi} from 'vitest';
 import cases from './browser-translation-cases.json';
 import establishedFixtures from '../scripts/site-translation/site-adaptation-established-fixtures.json';
+import type {YoutubeFetchPort} from '../src/features/video-subtitle/content/youtubeTimedTextBridgeCore';
 
 const require = createRequire(import.meta.url);
+
+describe('X request-level runtime attribution', () => {
+  const {POLICY, explicitArguments, classifyRequest, createXRuntimeDiagnostics} =
+    require('../scripts/testing/x-runtime-diagnostics.cjs');
+  const extensionId = 'fixture-extension';
+  const initiator = () => ({type: 'script', stack: {callFrames: POLICY.frames.map((frame: {
+    bridge?: boolean; url?: string; functionName: string; lineNumber: number; columnNumber: number;
+  }) => ({functionName: frame.functionName,
+    url: frame.bridge ? `chrome-extension://${extensionId}/${POLICY.bridgePath}` : frame.url,
+    lineNumber: frame.lineNumber, columnNumber: frame.columnNumber, scriptId: 'opaque-runtime-id'}))}});
+  function facts() {
+    return {extensionId, artifactHash: POLICY.bridgeSha256,
+      entry: {id: 7, ownership: 'unattributed', type: 'browser-log', browserSource: 'network',
+        targetType: 'page', level: 'error', targetUrl: POLICY.pageUrl, sourceUrl: POLICY.requestUrl,
+        message: 'Failed to load resource: the server responded with a status of 404 ()',
+        contextOrigin: '', contextName: '', stack: []},
+      binding: {networkRequestId: 'request-1', entryIds: [7], targetId: 'target-1', sessionKey: 'session-1',
+        loaderId: 'loader-1', frameId: 'frame-1', pageUrl: POLICY.pageUrl},
+      request: {requestId: 'request-1', targetId: 'target-1', sessionKey: 'session-1', loaderId: 'loader-1',
+        frameId: 'frame-1', pageUrl: POLICY.pageUrl, documentURL: POLICY.pageUrl,
+        requestCount: 1, responseCount: 1, finishCount: 1, logCount: 1,
+        method: 'GET', url: POLICY.requestUrl, responseUrl: POLICY.requestUrl, status: 404,
+        type: 'Fetch', initiator: initiator()},
+    };
+  }
+  type Facts = ReturnType<typeof facts>;
+
+  it('accepts only the saved four-frame native startup chain through the reviewed transparent forwarder', () => {
+    expect(classifyRequest(facts())).toMatchObject({matched: true, policyId: POLICY.id, requestId: 'request-1'});
+  });
+
+  it.each<[string, (value: Facts) => void]>([
+    ['network destination without a request binding', value => {value.binding.networkRequestId = '';}],
+    ['a changed native page', value => {value.entry.targetUrl = 'https://x.com/other/status/1';}],
+    ['a different API origin', value => {value.request.url = POLICY.requestUrl.replace('api.x.com', 'provider.test');}],
+    ['a different endpoint', value => {value.request.url = POLICY.requestUrl.replace('/2/guide.json', '/2/timeline.json');}],
+    ['additional request parameters', value => {value.request.url += '&unexpected=1';}],
+    ['a POST to the same URL', value => {value.request.method = 'POST';}],
+    ['request data on GET', value => {Object.assign(value.request, {hasPostData: true});}],
+    ['a different response URL', value => {value.request.responseUrl = 'https://api.x.com/redirected';}],
+    ['a different response status', value => {value.request.status = 500;}],
+    ['a preflight response', value => {value.request.type = 'Preflight';}],
+    ['a redirected request reusing an ID', value => {Object.assign(value.request, {redirected: true});}],
+    ['a failed/CORS request', value => {Object.assign(value.request, {failed: true});}],
+    ['a service-worker response', value => {Object.assign(value.request, {fromServiceWorker: true});}],
+    ['a second request sharing the ID', value => {value.request.requestCount = 2;}],
+    ['duplicate responses', value => {value.request.responseCount = 2;}],
+    ['an unfinished request', value => {value.request.finishCount = 0;}],
+    ['two logs associated with one request', value => {value.request.logCount = 2;}],
+    ['an ambiguous new-entry set', value => {value.binding.entryIds.push(8);}],
+    ['the wrong actual entry ID', value => {value.binding.entryIds = [8];}],
+    ['the wrong target', value => {value.binding.targetId = 'other-target';}],
+    ['another CDP session', value => {value.binding.sessionKey = 'other-session';}],
+    ['a previous loader', value => {value.binding.loaderId = 'previous-loader';}],
+    ['another frame', value => {value.binding.frameId = 'child-frame';}],
+    ['a different document URL', value => {value.request.documentURL = 'https://x.com/home';}],
+    ['an unknown bridge build', value => {value.artifactHash = 'unreviewed';}],
+    ['the same file in another extension', value => {value.request.initiator.stack.callFrames[0].url = 'chrome-extension://other/content-scripts/xVideoBridge.js';}],
+    ['a changed bridge call position', value => {value.request.initiator.stack.callFrames[0].columnNumber += 1;}],
+    ['an extension-initiated request with no native caller', value => {value.request.initiator.stack.callFrames.splice(1);}],
+    ['another native script with a similar name', value => {value.request.initiator.stack.callFrames[1].url += '.unknown';}],
+    ['reordered native startup frames', value => {value.request.initiator.stack.callFrames.reverse();}],
+    ['an extra extension frame', value => {value.request.initiator.stack.callFrames.push(value.request.initiator.stack.callFrames[0]);}],
+    ['an unknown asynchronous initiator parent', value => {Object.assign(value.request.initiator.stack, {parent: {callFrames: []}});}],
+    ['a known FluentRead error', value => {value.entry.ownership = 'fluentread';}],
+    ['a console error with the same words', value => {value.entry.type = 'console';}],
+    ['an exception with the same words', value => {value.entry.type = 'exception';}],
+    ['a background error', value => {value.entry.targetType = 'service_worker';}],
+    ['an isolated-world context', value => {value.entry.contextName = 'FluentRead';}],
+    ['an explicit extension stack', value => {Object.assign(value.entry, {stack: [{url: 'chrome-extension://fixture-extension/content.js'}]});}],
+  ])('keeps %s blocking', (_name, mutate) => {
+    const value = facts(); mutate(value);
+    expect(classifyRequest(value).matched).toBe(false);
+  });
+
+  async function fixture(options: {networkUnavailable?: boolean; artifactHash?: string;
+    extraEntries?: boolean; rawVerdictError?: string; snapshotFault?: boolean;
+    rawPassedOverride?: boolean; rawVerdictSucceeds?: boolean; stopError?: string} = {}) {
+    const entries: Record<string, unknown>[] = [];
+    const coverage = {pages: [{status: 'listening'}], workers: [{attached: true}], failures: [] as unknown[], limitations: ['original limitation']};
+    const originalCalls: {receiver: unknown; params: unknown}[] = [];
+    const session = new EventEmitter() as EventEmitter & {
+      send: ReturnType<typeof vi.fn>; detach: ReturnType<typeof vi.fn>;
+    };
+    session.send = vi.fn(async (method: string) => {
+      if (method === 'Network.enable' && options.networkUnavailable) throw new Error('Network domain unavailable');
+      if (method === 'Target.getTargetInfo') return {targetInfo: {targetId: 'target-1', type: 'page'}};
+      if (method === 'Page.getFrameTree') return {frameTree: {frame: {id: 'frame-1', loaderId: 'loader-1', url: POLICY.pageUrl}}};
+      return {};
+    });
+    session.detach = vi.fn(async () => session.removeAllListeners());
+    const page = {url: () => POLICY.pageUrl};
+    const context = {newCDPSession: vi.fn(async (_page: unknown) => session)};
+    let sequence = 0, phase = 'bootstrap', workerObserved = true, snapshotReads = 0;
+    const rawSnapshot = () => {
+      if (options.snapshotFault && ++snapshotReads === 1) throw new Error('Binding snapshot unavailable');
+      const blockers = entries.filter(entry => ['fluentread', 'unattributed'].includes(String(entry.ownership)));
+      return {entries: structuredClone(entries), coverage: structuredClone(coverage), completeCoverage: false,
+        coverageScope: 'original scope', counts: {errors: blockers.filter(entry => entry.level === 'error').length,
+          warnings: blockers.filter(entry => entry.level === 'warning').length, expected: 0,
+          site: entries.filter(entry => entry.ownership === 'site').length},
+        workerObserved, passed: options.rawPassedOverride ?? (!blockers.length && !coverage.failures.length && workerObserved),
+        blockerIds: blockers.map(entry => entry.id)};
+    };
+    const base = {
+      async start(wrappedContext: typeof context) {
+        const sameSession = await wrappedContext.newCDPSession(page);
+        sameSession.on('Log.entryAdded', function (this: unknown, params: {entry: {
+          level: string; source: string; text: string; url?: string; timestamp: number;
+        }}) {
+          originalCalls.push({receiver: this, params});
+          const log = params.entry;
+          if (!['warning', 'error'].includes(log.level)) return;
+          entries.push({id: ++sequence, phase, surface: 'translation-page', targetType: 'page', type: 'browser-log',
+            level: log.level, message: log.text, sourceUrl: log.url || '', stack: [], browserSource: log.source,
+            contextOrigin: '', contextName: '', targetUrl: page.url(), protocolTimestamp: log.timestamp,
+            ownership: log.source === 'network' ? 'unattributed' : 'fluentread'});
+          if (options.extraEntries) entries.push({...entries.at(-1), id: ++sequence});
+        });
+        await sameSession.send('Runtime.enable'); await sameSession.send('Log.enable');
+      },
+      attachPage: vi.fn(async () => {}), setExtensionId: vi.fn(), setPhase(value: string) {phase = value;},
+      flush: vi.fn(async () => {}), snapshot: rawSnapshot,
+      assertClean() {
+        if (options.rawVerdictError) throw new Error(options.rawVerdictError);
+        if (options.rawVerdictSucceeds) return;
+        const raw = rawSnapshot();
+        if (!raw.passed) throw new Error(`运行时诊断未通过：${raw.counts.errors} 个错误、${raw.counts.warnings} 个告警、${raw.coverage.failures.length} 个采集失败，后台采集${raw.workerObserved ? '已连接' : '未连接'}；见 runtime-diagnostics.json`);
+      },
+      stop: vi.fn(async () => {await session.detach(); if (options.stopError) throw new Error(options.stopError);}),
+    };
+    const readArtifactHash = vi.fn(() => options.artifactHash || POLICY.bridgeSha256);
+    const diagnostics = createXRuntimeDiagnostics({rawHelper: {createRuntimeDiagnostics: () => base, redact: String},
+      extensionDir: '/explicit/test-build', readArtifactHash});
+    await diagnostics.start(context); diagnostics.setExtensionId(extensionId); diagnostics.setPhase('full/restore');
+    const request = (overrides = {}) => session.emit('Network.requestWillBeSent', {
+      requestId: 'request-1', frameId: 'frame-1', loaderId: 'loader-1', documentURL: POLICY.pageUrl,
+      request: {url: POLICY.requestUrl, method: 'GET'}, initiator: initiator(), ...overrides,
+    });
+    const response = (overrides = {}) => session.emit('Network.responseReceived', {
+      requestId: 'request-1', frameId: 'frame-1', loaderId: 'loader-1', type: 'Fetch',
+      response: {url: POLICY.requestUrl, status: 404, fromServiceWorker: false}, ...overrides,
+    });
+    const log = (overrides = {}) => {
+      const params = {entry: {level: 'error', source: 'network', timestamp: 12345,
+        text: 'Failed to load resource: the server responded with a status of 404 ()',
+        url: POLICY.requestUrl, networkRequestId: 'request-1', ...overrides}};
+      session.emit('Log.entryAdded', params); return params;
+    };
+    const finish = () => session.emit('Network.loadingFinished', {requestId: 'request-1'});
+    return {diagnostics, base, entries, coverage, session, context, originalCalls, rawSnapshot,
+      request, response, log, finish, readArtifactHash,
+      loseWorker() {workerObserved = false;}};
+  }
+
+  it('uses the exact original session and callback, binds actual IDs, retains raw failure and audits derived counts', async () => {
+    const f = await fixture();
+    f.request(); f.response(); const params = f.log(); f.finish();
+    expect(f.context.newCDPSession).toHaveBeenCalledTimes(1);
+    expect(f.originalCalls).toEqual([{receiver: f.session, params}]);
+    expect(f.originalCalls[0].params).toBe(params);
+    expect(f.session.send.mock.calls.map(call => call[0])).toEqual([
+      'Network.enable', 'Page.enable', 'Target.getTargetInfo', 'Page.getFrameTree', 'Runtime.enable', 'Log.enable',
+    ]);
+    expect(f.readArtifactHash).toHaveBeenCalledWith('/explicit/test-build/content-scripts/xVideoBridge.js');
+    expect(() => f.base.assertClean()).toThrow('运行时诊断未通过');
+    expect(() => f.diagnostics.assertClean()).not.toThrow();
+    const report = f.diagnostics.snapshot();
+    expect(report.rawDiagnostics).toEqual(f.rawSnapshot());
+    expect(report.rawDiagnostics).toMatchObject({passed: false, blockerIds: [1], counts: {errors: 1, site: 0}});
+    expect(report.rawVerdict).toMatchObject({observed: true, passed: false});
+    expect(report).toMatchObject({passed: true, blockerIds: [], counts: {errors: 0, warnings: 0, site: 1},
+      completeCoverage: false, coverage: {limitations: ['original limitation']}});
+    expect(report.requestOwnership.adjustments).toHaveLength(1);
+    expect(report.requestOwnership.adjustments[0]).toMatchObject({entryId: 1, evidence: {requestId: 'request-1'}});
+    await f.diagnostics.stop();
+    expect(f.base.stop).toHaveBeenCalledOnce(); expect(f.session.listenerCount('Network.requestWillBeSent')).toBe(0);
+  });
+
+  it.each(['missing-id', 'missing-request', 'missing-response', 'missing-finish', 'duplicate-log',
+    'duplicate-entry', 'changed-loader', 'response-from-other-frame', 'failed-request', 'unreviewed-build', 'network-gap'])(
+    'keeps actual event-stream %s blocking without URL/timestamp reconstruction', async problem => {
+      const f = await fixture({extraEntries: problem === 'duplicate-entry',
+        artifactHash: problem === 'unreviewed-build' ? 'other-build' : undefined,
+        networkUnavailable: problem === 'network-gap'});
+      if (problem !== 'missing-request') f.request();
+      if (problem !== 'missing-response') f.response(problem === 'response-from-other-frame' ? {frameId: 'child'} : {});
+      if (problem === 'changed-loader') f.session.emit('Page.frameNavigated', {frame: {id: 'frame-1', loaderId: 'later-loader', url: POLICY.pageUrl}});
+      f.log(problem === 'missing-id' ? {networkRequestId: undefined} : {});
+      if (problem === 'duplicate-log') f.log();
+      if (problem !== 'missing-finish') f.finish();
+      if (problem === 'failed-request') f.session.emit('Network.loadingFailed', {requestId: 'request-1', errorText: 'blocked'});
+      expect(() => f.diagnostics.assertClean()).toThrow();
+      expect(f.diagnostics.snapshot().passed).toBe(false);
+      expect(f.diagnostics.snapshot().requestOwnership.adjustments).toEqual([]);
+      expect(f.originalCalls.length).toBe(problem === 'duplicate-log' ? 2 : 1);
+      await f.diagnostics.stop();
+    });
+
+  it.each(['extension-error', 'extension-warning', 'coverage-gap', 'worker-gap', 'unknown-network', 'extra-raw-verdict'])(
+    'never releases a separate %s alongside an evidenced native 404', async problem => {
+      const f = await fixture({rawVerdictError: problem === 'extra-raw-verdict' ? 'Additional raw verifier failure' : undefined});
+      f.request(); f.response(); f.log(); f.finish();
+      if (problem.startsWith('extension-')) f.log({source: 'javascript', text: 'Extension failed', level: problem.endsWith('warning') ? 'warning' : 'error'});
+      if (problem === 'unknown-network') f.log({url: 'https://provider.test/translate', networkRequestId: 'unobserved'});
+      if (problem === 'coverage-gap') f.coverage.failures.push({surface: 'worker', message: 'attach failed'});
+      if (problem === 'worker-gap') f.loseWorker();
+      expect(() => f.diagnostics.assertClean()).toThrow();
+      const report = f.diagnostics.snapshot();
+      expect(report.passed).toBe(false);
+      expect(report.rawDiagnostics.passed).toBe(false);
+      expect(report.rawVerdict.passed).toBe(false);
+      await f.diagnostics.stop();
+    });
+
+  it('still invokes the original callback when observing its before-snapshot fails', async () => {
+    const f = await fixture({snapshotFault: true});
+    f.request(); f.response(); f.log(); f.finish();
+    expect(f.originalCalls).toHaveLength(1); expect(f.entries).toHaveLength(1);
+    expect(() => f.diagnostics.assertClean()).toThrow();
+    expect(f.diagnostics.snapshot().requestOwnership.failures).toContainEqual({surface: 'entry-binding-before', message: 'Binding snapshot unavailable'});
+    await f.diagnostics.stop();
+  });
+
+  it('cannot skip original collector cleanup when removing a diagnostic listener fails', async () => {
+    const f = await fixture();
+    vi.spyOn(f.session, 'off').mockImplementation(() => {throw new Error('Listener cleanup failed');});
+    await expect(f.diagnostics.stop()).rejects.toThrow('Listener cleanup failed');
+    expect(f.base.stop).toHaveBeenCalledOnce(); expect(f.session.detach).toHaveBeenCalledOnce();
+    expect(f.diagnostics.snapshot().passed).toBe(false);
+  });
+
+  it.each([false, true])('rejects contradictory raw snapshot passed=%s even when all eligible requests are proven', async rawPassedOverride => {
+    const f = await fixture({rawPassedOverride});
+    if (rawPassedOverride) {f.request(); f.response(); f.log(); f.finish();}
+    // false + no blockers and true + an original blocker both contradict the original documented predicate.
+    expect(f.diagnostics.snapshot().requestOwnership.rawSnapshotConsistent).toBe(false);
+    expect(() => f.diagnostics.assertClean()).toThrow();
+    const report = f.diagnostics.snapshot();
+    expect(report.passed).toBe(false); expect(report.rawDiagnostics.passed).toBe(rawPassedOverride);
+    await f.diagnostics.stop();
+  });
+
+  it('rejects an original verifier that returns success despite a raw blocker', async () => {
+    const f = await fixture({rawVerdictSucceeds: true});
+    f.request(); f.response(); f.log(); f.finish();
+    expect(() => f.diagnostics.assertClean()).toThrow();
+    const report = f.diagnostics.snapshot();
+    expect(report).toMatchObject({passed: false, rawVerdict: {observed: true, passed: true}, rawDiagnostics: {passed: false}});
+    expect(report.requestOwnership.failures).toContainEqual({surface: 'raw-verdict', message: 'Raw verdict disagrees with its snapshot'});
+    await f.diagnostics.stop();
+  });
+
+  it('retains an additional original verifier error even when its raw snapshot has no blockers', async () => {
+    const f = await fixture({rawVerdictError: 'Additional raw verifier failure'});
+    expect(() => f.diagnostics.assertClean()).toThrow('Additional raw verifier failure');
+    expect(f.diagnostics.snapshot()).toMatchObject({passed: false, rawDiagnostics: {passed: true},
+      rawVerdict: {observed: true, passed: false, message: 'Additional raw verifier failure'}});
+    await f.diagnostics.stop();
+  });
+
+  it.each([false, true])('retains original collector stop failure alongside observer failure=%s', async observerFailure => {
+    const f = await fixture({stopError: 'Original collector stop failed'});
+    if (observerFailure) vi.spyOn(f.session, 'off').mockImplementation(() => {throw new Error('Listener cleanup failed');});
+    await expect(f.diagnostics.stop()).rejects.toThrow(observerFailure ? 'Listener cleanup failed' : 'Original collector stop failed');
+    expect(f.base.stop).toHaveBeenCalledOnce(); expect(f.session.detach).toHaveBeenCalledOnce();
+    const report = f.diagnostics.snapshot();
+    expect(report.passed).toBe(false);
+    expect(report.requestOwnership.failures).toContainEqual({surface: 'raw-stop', message: 'Original collector stop failed'});
+    if (observerFailure) expect(report.requestOwnership.failures).toContainEqual({surface: 'listener-cleanup', message: 'Listener cleanup failed'});
+  });
+
+  it('requires explicit nonduplicate base-helper and extension paths without a machine-specific default', () => {
+    expect(explicitArguments(['--raw-runtime-diagnostics-helper', '/approved/raw.cjs', '--extension-dir', '/build']))
+      .toEqual({rawHelperPath: '/approved/raw.cjs', extensionDir: '/build'});
+    for (const argv of [[], ['--extension-dir', '/build'], ['--raw-runtime-diagnostics-helper', '/raw', '--extension-dir'],
+      ['--raw-runtime-diagnostics-helper', '/raw', '--raw-runtime-diagnostics-helper', '/other', '--extension-dir', '/build']]) {
+      expect(() => explicitArguments(argv)).toThrow('explicit');
+    }
+  });
+
+  it('the actual bridge preserves guide input/init/receiver and the exact 404 response without clone or publication', async () => {
+    const {installYoutubeTimedTextBridgeCore} = await import('../src/features/video-subtitle/content/youtubeTimedTextBridgeCore');
+    const {isXVideoBridgeResourceUrl, createXVideoBridgeResourcePayload} = await import('../src/features/video-subtitle/content/xVideoSubtitleData');
+    const response = {status: 404, clone: vi.fn(() => ({text: async () => 'should not read'}))};
+    const original = vi.fn(async (_input: unknown, _init?: unknown) => response);
+    let current: YoutubeFetchPort = original;
+    const postMessage = vi.fn();
+    const port = {get: () => current, set: (next: YoutubeFetchPort) => {current = next;}};
+    const events = {addEventListener: vi.fn(), removeEventListener: vi.fn()};
+    const xhr = {get: () => function () {}, set: vi.fn()};
+    const dispose = installYoutubeTimedTextBridgeCore({stateHost: {}, fetch: port, xhrOpen: xhr, xhrSend: xhr,
+      pageEvents: events, documentEvents: events, getHref: () => POLICY.pageUrl,
+      getOrigin: () => 'https://x.com', postMessage,
+      resourcePolicy: {matches: isXVideoBridgeResourceUrl, payload: createXVideoBridgeResourcePayload}});
+    const receiver = {}, input = new Request(POLICY.requestUrl), init = {headers: {fixture: 'unchanged'}, credentials: 'include', signal: new AbortController().signal};
+    expect(isXVideoBridgeResourceUrl(POLICY.requestUrl, POLICY.pageUrl)).toBe(false);
+    expect(await current.call(receiver, input, init)).toBe(response);
+    expect(original).toHaveBeenCalledTimes(1);
+    expect(original.mock.contexts[0]).toBe(receiver);
+    expect(original.mock.calls[0][0]).toBe(input); expect(original.mock.calls[0][1]).toBe(init);
+    expect(response.clone).not.toHaveBeenCalled(); expect(postMessage).not.toHaveBeenCalled();
+    dispose(); expect(current).toBe(original);
+  });
+});
 
 describe('dismissible public promotion preparation', () => {
   const {prepareDismissiblePromotion} = require('../scripts/run-site-translation-test.cjs');

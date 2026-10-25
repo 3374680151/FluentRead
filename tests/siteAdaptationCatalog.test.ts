@@ -27,6 +27,113 @@ function documentFor(html: string): Document {
 }
 
 describe('网站正文规则目录', () => {
+    it('BBC 主图只保护独立署名，主图内正文和真正图注仍可翻译', () => {
+        const fixture = fixtures.find(item => item.id === 'bbc-news')!;
+        const url = new URL('https://www.bbc.com/future/article/20261001-five-exercises-to-help-reduce-neck-pain');
+        const document = documentFor(fixture.html);
+        const core = new TranslationCandidateCore({url, adapters});
+        const adapter = adapterById.get(fixture.id)!;
+        const oldPack = structuredClone(pack);
+        const oldRule = oldPack.rules.find(rule => rule.id === fixture.id)!;
+        oldRule.exclude = oldRule.exclude!.filter(selector => !selector.includes('hero-image'));
+        oldRule.watchIgnore = oldRule.watchIgnore!.filter(selector => !selector.includes('hero-image'));
+        const oldCore = new TranslationCandidateCore({url, adapters: compileSiteRulePack(oldPack)});
+        const credit = document.querySelector('#hero-credit')!;
+        const creditText = credit.textContent!;
+        const sourceFor = (engine: TranslationCandidateCore) => engine.discover(document).map(candidate =>
+            extractTranslationTextFromNodes(candidate.nodes ?? [candidate.element], engine.shouldStayOriginal)).join('\n');
+        expect(sourceFor(oldCore)).toContain(creditText);
+        expect(sourceFor(core)).not.toContain(creditText);
+        expect(core.shouldStayOriginal(credit)).toBe(true);
+        expect(core.resolve(credit.firstChild)).toBeNull();
+        expect(adapter.shouldIgnoreMutation?.(credit, {url})).toBe(true);
+
+        const candidates = core.discover(document);
+        for (const selector of ['#hero-prose', '#hero-caption', '#body1', '#caption', '#body2']) {
+            const node = document.querySelector(selector)!;
+            expect(core.shouldStayOriginal(node), selector).toBe(false);
+            expect(candidates.some(candidate => candidate.element === node), selector).toBe(true);
+            expect(core.resolve(node.firstChild)?.element, selector).toBe(node);
+            expect(adapter.shouldIgnoreMutation?.(node, {url}), selector).toBe(false);
+        }
+        const hero = document.querySelector<HTMLElement>('[data-testid="hero-image"]')!;
+        const before = hero.innerHTML;
+        const snapshot = createTranslationSourceSnapshot(hero, core.shouldStayOriginal);
+        expect(snapshot.slots.map(slot => slot.source).join('\n')).toContain('Readable prose inside the hero');
+        expect(snapshot.slots.map(slot => slot.source).join('\n')).not.toContain(creditText);
+        const translated = applyTranslationsToSnapshot(snapshot, snapshot.slots.map(() => '主图正文译文'));
+        expect(translated).toContain(creditText);
+        expect(translated).toContain('主图正文译文');
+        expect(hero.innerHTML).toBe(before);
+
+        // 正文引用同一个名字时仍属于正文，不能按机构名字或全部 span 进行词法保护。
+        document.querySelector('article')!.insertAdjacentHTML('beforeend',
+            `<p id="credit-reference">The article discusses ${creditText} and the work behind the illustration.</p>`);
+        const reference = document.querySelector('#credit-reference')!;
+        expect(core.shouldStayOriginal(reference)).toBe(false);
+        expect(core.discover(document).some(candidate => candidate.element === reference)).toBe(true);
+        expect(sourceFor(core)).toContain(`The article discusses ${creditText}`);
+    });
+
+    it('BBC 主图署名边界不扩展到近似组件、文章外或不匹配的主机路径', () => {
+        const fixture = fixtures.find(item => item.id === 'bbc-news')!;
+        const document = documentFor(fixture.html);
+        document.querySelector('article')!.insertAdjacentHTML('beforeend',
+            '<div data-testid="hero-image-card"><p id="near-hero">A similarly named image card contains ordinary readable prose.</p></div>');
+        document.body.insertAdjacentHTML('beforeend',
+            '<div data-testid="hero-image"><span id="outside-hero">An independent description remains readable outside an article.</span></div>');
+        const url = new URL('https://www.bbc.com/culture/article/authored-feature');
+        const adapter = adapterById.get(fixture.id)!;
+        const core = new TranslationCandidateCore({url, adapters});
+        for (const selector of ['#near-hero', '#outside-hero']) {
+            const node = document.querySelector(selector)!;
+            expect(core.shouldStayOriginal(node), selector).toBe(false);
+            expect(adapter.shouldIgnoreMutation?.(node, {url}), selector).toBe(false);
+        }
+        expect(core.discover(document).some(candidate => candidate.element.id === 'near-hero')).toBe(true);
+        for (const raw of ['https://example.test/future/article/authored-feature',
+            'https://www.bbc.com/sport/article/authored-feature', 'https://www.bbc.com/login']) {
+            const wrongURL = new URL(raw);
+            expect(adapter.matches(wrongURL), raw).toBe(false);
+            const wrongCore = new TranslationCandidateCore({url: wrongURL, adapters});
+            const credit = document.querySelector('#hero-credit')!;
+            expect(wrongCore.shouldStayOriginal(credit), raw).toBe(false);
+            // 观察器只调用当前 URL 已匹配的适配器；单个 adapter 的回调本身不重复匹配主机。
+            expect(adapters.filter(item => item.matches(wrongURL)).some(item =>
+                item.shouldIgnoreMutation?.(credit, {url: wrongURL})), raw).toBe(false);
+        }
+    });
+
+    it('BBC 主图新增、更新与重挂后仍只忽略署名，邻接新正文和图注继续可译', () => {
+        const fixture = fixtures.find(item => item.id === 'bbc-news')!;
+        const url = new URL('https://www.bbc.com/future/article/authored-feature');
+        const document = documentFor(fixture.html);
+        const core = new TranslationCandidateCore({url, adapters});
+        const adapter = adapterById.get(fixture.id)!;
+        const hero = document.querySelector('[data-testid="hero-image"]')!;
+        const parent = hero.parentElement!;
+        document.querySelector('#hero-credit')!.textContent = 'Updated Independent Illustration Studio';
+        hero.remove();
+        parent.appendChild(hero);
+        document.querySelector('article')!.insertAdjacentHTML('beforeend',
+            '<figure><div data-testid="hero-image"><img alt="A newly loaded illustration"><span id="new-hero-credit">New Independent Illustration Studio</span><p id="new-hero-prose">A newly loaded image includes another full readable explanation.</p></div><figcaption id="new-hero-caption">A newly loaded descriptive caption remains translatable.</figcaption></figure>');
+        const candidates = core.discover(document);
+        for (const selector of ['#hero-credit', '#new-hero-credit']) {
+            const node = document.querySelector(selector)!;
+            expect(core.shouldStayOriginal(node), selector).toBe(true);
+            expect(core.resolve(node.firstChild), selector).toBeNull();
+            expect(adapter.shouldIgnoreMutation?.(node, {url}), selector).toBe(true);
+            expect(candidates.some(candidate => candidate.element === node || node.contains(candidate.element)), selector).toBe(false);
+        }
+        for (const selector of ['#hero-prose', '#hero-caption', '#new-hero-prose', '#new-hero-caption']) {
+            const node = document.querySelector(selector)!;
+            expect(core.shouldStayOriginal(node), selector).toBe(false);
+            expect(candidates.some(candidate => candidate.element === node), selector).toBe(true);
+            expect(core.resolve(node.firstChild)?.element, selector).toBe(node);
+            expect(adapter.shouldIgnoreMutation?.(node, {url}), selector).toBe(false);
+        }
+    });
+
     it('LinkedIn 公开长文只保护身份、推荐元数据和动作链接，简介与近似类名正文继续可译', () => {
         const fixture = fixtures.find(item => item.id === 'linkedin-articles')!;
         const url = new URL(fixture.url);

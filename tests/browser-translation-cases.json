@@ -2067,5 +2067,132 @@
     "optionalForbiddenSelectors": [
       "main article div.aspect-video:has(> video) button[data-slot=\"xds-menu-trigger\"]:has(svg[data-icon=\"icon-settings-stroke\"])"
     ]
+  },
+  "bbc-future-neck-feature": {
+    "url": "https://www.bbc.com/future/article/20261001-five-exercises-to-help-reduce-neck-pain",
+    "fullPageScope": "finite-page",
+    "hoverSelector": "article p",
+    "hoverTargets": [
+      {
+        "name": "feature-title",
+        "selector": "article h1",
+        "sourcePartition": {
+          "excludeSelectors": []
+        }
+      },
+      {
+        "name": "feature-lead",
+        "selector": "article p",
+        "sourceIncludes": [
+          "The modern world is a challenging place for necks"
+        ],
+        "sourcePartition": {
+          "excludeSelectors": []
+        }
+      },
+      {
+        "name": "later-section-heading",
+        "selector": "article h2",
+        "sourceIncludes": [
+          "4. Build neck flexor endurance"
+        ],
+        "sourcePartition": {
+          "excludeSelectors": []
+        }
+      },
+      {
+        "name": "later-feature-paragraph",
+        "selector": "article p",
+        "sourceIncludes": [
+          "Over time, these exercises can help make your neck more resilient"
+        ],
+        "sourcePartition": {
+          "excludeSelectors": []
+        }
+      },
+      {
+        "name": "descriptive-caption",
+        "selector": "article figure:has(> div[data-testid=\"image\"]) > figcaption",
+        "sourceIncludes": [
+          "Modern life is hard on the human neck"
+        ],
+        "sourcePartition": {
+          "excludeSelectors": []
+        }
+      }
+    ],
+    "requiredSelectors": [
+      "article h1",
+      "article p",
+      "article h2",
+      "article figure:has(> div[data-testid=\"image\"]) > figcaption"
+    ],
+    "coverageRules": [
+      {
+        "name": "feature-title",
+        "selector": "article h1",
+        "kind": "heading",
+        "minInitial": 1,
+        "sourcePartition": {
+          "excludeSelectors": []
+        }
+      },
+      {
+        "name": "feature-paragraphs",
+        "selector": "article p",
+        "kind": "content",
+        "minInitial": 30
+      },
+      {
+        "name": "feature-section-headings",
+        "selector": "article h2",
+        "kind": "heading",
+        "minInitial": 6,
+        "sourcePartition": {
+          "excludeSelectors": []
+        }
+      },
+      {
+        "name": "feature-captions",
+        "selector": "article figure:has(> div[data-testid=\"image\"]) > figcaption",
+        "kind": "content",
+        "minInitial": 1,
+        "sourcePartition": {
+          "excludeSelectors": []
+        }
+      }
+    ],
+    "forbiddenSelectors": [
+      "article [data-testid=\"byline\"]",
+      "article [data-testid=\"image\"] > span",
+      "article [data-testid=\"hero-image\"] > span",
+      "nav",
+      "article button[aria-label=\"Share\"]",
+      "article button[aria-label=\"Save\"]",
+      "input[data-testid=\"search-input-field\"]",
+      "article [data-component=\"image-block\"] figure:has([data-testid=\"hero-image\"]) > div > figcaption"
+    ],
+    "forbiddenMustExistSelectors": [
+      "article [data-testid=\"byline\"]",
+      "article [data-testid=\"image\"] > span",
+      "article [data-testid=\"hero-image\"] > span",
+      "nav",
+      "article button[aria-label=\"Share\"]",
+      "article button[aria-label=\"Save\"]",
+      "input[data-testid=\"search-input-field\"]",
+      "article [data-component=\"image-block\"] figure:has([data-testid=\"hero-image\"]) > div > figcaption"
+    ],
+    "interactionSelectors": [
+      "article a[href]"
+    ],
+    "modes": [
+      "hover",
+      "full"
+    ],
+    "tier": "required",
+    "hoverHotkey": "Control",
+    "fullPageHotkey": "Alt+T",
+    "service": "freeTranslation",
+    "notes": "Native public BBC Future longform on 2026-10-25: 1 h1, 38 p (37 core candidates plus a literal -- separator), 6 h2, 2 figcaption, 24 links. Finite-page completion must reveal and verify every eligible configured node including later sections, callout, More-like-this links, final disclaimer and newsletter prose; minInitial is only a readiness floor. Pure credit caption and standalone hero/body image credits must remain original; the separate descriptive caption remains translatable. Strict source partitions bind headings, descriptive caption and all selected hover bodies. All article links retain their native href and structural semantics. No video, medical advice quality, authenticated or paywalled scope is claimed. Full paragraph sourcePartition is not claimed: the native article includes a punctuation-only -- p without a stable unique attribute; every eligible paragraph is still tracked through completion, restore, retranslate and complete per-owner decoded attribution. No nth-based omission or source projection removal is used."
   }
 }

@@ -94,7 +94,19 @@ manual's section structure. Literal command and argument markup stays original
 inside translated explanations; these rules apply only to Ubuntu's manpage URLs.
 The JSON compiler maps `omit` to metadata omission and `literalLabels` to a
 conservative command-label predicate. Both remain editable through ordinary
-same-ID custom replacement; no parallel site-specific TypeScript registry is kept.
+same-ID custom replacement. Builtin BBC composition additionally protects a
+plain credit-only figcaption only when its entire normalized text equals
+`(Credit: <native credit>)`, using the unique direct image-credit span and caption
+in the same nearest native figure. Descriptive captions, links, controls and
+reading markup remain eligible. Owned copies are ignored only for this read-only
+comparison; they cannot supply missing native metadata. Custom same-ID replacement
+and disabled rules revoke this builtin capability. Its finite attribute filter
+includes the native structure, ownership and semantic attributes it reads.
+Caption edits and complete-figure discovery reread current text. Changes to the
+image-credit span are not directly ignored, but their dirty root can remain that
+span: immediate sibling-caption rescanning is not guaranteed unless the caption
+also changes or its figure is scanned. This capability does not add a separate
+runtime or a general JSON text-predicate field.
 
 Bilingual copies can wrap even when the source inherits `white-space: nowrap`;
 preformatted whitespace and explicit line breaks remain meaningful. In intrinsic
