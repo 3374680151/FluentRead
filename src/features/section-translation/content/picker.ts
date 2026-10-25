@@ -1,10 +1,11 @@
 /**
  * @file src/features/section-translation/content/picker.ts
  * 文件职责：实现局部翻译的区域选择模式，稳定预览鼠标下的内容块，支持单击锁定或按住左键划过多个区域，松开后用可见按钮调整并确认翻译或恢复，并在选择期间拦截网页自身的点击与悬停反应。
- * 主要内容：以封闭 Shadow Root 绘制高亮与紧凑操作条，突出选区状态和确认，省去正文摘录及重复教程；显式勾选后展示记忆动作与范围，保存成功才翻译，失败保留重试并忽略失效结果；拖动采样独立区域，同次事件复用相同命中的解析而保留全部路径采样，去重后逐块高亮，空白起划进入正文时收窄外壳而不因经过间隙扩大范围，支持有名称的范围图标和方向键调整；按每帧 150 步发现开放 ShadowRoot，动态插入只扫描新增子树；正文、布局及保护属性变化合并盘点并贴合高亮，退出时清理计时器、观察器和焦点；确认按钮或 Enter 执行，Esc、右键、关闭和隐藏退出。
+ * 主要内容：以封闭 Shadow Root 绘制高亮与紧凑操作条，突出选区状态和确认，省去正文摘录及重复教程；显式勾选后展示记忆动作与范围，保存成功才翻译，失败保留重试并忽略失效结果；拖动采样独立区域，同次事件复用相同命中的解析而保留全部路径采样，去重后逐块高亮，空白起划进入正文时收窄外壳而不因经过间隙扩大范围，支持有名称的范围图标和方向键调整；按每帧 150 步发现开放 ShadowRoot，动态插入只扫描新增子树；正文、布局及保护属性变化合并盘点并贴合高亮，退出时清理计时器、观察器和焦点；与其他临时指针选区共享单一手势所有权，成功启动时交接，确认或取消时释放；确认按钮或 Enter 执行，Esc、右键、关闭和隐藏退出。
  * 模块边界：本模块只处理手势、高亮和选择生命周期，所有事件先校验 isTrusted；区域判定规则来自 ../core，区域盘点、翻译和提示文案由调用方注入，不直接发起翻译、不读取配置存储。
  */
 import pickerStyles from './picker.css?inline';
+import {claimPointerSelectionSession} from '@/src/shared/dom/pointerSelectionSession';
 import {getComposedParent} from '@/src/core/translation/public';
 import {
     describeSectionScope,
@@ -673,6 +674,7 @@ function createPickerSession(options: SectionPickerOptions): PickerSession {
     function dispose(confirmed: boolean): void {
         if (disposed) return;
         disposed = true;
+        releasePointerSelection();
         drag = null;
         if (activeSession === session) activeSession = null;
         controller.abort();
@@ -1011,5 +1013,7 @@ function createPickerSession(options: SectionPickerOptions): PickerSession {
 
     const session: PickerSession = {dispose};
     scheduleRender();
+    // 完成挂载后才接管指针；仅取消尚未确认的另一选择模式，翻译任务保持独立。
+    const releasePointerSelection = claimPointerSelectionSession(() => dispose(false));
     return session;
 }
