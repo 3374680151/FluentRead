@@ -774,6 +774,10 @@ describe('configstoreAudit own-key and preview boundaries', () => {
         expect(diff.changeCount).toBe(1);
         expect(diff.groups[0].changes[0].after).toContain('已配置（内容已摘要）');
         expect(JSON.stringify(diff).length).toBeLessThan(5000);
+        const mapping = buildConfigDiff({model: {openai: before}}, {model: {openai: after}});
+        expect(mapping.groups[0].changes).toEqual([{key: 'model.openai', label: 'OpenAI模型',
+            before: '已配置（内容已摘要）', after: '已配置（内容已摘要）'}]);
+        expect(JSON.stringify(mapping).length).toBeLessThan(5000);
     });
 
     it('formats only the four visible array entries', () => {
@@ -795,6 +799,19 @@ describe('configstoreAudit own-key and preview boundaries', () => {
 });
 
 describe('configstoreAudit explicit destination binding', () => {
+    it.each(['fixture-new-openai', ''])('persists mixed-service legacy token edit %j through actual import, store and encrypted repository', async token => {
+        const {store, repository} = await configstoreAuditLoad({owner: true, indexed: true,
+            initial: {service: 'openai', apiKeys: {openai: ['fixture-old-openai'], deepseek: ['fixture-old-deepseek']}}});
+        const {prepareConfigForImport} = await import('@/src/core/config/transfer');
+        const imported = prepareConfigForImport({on: true, service: 'openai', display: 1, from: 'auto', to: 'en',
+            apiKeys: {deepseek: ['fixture-new-deepseek']}, token: {openai: token}}, store.config);
+        await store.requestConfigSave(imported);
+        const expectedKeys = {openai: token ? [token] : [], deepseek: ['fixture-new-deepseek']};
+        expect(store.config.apiKeys).toEqual(expectedKeys);
+        expect(store.config.token.openai).toBe(token || undefined);
+        expect(await repository!.get('local:credentials')).toMatchObject({apiKeys: expectedKeys});
+        expect((await store.prepareHydratedConfigForExport()).apiKeys).toEqual(expectedKeys);
+    });
     const service = 'aliyunTranslation';
     const initial = () => normalizeConfig({service, token: {[service]: 'fixture-id'}, secret: {[service]: 'fixture-old-secret'}, serviceRegion: {[service]: 'cn-hangzhou'}});
     const importBase = {on: true, service, display: 1, from: 'auto', to: 'en', serviceRegion: {[service]: 'ap-southeast-1'}};

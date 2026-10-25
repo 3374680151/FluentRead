@@ -9,6 +9,7 @@ import {readFileSync, realpathSync} from 'node:fs';
 import {createRequire} from 'node:module';
 import {dirname, resolve} from 'node:path';
 import {gzipUserscriptBuildData} from './buildGzip';
+import {encodeUserscriptData} from './buildDataEncoding';
 import ts from 'typescript';
 import {normalizePath, type Plugin} from 'vite';
 
@@ -71,17 +72,16 @@ export function createUserscriptFrancDataCompressionPlugin(root: string, enabled
             }));
             if (JSON.stringify(Object.keys(data)) !== JSON.stringify(['Latin', 'Cyrillic', 'Arabic', 'Devanagari'])
                 || Object.values(data).reduce((count, models) => count + Object.keys(models).length, 0) !== 66) throw unsupported();
-            const compressed = gzipUserscriptBuildData(Buffer.from(JSON.stringify(data))).toString('base64');
+            const compressed = encodeUserscriptData(gzipUserscriptBuildData(Buffer.from(JSON.stringify(data))));
             const digest = createHash('sha256').update(code).digest('hex');
             return {
                 code: [
                     code.slice(0, statement.getStart(source)),
                     '/* Non-code locked franc-min data; source sha256 ' + digest + '. */',
                     "import {inflateWithPako} from '@/userscript/pakoRuntime';",
+                    "import {decodeUserscriptData} from '@/userscript/dataEncoding';",
                     'export const data = (() => {',
-                    '    const binary = atob(' + JSON.stringify(compressed) + ');',
-                    '    const bytes = new Uint8Array(binary.length);',
-                    '    for (let index = 0; index < binary.length; index++) bytes[index] = binary.charCodeAt(index);',
+                    '    const bytes = decodeUserscriptData(' + JSON.stringify(compressed) + ');',
                     '    return JSON.parse(inflateWithPako(bytes));',
                     '})();',
                 ].join('\n'),

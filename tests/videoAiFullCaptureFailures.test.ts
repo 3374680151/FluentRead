@@ -929,6 +929,40 @@ describe('完整 AI 字幕失败与取消边界', () => {
     expect(sourceVideo.playCalls).toBe(0);
   });
 
+  it.each([
+    ['cancel', 'cancel-before-resolve'], ['cancel', 'resolve-then-cancel'],
+    ['destroy', 'cancel-before-resolve'], ['destroy', 'resolve-then-cancel'],
+  ] as const)('原生 decode %s / %s 后不再读取声道或复制 PCM', async (action, order) => {
+    vi.useFakeTimers();
+    installCustomAudioWindow();
+    let resolveDecode!: (value: AudioBuffer) => void;
+    const decoded = new Promise<AudioBuffer>(resolve => {resolveDecode = resolve;});
+    // 原生 API 直接返回 promise；避免 async 测试封装引入额外微任务、改变 race 的先后。
+    const decode = vi.spyOn(FakeAudioContext.prototype, 'decodeAudioData').mockImplementation(() => decoded);
+    const getChannelData = vi.fn(() => speechAudio(1_000));
+    const speech = {numberOfChannels: 1, sampleRate: 16_000, getChannelData} as unknown as AudioBuffer;
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(new Uint8Array(8))));
+    const video = new FakeVideo(); video.duration = 1;
+    const transcribe = vi.fn(async () => ({text: 'must not run'}));
+    const onComplete = vi.fn(async () => undefined), onError = vi.fn();
+    const controller = new VideoAiFullCaptureController({
+      getVideo: () => video as unknown as HTMLVideoElement, getModel: () => 'tiny', isSupported: () => true,
+      transcribe, onTranscriptionComplete: onComplete, onError, onStateChange: vi.fn(),
+    });
+    expect(controller.start()).toBe(true); await tick(30);
+    expect(decode).toHaveBeenCalledOnce();
+    if (order === 'resolve-then-cancel') resolveDecode(speech);
+    controller[action]();
+    if (order === 'cancel-before-resolve') resolveDecode(speech);
+    await tick(40);
+    expect(getChannelData).not.toHaveBeenCalled();
+    expect(transcribe).not.toHaveBeenCalled(); expect(onComplete).not.toHaveBeenCalled();
+    expect(onError).not.toHaveBeenCalled(); expect(controller.isRequested()).toBe(false);
+    expect(FakeAudioContext.instances.every(context => context.state === 'closed')).toBe(true);
+    expect(vi.getTimerCount()).toBe(0);
+    controller.destroy();
+  });
+
   it('旧 session 的延迟快速解码返回不会覆盖 cancel + restart 后的新状态', async () => {
     vi.useFakeTimers();
     installCustomAudioWindow();

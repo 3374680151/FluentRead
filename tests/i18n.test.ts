@@ -948,6 +948,30 @@ describe('界面 i18n 契约', () => {
 
 // 扫描实际界面源文件，避免只检查词典自身而放过未登记的新文案。
 describe('i18n 全量界面扫描', () => {
+  it('两点选取状态和设置覆盖所有语言，动态计数与 Esc 提示独立本地化', () => {
+    const statuses = ['点击文字起点', '点击文字终点', '选区过长，请点击较近的终点', '此范围不支持，请换一个终点'];
+    const fixed = [...statuses, '编辑两点选取快捷键', '两点选取',
+      '开启后按快捷键，再依次点击文字起点和终点，无需按住鼠标；完成自动退出，Esc 取消', '请选择带 Ctrl、Alt 或 Shift 的组合键'];
+    const cancel = {'en-US': 'Esc to cancel', 'ja-JP': 'Esc でキャンセル', 'ko-KR': 'Esc로 취소',
+      'fr-FR': 'Échap pour annuler', 'ru-RU': 'Esc — отмена', 'es-ES': 'Esc para cancelar'};
+    for (const language of Object.keys(cancel) as Array<keyof typeof cancel>) {
+      for (const source of fixed) {
+        const translated = translateLegacyText(source, language);
+        expect(translated, `${language}: ${source}`).not.toBe(source);
+        if (language !== 'ja-JP') expect(translated).not.toMatch(/[\u3400-\u9fff]/u);
+      }
+      for (const status of statuses) {
+        expect(translateLegacyText(`${status} · Esc 取消`, language))
+          .toBe(`${translateLegacyText(status, language)} · ${cancel[language]}`);
+      }
+      for (const count of [0, 1, 12, 125, 987654321]) {
+        const source = ` \t${count} · Esc 取消\n`;
+        expect(translateLegacyText(source, language)).toBe(` \t${count} · ${cancel[language]}\n`);
+        expect(translateLegacyText(source, 'zh-CN')).toBe(source);
+      }
+    }
+    expect(runtimeFeedbackRows.some(row => row[0] === '12 · Esc 取消')).toBe(false);
+  });
   it('Vue 文案和展示注册表在非中文界面有本地化结果', async () => {
     const {collectUiSourceCopy} = await import('../scripts/testing/i18n-source-audit.mjs');
     const audit = collectUiSourceCopy(process.cwd());

@@ -1,7 +1,7 @@
 /**
  * @file src/core/config/clickSelection.ts
  * 文件职责：定义两点选取的显式开关、单次启动快捷键及与其他阅读动作的冲突规则。
- * 主要内容：规范化带修饰键的组合键，按全局与划词开关判断入口可用性，复用既有快捷键解析及方案冲突检查；只在匹配启动键后检查其他动作占用。
+ * 主要内容：规范化带修饰键的组合键，按全局与划词开关判断入口可用性，复用既有快捷键解析及方案冲突检查；只在匹配启动键后检查其他动作占用，并向设置入口提供不随全局暂停释放的点选保留键。
  * 模块边界：这里只读取传入配置并比较键盘事件，不订阅配置、不绑定事件、不选取网页文字，也不持久化用户偏好。
  */
 import {canonicalizeHotkey, matchesHotkey, parseHotkey, resolveConfiguredHotkey} from '@/src/core/hotkey';
@@ -48,6 +48,12 @@ export function normalizeClickSelectionHotkey(value: unknown): string {
 export function isClickSelectionAvailable(config: ClickSelectionConfig): boolean {
     return config.on === true && config.selectionClickSelectEnabled === true
         && config.selectionTranslatorMode !== 'disabled' && config.disableSelectionTranslator !== true;
+}
+
+/** 设置页保留已启用点选的按键；全局暂停不清除偏好，划词停用则不占用。 */
+export function resolveReservedClickSelectionHotkey(config: ClickSelectionConfig): string {
+    return config.selectionClickSelectEnabled === true && config.selectionTranslatorMode !== 'disabled'
+        && config.disableSelectionTranslator !== true ? normalizeClickSelectionHotkey(config.selectionClickSelectHotkey) : '';
 }
 
 /** 返回已占用此组合的功能名称；配置导入或另一入口后续改键也不能让一次按键触发两个动作。 */

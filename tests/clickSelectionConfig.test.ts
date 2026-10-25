@@ -6,6 +6,7 @@ import {
     isClickSelectionAvailable,
     matchesClickSelectionShortcut,
     normalizeClickSelectionHotkey,
+    resolveReservedClickSelectionHotkey,
 } from '@/src/core/config/clickSelection';
 
 function enabled(): Config {
@@ -17,6 +18,16 @@ function keyboardEvent(extra: Record<string, unknown> = {}): KeyboardEvent {
 }
 
 describe('两点选取配置与快捷键归属', () => {
+    it('设置保留点选组合不随插件暂停释放，实际点选或划词停用才释放', () => {
+        const config = {...enabled(), on: false, selectionClickSelectHotkey: 'shift+alt+k'};
+        expect(resolveReservedClickSelectionHotkey(config)).toBe('Alt+Shift+K');
+        expect(isClickSelectionAvailable(config)).toBe(false);
+        expect(resolveReservedClickSelectionHotkey({...config, selectionClickSelectHotkey: undefined})).toBe(DEFAULT_CLICK_SELECTION_HOTKEY);
+        for (const patch of [{selectionClickSelectEnabled: false}, {selectionTranslatorMode: 'disabled'}, {disableSelectionTranslator: true}]) {
+            expect(resolveReservedClickSelectionHotkey({...config, ...patch})).toBe('');
+        }
+        expect(resolveReservedClickSelectionHotkey({})).toBe('');
+    });
     it('新用户与历史配置保持关闭，显式布尔开启和规范快捷键可往返', () => {
         expect(new Config().selectionClickSelectEnabled).toBe(false);
         expect(new Config().selectionClickSelectHotkey).toBe(DEFAULT_CLICK_SELECTION_HOTKEY);

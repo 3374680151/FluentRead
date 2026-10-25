@@ -146,6 +146,8 @@ GitHub 仓库列表和 Issue 列表同时保留旧容器与当前结构的保护
 
 `materialSource` 验证主动收藏新材料时立即清理旧恢复失败提示。`translationStatsAggregation`、`modelUsageAggregation` 与 `usageDashboardLifecycle` 验证已有记录起点（含 null 和 0）不再触发额外全量起点扫描，缺省时逐项归约而不展开无界函数实参；稀疏直方图的零或负分位数也须返回有限下界。大数组属于纯聚合合同测试，不能据此声称正常有界存储曾发生界面崩溃。
 
+`vocabularyReencounterLifecycle` 通过真实 feature registry 验证消息订阅失败时回滚、恢复后重试、注册期间失效和卸载后的排队通知；扫描器和消息端口受控。`vocabularyTtsPageCancellationRuntime` 挂载真实收藏组件，验证停止后不解码等待恢复的音频、旧浏览器话语的开始事件不影响下一次朗读及超时保护；音频设备、浏览器语音与供应商仍是受控端口。
+
 `inputBox` 与 `inputTranslationContentFeature` 覆盖 fieldset 继承禁用、首个 legend 例外、响应前再次检查及提示定位的按帧合并与卸载清理。`videoCaptionPlatformRuntime` 保证失败句 A→B→A 在退避期内仍可手动重试；`videoPretranslationController` 检查换句不重绑原生字幕监听，轨道增删只操作变化项。`paragraphCopyCore` 验证复制代码时保留首行缩进及内部空行。
 
 `emojiLiterals` 对简单 emoji 检查零分段器构造，复杂字素每次扫描只构造一次；`harnessMemoryRecall` 用 200 条学习笔记检查无检索信息的查询不构建搜索投影，并保留偏好排序和每次重读。操作计数和 Node 微基准只证明所测计算减少，不代表页面帧率、输入延迟、实机内存或全项目无缺陷。函数索引、人工审查与实际行为验证须分别记录，未审函数不能因类型检查或测试总数而视为审查完成。

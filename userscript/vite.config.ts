@@ -207,12 +207,13 @@ export function createUserscriptCatalogCompressionPlugin(): Plugin {
                 ].join('\n');
             }
             const contents = JSON.stringify(JSON.parse(fs.readFileSync(sourcePath, 'utf8')));
-            const compressed = gzipUserscriptBuildData(Buffer.from(contents)).toString('base64');
+            const compressed = encodeUserscriptData(gzipUserscriptBuildData(Buffer.from(contents)));
             const digest = createHash('sha256').update(contents).digest('hex');
             return [
                 `/* Non-code site rules: ${normalizePath(sourcePath).slice(projectRoot.length)}; sha256 ${digest}. */`,
                 "import {inflateWithPako} from '@/userscript/pakoRuntime';",
-                `const bytes = Uint8Array.from(atob(${JSON.stringify(compressed)}), (character) => character.charCodeAt(0));`,
+                "import {decodeUserscriptData} from '@/userscript/dataEncoding';",
+                `const bytes = decodeUserscriptData(${JSON.stringify(compressed)});`,
                 'export default JSON.parse(inflateWithPako(bytes));',
             ].join('\n');
         },

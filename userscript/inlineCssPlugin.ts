@@ -6,6 +6,7 @@
  */
 import {resolve} from 'node:path';
 import {gzipUserscriptBuildData} from './buildGzip';
+import {encodeUserscriptData} from './buildDataEncoding';
 import ts from 'typescript';
 import {normalizePath, type Plugin} from 'vite';
 
@@ -26,9 +27,10 @@ export function createUserscriptInlineCssCompressionPlugin(root: string, enabled
                 if (!ts.isExportAssignment(statement) || statement.isExportEquals
                     || !(ts.isStringLiteral(statement.expression) || ts.isNoSubstitutionTemplateLiteral(statement.expression))) return null;
                 const css = statement.expression.text;
-                const compressed = gzipUserscriptBuildData(Buffer.from(css, 'utf8')).toString('base64');
+                const compressed = encodeUserscriptData(gzipUserscriptBuildData(Buffer.from(css, 'utf8')));
                 const restored = "import {inflateWithPako} from '@/userscript/pakoRuntime';\n"
-                    + `export default inflateWithPako(Uint8Array.from(atob(${JSON.stringify(compressed)}), character => character.charCodeAt(0)));`;
+                    + "import {decodeUserscriptData} from '@/userscript/dataEncoding';\n"
+                    + `export default inflateWithPako(decodeUserscriptData(${JSON.stringify(compressed)}));`;
                 return Buffer.byteLength(restored) < Buffer.byteLength(code) ? {code: restored, map: null} : null;
             },
         },

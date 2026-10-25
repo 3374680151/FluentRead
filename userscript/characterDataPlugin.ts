@@ -7,6 +7,7 @@
 import {createHash} from 'node:crypto';
 import {resolve} from 'node:path';
 import {gzipUserscriptBuildData} from './buildGzip';
+import {encodeUserscriptData} from './buildDataEncoding';
 import ts from 'typescript';
 import {normalizePath, type Plugin} from 'vite';
 
@@ -50,14 +51,15 @@ export function createUserscriptCharacterDataCompressionPlugin(root: string, ena
                 }
             }
             if (!names.length) throw unsupported();
-            const compressed = gzipUserscriptBuildData(Buffer.from(JSON.stringify(tables))).toString('base64');
+            const compressed = encodeUserscriptData(gzipUserscriptBuildData(Buffer.from(JSON.stringify(tables))));
             const digest = createHash('sha256').update(code).digest('hex');
             return {
                 code: [
                     code.slice(0, source.statements[0].getStart(source)),
                     '/* Non-code language data; source sha256 ' + digest + '. */',
                     "import {inflateWithPako} from '@/userscript/pakoRuntime';",
-                    'const bytes = Uint8Array.from(atob(' + JSON.stringify(compressed) + '), (character) => character.charCodeAt(0));',
+                    "import {decodeUserscriptData} from '@/userscript/dataEncoding';",
+                    'const bytes = decodeUserscriptData(' + JSON.stringify(compressed) + ');',
                     ...(mode === 'strings' ? ['const characterTables = JSON.parse(inflateWithPako(bytes));'] : [
                         'const characterTables = JSON.parse(inflateWithPako(bytes)).map((deltas) => {',
                         '    let point = 0;',

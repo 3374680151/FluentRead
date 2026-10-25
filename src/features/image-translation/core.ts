@@ -1,7 +1,7 @@
 /**
  * @file src/features/image-translation/core.ts
  * 文件职责：提供图片翻译可复用的纯数据算法，用于选择真正发生变化的译文、确定 OCR 语言组合并清理 OCR 行数据。
- * 主要内容：相同译文保留原文且不重复展示；从 shared/image 复用 OcrLine 类型，筛选有效译文、规划图片与圈选各自的有界 OCR 尺寸及边框，映回原图坐标，规范化词组、标点和置信度，按基线方向区分横竖排并合并同一气泡的竖列，路径压缩与原地分组避免竖列候选的反复数组复制，避免噪声进入翻译与绘制。
+ * 主要内容：相同译文保留原文且不重复展示；从 shared/image 复用 OcrLine 类型，筛选有效译文、规划图片与圈选各自的有界 OCR 尺寸及边框，映回原图坐标，按完整 Unicode 码点连接词组、规范化标点和置信度，按基线方向区分横竖排并合并同一气泡的竖列，路径压缩与原地分组避免竖列候选的反复数组复制，避免噪声进入翻译与绘制。
  * 模块边界：该模块不接触 Canvas、Tesseract、网络或浏览器消息；OCR 执行归 ocrRuntime，像素修补与文本绘制归 services，页面展示归 content/runtime。
  */
 import {hasDistinctTranslation} from '@/src/core/translation/result';
@@ -182,8 +182,8 @@ function mergeVerticalOcrColumns(lines: OcrLine[]): OcrLine[] {
 
 function joinOcrWords(previous: string, next: string): string {
     if (!previous) return next;
-    const joinsCjk = /[\u2e80-\u9fff\u3040-\u30ff\uac00-\ud7af]$/u.test(previous)
-        || /^[\u2e80-\u9fff\u3040-\u30ff\uac00-\ud7af]/u.test(next);
+    const joinsCjk = /[\p{Script=Han}\u2e80-\u9fff\u3040-\u30ff\uac00-\ud7af]$/u.test(previous)
+        || /^[\p{Script=Han}\u2e80-\u9fff\u3040-\u30ff\uac00-\ud7af]/u.test(next);
     const joinsPunctuation = /^[,.;:!?%\u3001\u3002\uff0c\uff01\uff1f\uff1a\uff1b)\]}’”]/u.test(next)
         || /[([{\u2018\u201c]$/u.test(previous);
     return joinsCjk || joinsPunctuation ? `${previous}${next}` : `${previous} ${next}`;

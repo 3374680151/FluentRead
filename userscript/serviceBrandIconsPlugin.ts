@@ -8,6 +8,7 @@ import {createHash} from 'node:crypto';
 import {readFileSync, realpathSync} from 'node:fs';
 import {resolve} from 'node:path';
 import {gzipUserscriptBuildData} from './buildGzip';
+import {encodeUserscriptData} from './buildDataEncoding';
 import {normalizePath, type Plugin} from 'vite';
 
 const allowedAttributes = new Set(['d', 'clip-rule', 'fill-rule', 'opacity', 'fill-opacity']);
@@ -48,18 +49,19 @@ export function createUserscriptServiceBrandIconsCompressionPlugin(root: string,
             const paths: unknown = JSON.parse(source.toString('utf8'));
             validateBrandPaths(paths);
             const serialized = JSON.stringify(paths);
-            const compressed = gzipUserscriptBuildData(Buffer.from(serialized, 'utf8')).toString('base64');
+            const compressed = encodeUserscriptData(gzipUserscriptBuildData(Buffer.from(serialized, 'utf8')));
             const sourceSha256 = createHash('sha256').update(source).digest('hex');
             return [
                 `/* Non-code Lobe Icons paths; original JSON sha256 ${sourceSha256}; existing MIT notice retained. */`,
                 "import {inflateWithPako} from '@/userscript/pakoRuntime';",
+                "import {decodeUserscriptData} from '@/userscript/dataEncoding';",
                 'const knownBrands = Object.create(null);',
                 `for (const service of ${JSON.stringify(Object.keys(paths))}) knownBrands[service] = true;`,
                 'let brandPaths;',
                 'export function getServiceBrandIcon(service) {',
                 '    if (brandPaths !== undefined) return Object.hasOwn(brandPaths, service) ? brandPaths[service] : undefined;',
                 '    if (!Object.hasOwn(knownBrands, service)) return undefined;',
-                `    const restored = JSON.parse(inflateWithPako(Uint8Array.from(atob(${JSON.stringify(compressed)}), character => character.charCodeAt(0))));`,
+                `    const restored = JSON.parse(inflateWithPako(decodeUserscriptData(${JSON.stringify(compressed)})));`,
                 "    if (restored === null || typeof restored !== 'object' || Array.isArray(restored) || !Object.hasOwn(restored, service) || !Array.isArray(restored[service]) || restored[service].length === 0) throw new Error('Invalid restored service brand paths');",
                 '    brandPaths = restored;',
                 '    return restored[service];',

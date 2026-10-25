@@ -29,6 +29,8 @@ const dom = await vi.hoisted(async () => {
 import * as Vue from 'vue';
 import {Config} from '@/src/core/config/model';
 import * as preview from '@/src/core/config/selectionPreview';
+import * as clickSelection from '@/src/core/config/clickSelection';
+const warning = vi.fn();
 
 // 只观察目标传给公共展示边界的 props，不把子组件替身算作回答渲染或学习服务的验收。
 const ReadingAnswerPort = Vue.defineComponent({props: {text: String, sourceText: String},
@@ -49,7 +51,9 @@ function loadClient(relative: string, components = new Map<string, Vue.Component
     expect(compiled.parseErrors).toEqual([]);
     const dependencies: Record<string, unknown> = {
         vue: Vue,
-        '@/src/ui/i18n': {useUiI18n: () => ({t: (key: string) => key})},
+        '@/src/ui/i18n': {useUiI18n: () => ({t: (key: string) => key, translateLegacy: (value: string) => value})},
+        '@/src/core/config/clickSelection': clickSelection,
+        'element-plus': {ElMessage: {warning}},
         '@/src/core/config/selectionPreview': preview,
         '@/src/features/reading-assistant/ui/answer/public': {ReadingAnswer: ReadingAnswerPort},
         './HarnessSettings.vue': {default: HarnessSettingsPort},
@@ -74,7 +78,7 @@ async function mount(config = new Config()): Promise<void> {
     app = Vue.createApp({setup: () => () => Vue.h(component, {config: state.config})});
     app.mount(root);await settle();
 }
-afterEach(async () => {app?.unmount();app = undefined;await settle();dom.document.body.replaceChildren();});
+afterEach(async () => {warning.mockClear();app?.unmount();app = undefined;await settle();dom.document.body.replaceChildren();});
 afterAll(() => dom.restore());
 function control<T extends Element = HTMLButtonElement>(selector: string): T {
     const node = root.querySelector<T>(selector);
@@ -97,6 +101,22 @@ function withoutSelectionSwitch(config: Config): Record<string, unknown> {
 const switchSelector = '.feature-enable-card button[role="switch"][aria-label="启用划词翻译"]';
 
 describe('SelectionSettings 真实模板消费者', () => {
+    it.each(['hover','full-page','section'] as const)('%s 方案占用点选组合时再开启划词必须明确拒绝，调整方案后可恢复', async action => {
+        const config=Object.assign(new Config(),{selectionTranslatorMode:'disabled',disableSelectionTranslator:true,selectionClickSelectEnabled:true,
+            quickTranslationProfiles:[{id:'occupied',action,enabled:true,hotkey:'Alt+Shift+S',service:'',model:'',targetLanguage:'',displayMode:'inherit' as const,fullPageMode:'inherit' as const}]});
+        await mount(config);await click(control(switchSelector));expect(state.config.selectionTranslatorMode).toBe('disabled');
+        expect(state.config.disableSelectionTranslator).toBe(true);expect(state.config.selectionClickSelectEnabled).toBe(true);expect(warning).toHaveBeenCalled();
+        // 同一 settings 草稿的其他分区改变方案后，setter 必须即时重读当前配置。
+        state.config.quickTranslationProfiles[0].hotkey='F9';await settle();await click(control(switchSelector));
+        expect(state.config.selectionTranslatorMode).toBe('bilingual');expect(state.config.disableSelectionTranslator).toBe(false);
+    });
+    it('停用期间产生冲突保留原显示模式；关闭点选偏好后允许恢复', async () => {
+        await mount(Object.assign(new Config(),{selectionTranslatorMode:'translation-only',disableSelectionTranslator:false,selectionClickSelectEnabled:true}));
+        await click(control(switchSelector));state.config.hotkey='custom';state.config.customHotkey='Alt+Shift+S';await settle();
+        await click(control(switchSelector));expect(state.config.selectionTranslatorMode).toBe('disabled');expect(warning).toHaveBeenCalled();
+        state.config.selectionClickSelectEnabled=false;await click(control(switchSelector));expect(state.config.selectionTranslatorMode).toBe('translation-only');
+    });
+
     it('单词/句子 DOM 点击同步预览内容和 aria-pressed，往返不修改配置', async () => {
         await mount();const before = snapshot(state.config);
         expect(previewButton('单词').getAttribute('aria-pressed')).toBe('true');

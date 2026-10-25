@@ -1,7 +1,7 @@
 <!--
  * @file src/features/settings/ui/ClickSelectionSettings.vue
  * 文件职责：在划词设置内提供默认关闭的两点选取入口与紧凑快捷键编辑。
- * 主要内容：说明快捷键启动后点击起终点、自动退出与 Esc 取消；录制复用既有对话框，所属配置、功能启停或设置分区变化立即失效，开启及确认时校验其他动作的快捷键占用。
+ * 主要内容：说明快捷键启动后点击起终点、自动退出与 Esc 取消；录制复用既有对话框，所属配置、功能启停或设置分区变化立即失效，开启及确认时校验其他动作的快捷键占用；划词停用时仍可编辑或取消点选偏好以解除恢复冲突。
  * 模块边界：组件只修改传入配置，不持久化、不监听网页动作、不处理选区；配置与冲突归 core/config/clickSelection，实际点选由划词内容运行时负责。
  -->
 <template>
@@ -29,7 +29,7 @@ const CustomHotkeyInput = defineAsyncComponent(() => import('@/src/ui/components
 const props = withDefaults(defineProps<{config: Config; active?: boolean}>(), {active: true});
 const showEditor = ref(false);
 const context = useSettingsActionContext(
-  () => props.active && props.config.selectionTranslatorMode !== 'disabled',
+  () => props.active,
   () => [props.config, props.config.selectionClickSelectEnabled, props.config.selectionClickSelectHotkey, props.config.selectionTranslatorMode],
 );
 const editorEpoch = ref(0);
