@@ -16,12 +16,18 @@ const arg = (name) => {
   return value
 }
 const runtimePath = arg('runtime'),
-  helperPath = arg('helper')
+  helperPath = path.resolve(arg('helper'))
 const { guardBrowserClose } = require('./testing/owned-browser-close.cjs')
 const runtime = createRequire(path.join(runtimePath, 'docs-ui.cjs'))
 const { chromium } = runtime('playwright'),
   sharp = runtime('sharp')
 const helper = require(helperPath)
+const diagnosticsIndex = process.argv.indexOf('--diagnostics-helper')
+const diagnosticsPath = diagnosticsIndex < 0 ? path.join(path.dirname(helperPath), 'runtime-diagnostics.cjs') : process.argv[diagnosticsIndex + 1]
+const diagnostics = require(diagnosticsPath).createRuntimeDiagnostics()
+const artifactIndex = process.argv.indexOf('--artifacts-dir')
+const artifactsDir = path.resolve(artifactIndex < 0 ? path.join(os.tmpdir(), 'fluentread-docs-captures') : process.argv[artifactIndex + 1])
+fs.mkdirSync(artifactsDir, {recursive: true})
 const root = path.resolve(__dirname, '..')
 const report = {
   extension: '.output/chrome-mv3',
@@ -54,7 +60,7 @@ const report = {
   errors: [],
 }
 let profile, server, launched
-let launchAttempted = false, browserGuarded = false, hasPrimaryError = false
+let launchAttempted = false, browserGuarded = false, hasPrimaryError = false, diagnosticsStarted = false
 ;(async () => {
   profile = fs.mkdtempSync(path.join(os.tmpdir(), 'fluentread-docs-ui-'))
   server = http.createServer((_, res) => {
@@ -94,11 +100,15 @@ let launchAttempted = false, browserGuarded = false, hasPrimaryError = false
     windowPlacement: launched.windowPlacement,
   })
   const ctx = launched.context
+  await diagnostics.start(ctx)
+  diagnosticsStarted = true
   const worker =
     ctx.serviceWorkers()[0] || (await ctx.waitForEvent('serviceworker', { timeout: 30000 }))
   const origin = worker.url().split('/').slice(0, 3).join('/')
+  diagnostics.setExtensionId(origin.split('/').pop())
   const create = async () => {
     const page = await helper.newPageWithoutForeground(ctx, 30000)
+    await diagnostics.attachPage(page, 'docs-capture')
     page.on('pageerror', (e) => report.errors.push(e.message))
     return page
   }
@@ -135,11 +145,12 @@ let launchAttempted = false, browserGuarded = false, hasPrimaryError = false
     await helper.activateExtensionTabWithoutForeground(ctx, article, 30000)
     await popup.reload()
     await popup.locator('.popup-shell[data-config-ready="true"]').waitFor()
-    const sourceDir = path.join(root, 'marketing/source/site-ui', locale)
+    const sourceDir = path.join(artifactsDir, 'source', locale)
     const webDir = path.join(root, 'docs/public/screenshots/ui', locale)
     fs.mkdirSync(sourceDir, { recursive: true })
     fs.mkdirSync(webDir, { recursive: true })
     async function capture(page, name, selector, targets = []) {
+      diagnostics.setPhase(locale + ':' + name)
       const w = name.startsWith('popup') ? 360 : 1280,
         h = 800
       await page.setViewportSize({ width: w, height: h })
@@ -152,6 +163,12 @@ let launchAttempted = false, browserGuarded = false, hasPrimaryError = false
           height: h,
           deviceScaleFactor: 2,
           mobile: false,
+        })
+        // 等待视口调整后的重绘及有限过渡结束，避免截到半透明弹窗。
+        await page.evaluate(async () => {
+          const pending = document.getAnimations().filter((animation) => animation.effect?.getComputedTiming().iterations !== Infinity)
+          await Promise.all(pending.map((animation) => animation.finished.catch(() => undefined)))
+          await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)))
         })
         const rect = selector
           ? await page.locator(selector).boundingBox()
@@ -200,6 +217,8 @@ let launchAttempted = false, browserGuarded = false, hasPrimaryError = false
           points.push({
             x: ((centerX - rect.x) / rect.width) * 100,
             y: ((centerY - rect.y) / rect.height) * 100,
+            width: (box.width / rect.width) * 100,
+            height: (box.height / rect.height) * 100,
           })
         }
         report.screenshots.push({
@@ -226,12 +245,20 @@ let launchAttempted = false, browserGuarded = false, hasPrimaryError = false
       }
     }
     await popup.locator('[data-testid="onboarding-language-step"]').waitFor()
-    await capture(popup, 'popup-language-initial', '.popup-shell')
+    await capture(popup, 'popup-language-initial', '.popup-shell', ['.onboarding-language-options', '.onboarding-confirm'])
     await popup.locator('[data-language="' + locale + '"]').click()
-    await capture(popup, 'popup-language', '.popup-shell')
+    await capture(popup, 'popup-language', '.popup-shell', ['.onboarding-language-options', '.onboarding-confirm'])
     await popup.locator('.onboarding-confirm').last().click()
     await popup.locator('.feature-card').first().waitFor()
-    await capture(popup, 'popup', '.popup-shell')
+    await capture(popup, 'popup', '.popup-shell', ['.language-pair', '[data-testid="page-translation"]', '[data-popup-quick-feature="hover"]', '[data-popup-quick-feature="selection"]'])
+    for (const mode of ['hover', 'selection']) {
+      await popup.locator('[data-popup-quick-feature="' + mode + '"]').click()
+      await popup.locator('[data-testid="' + mode + '-enable"]').waitFor()
+      await popup.waitForTimeout(300)
+      await capture(popup, 'popup-' + mode, '.popup-drawer', ['[data-testid="' + mode + '-enable"]'])
+      await popup.keyboard.press('Escape')
+      await popup.locator('.popup-drawer').waitFor({state: 'hidden'})
+    }
     const settings = await create()
     await settings.goto(origin + '/options.html#settings-general')
     await settings.locator('.sidebar').waitFor()
@@ -263,7 +290,7 @@ let launchAttempted = false, browserGuarded = false, hasPrimaryError = false
       'settings-glossary': [
         '.sidebar [data-section="settings-glossary"]',
         '.glossary-start .primary',
-        '.glossary-builtins-page button',
+        '.fluentread-glossary .feature-enable-control',
       ],
       'settings-sites': [
         '.sidebar [data-section="settings-sites"]',
@@ -295,9 +322,25 @@ let launchAttempted = false, browserGuarded = false, hasPrimaryError = false
       '.api-key-entry input',
       '.sidebar [data-section="settings-general"]',
     ])
+    await settings.locator('.sidebar [data-section="settings-data"]').click()
+    await settings.locator('[data-testid="cloud-method-webdav"]').check()
+    await settings.locator('[data-testid="webdav-setup"]').waitFor()
+    await capture(settings, 'settings-webdav', '[data-testid="cloud-config-backup"]', [
+      '[data-testid="cloud-method-webdav"]', '[data-testid="webdav-setup"]', '[data-testid="cloud-include-sensitive"]',
+    ])
+    await settings.locator('[data-testid="webdav-setup"]').click()
+    await settings.locator('#webdav-url').fill('https://dav.jianguoyun.com/dav/')
+    await settings.locator('#webdav-username').fill('yourname@example.com')
+    await capture(settings, 'settings-webdav-connection', '.fluentread-webdav-connection-dialog', [
+      '#webdav-url', '#webdav-username', '[data-testid="webdav-save"]',
+    ])
+    await settings.locator('.fluentread-webdav-connection-dialog .el-dialog__headerbtn').click()
     await settings.close()
   }
   assert.deepEqual(report.errors, [])
+  await diagnostics.flush()
+  diagnostics.assertClean()
+  report.ok = true
   const guides = Object.fromEntries(
     ['zh-CN', 'en-US'].map((locale) => [
       locale,
@@ -331,11 +374,15 @@ let launchAttempted = false, browserGuarded = false, hasPrimaryError = false
     const cleanupErrors = []
     const cleanup = async (resource, release) => {
       try { await release() } catch (error) {
+        report.ok = false
         cleanupErrors.push(error)
         ;(report.cleanupErrors ||= []).push({resource, error: String(error?.stack || error)})
         console.error(`Failed to clean up ${resource}:`, error)
         process.exitCode = 1
       }
+    }
+    if (diagnosticsStarted) {
+      await cleanup('diagnostics', async () => { await diagnostics.flush(); diagnostics.write(artifactsDir, report); await diagnostics.stop() })
     }
     let browserClosed = false
     await cleanup('browser', async () => {
@@ -358,10 +405,10 @@ let launchAttempted = false, browserGuarded = false, hasPrimaryError = false
       }
     })
     await cleanup('report', () => fs.writeFileSync(
-      path.join(root, 'marketing/site-ui-manifest.json'),
+      path.join(artifactsDir, 'capture-manifest.json'),
       JSON.stringify(report, null, 2) + '\n'
     ))
     if (cleanupErrors.length && !hasPrimaryError) throw cleanupErrors[0]
-    if (!hasPrimaryError) console.log(JSON.stringify(report))
+    if (!hasPrimaryError) console.log(JSON.stringify({ok: report.ok, screenshots: report.screenshots.length, artifactsDir, runtime: report.runtimeDiagnostics?.counts}))
   })
   .catch((error) => { console.error(error); process.exitCode = 1 })

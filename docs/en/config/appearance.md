@@ -1,58 +1,53 @@
-# Appearance & reading aids
+# Appearance and reading aids
 
-Make translations easy to distinguish from the original and comfortable to read.
-
-Under **Settings → Interface style**, **Sentence learning appearance** follows **Menu bar layout** and precedes **Interface font**.
+Make translations easier to distinguish from the original with colors, font size, and styles. Sentence highlighting helps you find the matching sentence.
 
 <GuideVisual kind="appearance" en />
 
 ## Adjust the translation style
 
 1. Open **Settings → Interface style → Translation style**.
-2. Choose a style card and compare its preview. Adjust colors and font size if needed.
-3. Appearance controls update existing translations immediately. A different base style applies to the next translation.
+2. Choose a style card and compare it on **Light page** and **Dark page** previews.
+3. Expand **Customize appearance** to adjust colors, font size, and font.
 
-Translation-only mode does not use bilingual styles. Switch to bilingual display first.
+Color and size adjustments update translations on open pages immediately. A different base style applies from the next translation. Bilingual translation styles do not apply in translation-only mode; switch to bilingual display first.
 
-To remove the website's font from translations on the current page, click **Aa** at the bottom right of the quick panel's translation card. It switches directly to the browser's default font. The highlighted button indicates browser default; click it again to restore the page's previous font settings. Hover or focus the button to see the current font, next action, and scope; press **Escape** to dismiss the hint. Both existing and later translations update immediately in bilingual and translation-only modes, without translating again. This temporary choice resets on refresh or navigation and does not change global appearance preferences or other tabs.
-
-<details class="guide-details">
-<summary>Translation style</summary>
+If the webpage font is hard to read, select **Aa** at the bottom right of the quick panel’s translation card to use the browser default font. Select it again to restore the previous font settings. This choice saves automatically and applies to existing and future translations across all webpages, including translation-only mode. It keeps your original style and font size settings.
 
 ## Translation style
 
-Choose how translations look in bilingual mode under **Settings → Interface style → Translation style**. Styles are grouped into **Text**, **Colors**, **Lines**, **Highlights**, **Cards**, and **Fun**, and every card shows the real effect. The preview beside them simulates a web page; switch between **Light page** and **Dark page** to check that translations stay readable on differently colored sites.
+Styles are grouped into **Text, Colors, Lines, Highlights, Cards, and Fun**. Start with plain text or a color, then try a card, sticky note, or speech bubble to emphasize translations. **Blur until hover** and blackout styles hide the translation until you point at it, useful for checking your understanding after reading the original.
 
-The **Colors** category offers 12 presets: **Forest green**, **Clear blue**, **Elegant purple**, **Warm orange**, **Teal**, **FluentRead pink**, **Berry red**, **Warm gold**, **Graphite gray**, **Gradient text**, **Neon glow**, and **Rainbow highlighter**. Solid colors blend with the page's text color for readability on light and dark pages. FluentRead pink starts from the brand color `#ef4776`, matching the icon's pink palette.
+| Control | Effect |
+| --- | --- |
+| Text and background color | Give translations their own colors; Default uses the selected style’s colors |
+| Line color | Recolor underlines, wavy lines, borders, and quote bars |
+| Highlight color | Recolor markers, study highlights, and card backgrounds |
+| Font size, weight, font, and opacity | Change size and emphasis; font size ranges from 50% to 250% of the original |
 
-Color cards always show their own colors. Selecting one clears conflicting custom text colors and CSS color declarations so that its color takes effect, while keeping unrelated font and size adjustments. Gradient text also clears backgrounds that would cover the gradient; Neon glow restores its own text shadow. You can fine-tune the result after selecting a color. Existing text presets stay under **Text**; your previous selection and saved styles keep working.
+Use swatches, the color picker, or a CSS color value. Invalid values are not saved. Choosing a color card clears text-color and CSS overrides that conflict with its palette while keeping other font and size adjustments. **Reset** returns to the current style’s own appearance.
 
-**Customize appearance** lets you fine-tune:
+If you know CSS, enter declarations under **Enter CSS directly**:
 
-- **Text color**: give translations their own color, including FluentRead pink from the swatches. **Default** uses the selected preset's text color, or follows the page in the plain preset. Presets outside **Colors** keep existing adjustments; selecting a color card restores its own colors.
-- **Translation background**: set an independent background for plain translations or any preset; **Default** keeps that preset's background.
-- **Line color**: recolor underlines, wavy lines, borders, and quote bars.
-- **Highlight color**: recolor markers, study highlights, backgrounds, and cards; the strength adapts to each style.
-- **Font size, opacity, font weight, and font**: use the slider or enter an exact size from 50% to 250% relative to the original, or make translations bolder or softer.
+```css
+color: rebeccapurple;
+background: rgb(255, 248, 204);
+font-size: 117%;
+```
 
-Each color offers curated swatches, a picker, and direct input for a CSS color name, `rgb(r, g, b)`, or a hex value. Invalid values are not saved. **Reset** returns to the style's own look. Color and size changes apply immediately to translations on open pages without translating again, while a new style is used from the next translation. Translation-only mode does not use these styles; the page shows a notice with a button to switch back to bilingual mode.
-
-You can also enter declarations under **Enter CSS directly**, such as `color: rebeccapurple; background: rgb(255, 248, 204); font-size: 117%;`. Leave out the selector. Common appearance properties are supported; URLs, selectors, and positioning properties are ignored. Valid declarations override the matching controls above and appear in the live preview. Saved styles show their own effect on their cards.
-
-**Blur until hover** keeps translations blurred until you point at them, so you can read the original first and then check your understanding.
-
-</details>
-
-<details class="guide-details">
-<summary>Bilingual sentence highlighting</summary>
+Leave out selectors. Valid declarations override matching controls; only appearance properties such as colors, fonts, and borders are allowed. URLs, selectors, and positioning properties are ignored. Save a named style to apply it again from its card.
 
 ## Bilingual sentence highlighting
 
-Enable **Bilingual sentence highlighting** under **Settings → Translation settings → Reading assistance**, then hover over a sentence on either side to highlight its counterpart. No click or shortcut is needed. The reading preview next to it contains several sentence pairs to try.
+1. Enable **Bilingual sentence highlighting** under **Settings → Translation settings → Reading assistance**.
+2. Hover over a sentence in the original or translation to highlight both counterparts.
+3. Use the style shortcut, or open **Interface style → Sentence highlight style**, to adjust the background and lines.
 
-Under **Settings → Interface style → Sentence highlight style**, choose from eight presets or customize the background and underline colors, their opacity, the line style, and thickness. Set background opacity to 0% for lines only, or choose **No underline** for background only. Solid, dotted, dashed, double, and wavy lines are available, with live previews on light and dark pages. Changes are saved automatically and apply to open pages without translating again. **Reset to preset** clears overrides; choosing a preset also restores its appearance. The enabled state is saved separately.
+Choose from eight presets or customize background and underline colors, opacity, line style, and thickness. Set background opacity to 0% for lines only, or choose **No underline** for background only. Changes save automatically and apply to open pages immediately. **Reset to preset** clears overrides.
 
-You can also enter declarations under **Enter CSS directly**:
+Enter a name and choose **Save as new style** to keep up to 12 profiles. **Update selected style** replaces the selected profile; **Save as new style** keeps a separate copy. **Delete selected style** removes the saved profile and keeps the current appearance available for editing. The highlight switch is saved separately.
+
+You can also enter highlight CSS:
 
 ```css
 background-color: rgba(255, 220, 100, 0.3);
@@ -60,18 +55,12 @@ text-decoration: underline wavy #9d4edd;
 text-decoration-thickness: 2px;
 ```
 
-Valid declarations override the matching controls and apply immediately to previews and open pages. Text colors, backgrounds, underlines, text shadows, and other [browser highlight paint properties](https://developer.mozilla.org/en-US/docs/Web/CSS/Reference/Selectors/::highlight#allowable_properties) are supported. Leave out the selector; unsupported declarations are flagged and ignored.
+Only [browser highlight paint properties](https://developer.mozilla.org/en-US/docs/Web/CSS/Reference/Selectors/::highlight#allowable_properties) are supported. Unsupported declarations are flagged and ignored.
 
-Enter a name and choose **Save as new style** to keep up to 12 independent sentence highlight profiles, each including its base preset, controls, and CSS. Cards show their actual appearance and let you switch profiles; saved profiles remain after reopening settings. Changes apply immediately, while **Update selected style** saves edits and a new name back to that profile. **Save as new style** keeps the old profile. **Delete selected style** removes the saved profile and keeps the current appearance available for editing. Built-in presets and the highlight switch remain independent.
-
-Equal sentence counts are paired in order. Split or merged sentences are grouped using order and relative length. This local approximation cannot verify translation accuracy and may not match heavily rewritten or reordered text. Hovering sends no translation requests and changes neither page text nor layout.
-
-This works in bilingual mode. Restoring the original, disabling the option, leaving the text or selecting text clears the highlight. Browsers without the CSS Custom Highlight API keep normal translation without the highlight.
-
-</details>
+Highlighting works only in bilingual mode and sends no additional translation requests. Matching uses sentence order and relative length; it cannot check accuracy and may misalign heavily rewritten text. Restoring the original, disabling highlighting, leaving the text, or selecting text clears it. Browsers without the CSS Custom Highlight API keep normal translation.
 
 ## Related guides
 
-- [Smart Highlighting: keywords and local surprisal](/en/guide/information-highlight)
+- [Smart Highlighting](/en/guide/information-highlight)
 - [Settings overview](/en/config/)
 - [Page translation](/en/guide/webpage-translation)
