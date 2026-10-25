@@ -2973,7 +2973,7 @@ describe("全文翻译可见性锚点", () => {
         expect(singleTranslationText(second)).toBe(`译:${sourceText}`);
     });
 
-    it.each([true, false])('provider 等待期间显示设置变化仍沿用会话换行与顺序 %s', async (frozen) => {
+    it.each([true, false])('provider 等待期间顺序变化立即生效并沿用会话换行 %s', async (frozen) => {
         runtime.config.display = 1;
         runtime.config.fullPageTranslationMode = 'all';
         runtime.config.longParagraphLineBreakEnabled = frozen;
@@ -2993,11 +2993,11 @@ describe("全文翻译可见性锚点", () => {
         pending.resolve(['保持开始翻译时选择的展示设置。']);
         await finishScheduledWork();
         expect(runtime.renderOptions.at(-1)).toMatchObject({
-            longParagraphLineBreak: frozen, translationBeforeOriginal: frozen,
+            longParagraphLineBreak: frozen, translationBeforeOriginal: !frozen,
         });
         const state = getTranslationState(paragraph)!;
-        expect(state.bilingualReplay).toMatchObject({longParagraphLineBreak: frozen});
-        expect(state.bilingualBeforeSource).toBe(frozen);
+        expect(state.bilingualReplay).toMatchObject({longParagraphLineBreak: frozen, translationBeforeOriginal: !frozen});
+        expect(state.bilingualBeforeSource).toBe(!frozen);
         expect(paragraph.contains(source)).toBe(true);
         expect(runtime.requests).toHaveBeenCalledTimes(1);
     });

@@ -435,7 +435,7 @@ async function renderTranslation(
             if (commit === "committed") {
                 if (state.kind === 'content') {
                     state.bilingualReplay = createBilingualTranslationReplay(result.sources, result.translations, snapshot);
-                    syncTranslationDisplayMode(node, state, config.display);
+                    syncTranslationDisplayMode(node, state, config.display, false, config.translationBeforeOriginal);
                 }
                 return {status: "committed"};
             }
@@ -497,7 +497,7 @@ async function renderTranslation(
         setBilingualContent(node, content, createBilingualTranslationReplay(result.sources, result.translations, snapshot));
         setRenderedStyleAttribute(node);
         if (import.meta.env.BROWSER !== 'userscript') registerPersonalCorrectionResult(node, state, result.personalCorrection);
-        syncTranslationDisplayMode(node, state, config.display);
+        syncTranslationDisplayMode(node, state, config.display, false, config.translationBeforeOriginal);
         return {status: "committed"};
     } catch (error) {
         if (state.controller.signal.aborted || getTranslationState(node) !== state || (owner && !owner.active)) return staleOutcome();
