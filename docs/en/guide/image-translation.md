@@ -14,6 +14,8 @@ Choose **Cancel** to stop processing; downloaded resources remain available. The
 
 The default **PaddleOCR (standard model)** prepares about **30 MB** on the first translation and shares its resources with manga. **Tesseract (lightweight model)** uses packs for the selected source language. Changing recognition engines makes the next translation recognize the image again; selecting an engine alone does not start a download.
 
+PaddleOCR automatically enhances recognition contrast for some colored text on light backgrounds and bright text on dark backgrounds, without another model download. Very faint, thin lettering and complex backgrounds can still lose text; check the original or text panel.
+
 ## Continuous manga translation
 
 1. Enable **Continuous manga translation** in the same settings, then open a supported reader such as MANGA Plus or a Pixiv artwork reader.

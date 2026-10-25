@@ -1,7 +1,7 @@
 /**
  * @file src/features/image-translation/content/controls.ts
  * 文件职责：创建图片翻译的轻量操作条，支持单图反馈和不遮挡阅读的漫画模式，支持取消、重试和首次语言准备与模型/服务设置导航。
- * 主要内容：单图提供无额外外框的淡色图标入口、隔离操作条、可信手势按钮与全文详情，品牌提示沿用注入的界面本地化端口；漫画隐藏所有操作条，仅在对应图片可见边缘延迟显示无交互的轻量单行状态提示，展示实际阶段和可用百分比；任务旋转独立于装饰动画开关并保留系统减少动态效果偏好，完成或切回原图后撤下。
+ * 主要内容：单图提供无额外外框的淡色图标入口、隔离操作条、可信手势按钮与全文详情，品牌提示沿用注入的界面本地化端口；漫画处理时在图片可见边缘延迟显示无交互的单行进度，失败时在同一边缘提供紧凑的单页重试、详情及设置入口，恢复动作先于独立滚动的长错误详情，完成或切回原图即撤下，不展开常驻阅读面板；任务旋转独立于装饰动画开关并保留系统减少动态效果偏好。
  * 模块边界：仅操作所属 Shadow DOM，不读取配置、不访问网络、不持有图片请求；业务动作及生命周期由 content/runtime 注入。
  */
 import {createImageTextReader, IMAGE_READER_CSS, type ImageReaderLine} from './textReader';
@@ -42,7 +42,8 @@ export const IMAGE_CONTROLS_CSS = IMAGE_READER_CSS + `
 .fr-image-error-details {font-size:11px;color:var(--fr-image-muted);overflow-wrap:anywhere;}
 .fr-image-error-details summary {cursor:pointer;}
 .fr-image-error-details p {margin:6px 0 0;}
-.fr-image-feedback .fr-image-actions {padding:4px 0 0;border:0;border-radius:0;box-shadow:none;gap:8px;background:transparent;}
+.fr-image-feedback .fr-image-actions {flex-shrink:0;padding:4px 0 0;border:0;border-radius:0;box-shadow:none;gap:8px;background:transparent;}
+.fr-image-feedback[data-phase=error] .fr-image-error-details {min-height:0;overflow:auto;overscroll-behavior:contain;}
 .fr-image-feedback button {min-height:32px;max-width:100%;padding:6px 12px;white-space:normal;text-align:center;overflow-wrap:anywhere;}
 .fr-image-feedback .fr-image-prepare,.fr-image-feedback .fr-image-model-settings,.fr-image-feedback[data-preparation=false][data-recovery=false] .fluent-read-image-translation-button {order:-1;background:var(--fr-image-brand);color:#fff;font-weight:650;}
 .fr-image-feedback .fr-image-prepare:hover,.fr-image-feedback .fr-image-model-settings:hover,.fr-image-feedback[data-preparation=false][data-recovery=false] .fluent-read-image-translation-button:hover {background:#c62752;color:#fff;}
@@ -50,6 +51,10 @@ export const IMAGE_CONTROLS_CSS = IMAGE_READER_CSS + `
  .fr-image-feedback[data-manga=true][data-phase=loading] {flex-direction:row;align-items:center;gap:6px;transform:none;min-width:0;padding:6px 9px;font-size:11px;pointer-events:none;animation:fr-manga-feedback .12s ease .15s both;}
 .fr-image-feedback[data-manga=true] .fr-image-status {gap:6px;min-width:0;}
 .fr-image-feedback[data-manga=true] .fr-image-status>span:last-child {overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.fr-image-feedback[data-manga=true][data-phase=error] {width:280px;max-width:280px;transform:none;gap:5px;padding:8px 10px;border-color:#ffffff99;background:rgba(250,251,253,.94);box-shadow:0 2px 8px rgba(27,36,57,.08);font-size:11px;}
+.fr-image-feedback[data-manga=true][data-phase=error] .fr-image-status>span:last-child {display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;white-space:normal;min-width:0;flex:1;}
+.fr-image-feedback[data-manga=true][data-phase=error] .fr-image-actions {gap:4px;padding:0;}
+.fr-image-feedback[data-manga=true][data-phase=error] button {min-height:28px;padding:4px 7px;font-size:11px;}
 .fr-image-progress {height:2px;width:36px;flex:0 0 36px;border-radius:2px;background:#47556930;overflow:hidden;}
 .fr-image-progress>span {display:block;height:100%;background:#947985;border-radius:inherit;}
 @keyframes fr-manga-feedback {from {opacity:0;} to {opacity:1;}}
@@ -146,7 +151,9 @@ export function createImageControls(actions: {onAction(): void; onPrepare(): voi
         button.title = localize(phase === 'loading' ? '取消图片翻译' : phase === 'translated' ? '恢复原图' : phase === 'error' && feedback.dataset.preparation === 'true' ? '关闭图片翻译提示' : sourceMessage);
         button.title = `${brand} · ${button.title}`;
         button.setAttribute('aria-label', button.title);
-        statusText.textContent = localize(sourceMessage) + (progress === undefined ? '' : ` ${progress}%`);
+        const localizedMessage = localize(sourceMessage);
+        statusText.textContent = localizedMessage + (progress === undefined ? '' : ` ${progress}%`);
+        statusText.title = phase === 'error' ? localizedMessage : '';
         progressBar.setAttribute('aria-label', localize(sourceMessage));
         if (progress !== undefined) progressBar.setAttribute('aria-valuenow', String(progress));
         else progressBar.removeAttribute('aria-valuenow');
@@ -195,7 +202,9 @@ export function createImageControls(actions: {onAction(): void; onPrepare(): voi
     for (const event of ['pointerdown', 'keydown', 'keyup', 'wheel']) {
         element.addEventListener(event, isolate);
         row.addEventListener(event, isolate);
+        feedback.addEventListener(event, isolate);
     }
+    feedback.addEventListener('click', isolate);
     row.append(button, prepare, inspect, dismiss, modelSettings, serviceSettings);
     feedback.append(heading, status, progressBar, errorDetails);
     element.append(details, row);
@@ -205,7 +214,7 @@ export function createImageControls(actions: {onAction(): void; onPrepare(): voi
         button.dataset.phase = next;
         feedback.dataset.phase = next;
         feedback.dataset.manga = String(options.quiet === true);
-        heading.hidden = next !== 'error';
+        heading.hidden = next !== 'error' || options.quiet === true;
         feedback.dataset.preparation = String(next === 'error' && options.prepare === true);
         element.dataset.preparation = feedback.dataset.preparation;
         // 加载旋转属于任务状态反馈，独立于装饰动效开关；系统减少动态效果偏好由 CSS 保留。
@@ -214,7 +223,7 @@ export function createImageControls(actions: {onAction(): void; onPrepare(): voi
         progress = next === 'loading' ? normalizeImageProgress(options.progress) : undefined;
         refreshLanguage();
         status.hidden = next === 'idle' || next === 'translated';
-        feedback.hidden = options.quiet === true ? next !== 'loading' : status.hidden;
+        feedback.hidden = options.quiet === true ? next !== 'loading' && next !== 'error' : status.hidden;
         progressBar.hidden = options.quiet !== true || progress === undefined;
         refreshVisibility();
         modelSettings.hidden = next !== 'error' || options.modelSettings !== true;
@@ -228,10 +237,10 @@ export function createImageControls(actions: {onAction(): void; onPrepare(): voi
         feedback.dataset.animations = element.dataset.animations;
         prepare.hidden = next !== 'error' || !options.prepare;
         dismiss.hidden = next !== 'error' || options.prepare === true;
-        const feedbackOwnsActions = options.quiet !== true && next === 'error';
+        const feedbackOwnsActions = next === 'error';
         const actionsOwner = feedbackOwnsActions ? feedback : element;
         // 进度更新会频繁刷新状态；仅在状态容器变化时移动操作条，避免重挂载打断悬停与焦点。
-        if (row.parentElement !== actionsOwner) actionsOwner.append(row);
+        if (row.parentElement !== actionsOwner) actionsOwner.insertBefore(row, feedbackOwnsActions ? errorDetails : null);
         inspect.hidden = next !== 'translated' || !hasLines;
         if (next !== 'translated') {
             details.hidden = true;
@@ -260,7 +269,9 @@ export function createImageControls(actions: {onAction(): void; onPrepare(): voi
             for (const event of ['pointerdown', 'keydown', 'keyup', 'wheel']) {
                 element.removeEventListener(event, isolate);
                 row.removeEventListener(event, isolate);
+                feedback.removeEventListener(event, isolate);
             }
+            feedback.removeEventListener('click', isolate);
             element.remove();
             feedback.remove();
         },

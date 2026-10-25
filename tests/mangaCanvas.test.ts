@@ -13,14 +13,15 @@ const result = {mangaPatches: packet, lines: [{text: '译文', bbox: {x0: 0, y0:
 const deferred = <T,>() => {let resolve!: (value: T) => void, reject!: (error: Error) => void;const promise = new Promise<T>((yes, no) => {resolve = yes;reject = no;});return {promise, resolve, reject};};
 const flush = async () => {for (let n = 0; n < 30; n++) await Promise.resolve();};
 
-function fixture() {
+function fixture(recovery?: Parameters<typeof createMangaCanvas>[0]['recovery']) {
     encode.mockResolvedValue('data:image/png;base64,AQ==');
     const {document, window} = parseHTML('<html><body><div id="reader"></div></body></html>');
     const create = document.createElement.bind(document);
-    const snapshots: HTMLCanvasElement[] = [], outputs: HTMLCanvasElement[] = [];
+    const snapshots: HTMLCanvasElement[] = [], outputs: HTMLCanvasElement[] = [], roots: ShadowRoot[] = [];
     let missingCaptureContext = false;
     vi.spyOn(document, 'createElement').mockImplementation(((tag: string) => {
         const element = create(tag);
+        if (tag === 'div') {const attach = element.attachShadow.bind(element);element.attachShadow = options => {const root = attach(options);roots.push(root);return root;};}
         if (tag === 'canvas') {
             const canvas = element as HTMLCanvasElement;
             let drawn: HTMLCanvasElement | null = null;
@@ -50,9 +51,9 @@ function fixture() {
     vi.stubGlobal('crypto', {});
     vi.stubGlobal('getComputedStyle', (element: Element) => ({display: 'block', visibility: 'visible', opacity: '1', overflowX: 'visible', overflowY: 'visible', ...styles.get(element)}));
     compose.mockImplementation(async () => {const output = document.createElement('canvas') as HTMLCanvasElement;output.width = 400;output.height = 300;outputs.push(output);return output;});
-    const ports = {enabled: vi.fn(() => true), configurationIdentity: vi.fn(() => 'config-1'), cacheEnabled: vi.fn(() => true), acceptsInteractionLayer:vi.fn((_canvas:HTMLCanvasElement,_hit:Element)=>false), translate: vi.fn().mockResolvedValue(result)};
+    const ports = {enabled: vi.fn(() => true), configurationIdentity: vi.fn(() => 'config-1'), cacheEnabled: vi.fn(() => true), recovery, acceptsInteractionLayer:vi.fn((_canvas:HTMLCanvasElement,_hit:Element)=>false), translate: vi.fn().mockResolvedValue(result)};
     const runtime = createMangaCanvas(ports);
-    return {document, window, canvas, bounds, styles, hit, snapshots, outputs, ports, runtime,
+    return {document, window, canvas, bounds, styles, hit, snapshots, outputs, roots, ports, runtime,
         missingContext: () => {missingCaptureContext = true;}};
 }
 
@@ -74,6 +75,94 @@ function readerFor(f: ReturnType<typeof fixture>) {
 afterEach(() => {vi.restoreAllMocks();vi.resetAllMocks();vi.unstubAllGlobals();});
 
 describe('公开可读漫画画布的任务与显示所有权', () => {
+    it('画布、背景和分段共用的错误反馈只从可信动作请求原会话重试，关闭不伪造成功或循环识别', async () => {
+        const recovery={retry:vi.fn(()=>false),openSettings:vi.fn(async()=>{}),translateUi:(text:string)=>`本地化:${text}`};
+        const f=fixture(recovery);f.ports.translate.mockRejectedValueOnce(Object.assign(new Error('provider detail'),{errorCode:'language'}));
+        await expect(f.runtime.translate(f.canvas)).rejects.toThrow('provider detail');
+        const root=f.roots[0],feedback=root.querySelector<HTMLElement>('.fr-image-feedback')!;
+        const retry=feedback.querySelector<HTMLButtonElement>('.fluent-read-image-translation-button')!;
+        const click=(target:Element,trusted=true)=>{const event=new f.window.Event('click',{bubbles:true});Object.defineProperty(event,'isTrusted',{value:trusted});target.dispatchEvent(event);};
+        expect(feedback.hidden).toBe(false);expect(feedback.style.left).toBe('108px');expect(feedback.style.top).toBe('58px');
+        expect(feedback.textContent).toContain('本地化:图片文字已识别');expect(feedback.querySelector('details')!.textContent).toContain('provider detail');
+        click(retry,false);expect(recovery.retry).not.toHaveBeenCalled();click(retry);expect(recovery.retry).toHaveBeenCalledWith(f.canvas);expect(retry.disabled).toBe(false);
+        recovery.retry.mockReturnValue(true);click(retry);expect(retry.disabled).toBe(true);
+        click(feedback.querySelector('.fr-image-model-settings')!);await flush();expect(recovery.openSettings).toHaveBeenCalledWith('settings-services');
+        f.runtime.refreshLanguage();expect(feedback.querySelector('.fluent-read-image-translation-button')!.textContent).toBe('本地化:重试');
+        click(feedback.querySelector('.fr-image-dismiss')!);expect(feedback.isConnected).toBe(false);
+        expect(f.runtime.failed(f.canvas)).toBe(true);expect(f.runtime.reuse(f.canvas)).toBe(false);f.runtime.update();
+        expect(root.querySelector('.fr-image-feedback')).toBeNull();expect(f.ports.translate).toHaveBeenCalledOnce();
+        await f.runtime.translate(f.canvas);expect(f.ports.translate).toHaveBeenCalledTimes(2);expect(f.runtime.failed(f.canvas)).toBe(false);
+        expect(root.querySelectorAll('style')).toHaveLength(1);f.runtime.refreshLanguage();f.runtime.dispose();
+    });
+    it('共享错误恢复跟随可见裁切，离屏、隐藏和宿主遮挡时撤下，不能把自己当作宿主遮挡', async () => {
+        const f=fixture({retry:vi.fn(()=>false),openSettings:async()=>{}});f.ports.translate.mockRejectedValueOnce('offline');
+        await expect(f.runtime.translate(f.canvas)).rejects.toBe('offline');
+        const feedback=f.roots[0].querySelector<HTMLElement>('.fr-image-feedback')!,host=f.document.getElementById('fluent-read-manga-canvas-container')!;
+        Object.assign(f.bounds,{left:-100,top:-50,right:300,bottom:250});f.runtime.update();
+        expect(feedback.style.left).toBe('8px');expect(feedback.style.top).toBe('8px');expect(feedback.hidden).toBe(false);
+        f.hit.mockReturnValue(host);f.document.elementsFromPoint=()=>[host,f.canvas];f.runtime.update();expect(feedback.hidden).toBe(false);
+        f.document.elementsFromPoint=()=>[host];f.runtime.update();expect(feedback.hidden).toBe(true);
+        f.document.elementsFromPoint=undefined as unknown as typeof document.elementsFromPoint;f.runtime.update();expect(feedback.hidden).toBe(true);
+        const dialog=f.document.createElement('div');f.hit.mockReturnValue(dialog);f.runtime.update();expect(feedback.hidden).toBe(true);
+        f.hit.mockReturnValue(f.canvas);Object.defineProperty(f.document,'hidden',{configurable:true,value:true});f.runtime.update();expect(feedback.hidden).toBe(true);
+        Object.defineProperty(f.document,'hidden',{configurable:true,value:false});Object.assign(f.bounds,{left:1500,right:1900});f.runtime.update();expect(feedback.hidden).toBe(true);
+        Object.assign(f.bounds,{left:100,right:500});f.runtime.update();expect(feedback.hidden).toBe(false);f.runtime.dispose();
+    });
+    it.each(['pause','invalidate','redraw','reset','remove','dispose'])('错误提示在 %s 清理，旧错误与迟到设置失败不会重新出现', async change => {
+        const pending=deferred<void>(),settings=vi.fn(()=>pending.promise),retry=vi.fn(()=>false),f=fixture({retry,openSettings:settings});
+        f.ports.translate.mockRejectedValueOnce(new Error('offline'));await expect(f.runtime.translate(f.canvas)).rejects.toThrow('offline');
+        const root=f.roots[0],feedback=root.querySelector<HTMLElement>('.fr-image-feedback')!;
+        const click=(target:Element)=>{const event=new f.window.Event('click',{bubbles:true});Object.defineProperty(event,'isTrusted',{value:true});target.dispatchEvent(event);};
+        click(feedback.querySelector('.fr-image-service-settings')!);await flush();
+        if(change==='pause')f.runtime.restore(f.canvas);
+        if(change==='invalidate')f.runtime.invalidate(f.canvas);
+        if(change==='redraw'){f.canvas.dataset.pixel='2';f.runtime.update();}
+        if(change==='reset')f.runtime.resetCache();
+        if(change==='remove'){f.canvas.remove();f.runtime.update();}
+        if(change==='dispose')f.runtime.dispose();
+        pending.reject(new Error('late settings failure'));await flush();
+        expect(feedback.isConnected).toBe(false);expect(root.querySelector('.fr-image-feedback')).toBeNull();
+        click(feedback.querySelector('.fluent-read-image-translation-button')!);expect(retry).not.toHaveBeenCalled();
+        expect(f.ports.translate).toHaveBeenCalledOnce();f.runtime.dispose();
+    });
+    it.each(['pause','redraw','configuration','reset','remove','dispose','disable'])('在途识别于 %s 失效后拒绝，不创建迟到错误恢复提示', async change => {
+        const pending=deferred<typeof result>(),f=fixture({retry:vi.fn(()=>false),openSettings:async()=>{}});
+        f.ports.translate.mockReturnValueOnce(pending.promise);const task=f.runtime.translate(f.canvas);await flush();
+        if(change==='pause')f.runtime.restore(f.canvas);
+        if(change==='redraw')f.canvas.dataset.pixel='2';
+        if(change==='configuration')f.ports.configurationIdentity.mockReturnValue('new settings');
+        if(change==='reset')f.runtime.resetCache();
+        if(change==='remove')f.canvas.remove();
+        if(change==='dispose')f.runtime.dispose();
+        if(change==='disable')f.ports.enabled.mockReturnValue(false);
+        pending.reject(new Error('late OCR failure'));await task;
+        expect(f.runtime.failed(f.canvas)).toBe(false);expect(f.roots).toHaveLength(0);expect(f.canvas.style.opacity).not.toBe('0');f.runtime.dispose();
+    });
+    it.each([new Error('settings offline'),'settings offline'])('打开设置失败保留真实错误详情，状态失效的恢复动作不能绕过会话 %s', async cause => {
+        const openSettings=vi.fn().mockRejectedValueOnce(cause).mockRejectedValueOnce(new Error('later settings failure'));
+        const retry=vi.fn(()=>false),f=fixture({retry,openSettings});f.ports.translate.mockRejectedValueOnce(new Error('provider failed'));
+        await expect(f.runtime.translate(f.canvas)).rejects.toThrow('provider failed');
+        const feedback=f.roots[0].querySelector<HTMLElement>('.fr-image-feedback')!;
+        const click=(target:Element)=>{const event=new f.window.Event('click',{bubbles:true});Object.defineProperty(event,'isTrusted',{value:true});target.dispatchEvent(event);};
+        f.ports.enabled.mockReturnValue(false);click(feedback.querySelector('.fluent-read-image-translation-button')!);click(feedback.querySelector('.fr-image-service-settings')!);await flush();
+        expect(retry).not.toHaveBeenCalled();expect(openSettings).not.toHaveBeenCalled();
+        f.ports.enabled.mockReturnValue(true);click(feedback.querySelector('.fr-image-service-settings')!);await flush();
+        expect(feedback.textContent).toContain('无法打开设置');expect(feedback.querySelector('details')!.textContent).toContain('settings offline');
+        // 关闭后已经在途的设置异常也不能重新挂载提示。
+        await f.runtime.translate(f.canvas);f.ports.translate.mockRejectedValueOnce(new Error('new failure'));f.ports.cacheEnabled.mockReturnValue(false);
+        f.runtime.release(f.canvas);await expect(f.runtime.translate(f.canvas)).rejects.toThrow('new failure');
+        const next=f.roots[0].querySelector<HTMLElement>('.fr-image-feedback')!;
+        click(next.querySelector('.fr-image-service-settings')!);click(next.querySelector('.fr-image-dismiss')!);await flush();
+        expect(f.roots[0].querySelector('.fr-image-feedback')).toBeNull();expect(f.runtime.failed(f.canvas)).toBe(true);f.runtime.dispose();
+    });
+    it('错误详情的设置请求排队后改变来源配置，微任务不能打开旧页面的设置', async () => {
+        const openSettings=vi.fn(async()=>{}),f=fixture({retry:vi.fn(()=>false),openSettings});
+        f.ports.translate.mockRejectedValueOnce(new Error('provider failed'));await expect(f.runtime.translate(f.canvas)).rejects.toThrow();
+        const button=f.roots[0].querySelector('.fr-image-service-settings')!,event=new f.window.Event('click',{bubbles:true});
+        Object.defineProperty(event,'isTrusted',{value:true});button.dispatchEvent(event);
+        f.ports.configurationIdentity.mockReturnValue('new model');await flush();expect(openSettings).not.toHaveBeenCalled();
+        f.runtime.update();expect(button.isConnected).toBe(false);f.runtime.dispose();
+    });
     it.each(['toggle', 'retry'])('显式%s在旧采样点未变时隐藏旧译层并翻译新原图', async action => {
         const f = fixture(), reader = readerFor(f);
         f.canvas.dataset.content = 'A';reader.toggle();await flush();
@@ -123,7 +212,7 @@ describe('公开可读漫画画布的任务与显示所有权', () => {
     });
 
     it('初始编码与合成复用同一不可变快照，发布前发现未采样重绘则丢弃译层且不写缓存', async () => {
-        const f = fixture();
+        const f = fixture({retry: vi.fn(() => false), openSettings: async () => {}});
         encode.mockImplementation(async canvas => `data:image/png;base64,${btoa(canvas.dataset.content || 'A')}`);
         const captured: string[] = [], originalCompose = compose.getMockImplementation()!;
         compose.mockImplementation(async (...args) => {captured.push((args[0] as HTMLCanvasElement).dataset.content!);return originalCompose(...args);});
@@ -134,8 +223,12 @@ describe('公开可读漫画画布的任务与显示所有权', () => {
         expect(captured).toEqual(['A']);expect(encode.mock.calls[0][0]).toBe(compose.mock.calls[0][0]);
         expect(encode.mock.calls[1][0]).toBe(encode.mock.calls[0][0]);
         expect(f.outputs[0].width).toBe(0);expect(f.outputs[0].isConnected).toBe(false);expect(f.runtime.failed(f.canvas)).toBe(true);
+        const feedback = f.roots[0].querySelector<HTMLElement>('.fr-image-feedback')!;
+        expect(feedback.hidden).toBe(false);expect(feedback.textContent).toContain('画布内容已变化');
+        expect(f.runtime.reuse(f.canvas)).toBe(false);
         f.canvas.dataset.content = 'A';await f.runtime.translate(f.canvas);
-        expect(f.ports.translate).toHaveBeenCalledTimes(2);expect(f.outputs[1].isConnected).toBe(true);f.runtime.dispose();
+        expect(f.ports.translate).toHaveBeenCalledTimes(2);expect(f.outputs[1].isConnected).toBe(true);
+        expect(feedback.isConnected).toBe(false);expect(f.roots[0].querySelector('.fr-image-feedback')).toBeNull();f.runtime.dispose();
     });
 
     it('A→B→C显式代次丢弃忽略取消的B编码，迟到完成不能覆盖C或恢复旧译层', async () => {

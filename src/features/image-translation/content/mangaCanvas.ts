@@ -1,12 +1,14 @@
 /**
  * @file src/features/image-translation/content/mangaCanvas.ts
  * 文件职责：把可读正文画布、背景图片和长图分段快照接入既有漫画识别与局部译图合成，保留宿主正文及翻页交互。
- * 主要内容：自动布局以小尺寸指纹提示重绘，显式操作先隐藏旧译层并以完整 PNG 摘要验证来源；任务复用独立快照编码，合成后复核完整来源再发布；注入正文锚点、绘制范围及核心裁切支持背景与分段；会话端口串行调度，暂停、来源变化和卸载取消旧结果，缓存只保留有界压缩图块。最后捕获之后的无事件重绘不作逐帧一致性承诺。
+ * 主要内容：自动布局以小尺寸指纹提示重绘，显式操作先隐藏旧译层并以完整 PNG 摘要验证来源；任务复用独立快照编码，合成后复核完整来源再发布；注入正文锚点、绘制范围及核心裁切支持背景与分段；会话端口串行调度，失败时复用图片的紧凑恢复控件并通过原会话重试，取消、来源变化和关闭释放控件且不伪造成功；缓存只保留有界压缩图块。最后捕获之后的无事件重绘不作逐帧一致性承诺。
  * 模块边界：只读取公开 DOM 画布或注入的已展示正文快照，不访问站点接口、不读取受污染像素、不更改原画布或宿主样式；识别和翻译由注入的现有图片客户端完成。
  */
 import {compressMangaPage, createMangaLightCache, type MangaCompressedPage, type MangaPatchPacket} from '../mangaPatchResult';
 import {encodeImageCanvas} from '../services/imageEncoding';
 import {composeMangaPage} from './mangaCompositor';
+import {createImageControls, IMAGE_CONTROLS_CSS, type ImageSettingsSection} from './controls';
+import {imageTranslationFailureCode, imageLocalFailureMessage} from '../failure';
 import {sha256Hex} from '@/src/shared/function/sha256';
 
 interface CanvasState {
@@ -16,6 +18,7 @@ interface CanvasState {
     completed: boolean;
     failed: boolean;
     showing: boolean;
+    recovery: ReturnType<typeof createImageControls> | null;
     validationPending: boolean;
     contentKey?: string;
 }
@@ -46,6 +49,11 @@ export function createMangaCanvas<T extends object = HTMLCanvasElement>(ports: {
         viewport?: (element: T) => {x: number; y: number; width: number; height: number};
     };
     hostId?: string;
+    recovery?: {
+        retry: (surface: T) => boolean;
+        openSettings: (section: ImageSettingsSection) => Promise<void>;
+        translateUi?: (source: string) => string;
+    };
     translate: (image: string, signal: AbortSignal) => Promise<{mangaPatches?: MangaPatchPacket; lines: MangaCompressedPage['lines']}>;
 }) {
     const states = new Map<T, CanvasState>();
@@ -55,6 +63,7 @@ export function createMangaCanvas<T extends object = HTMLCanvasElement>(ports: {
     let sequence = 0;
     let sample: HTMLCanvasElement | null = null;
     let host: HTMLDivElement | null = null, root: ShadowRoot | null = null;
+    let recoveryStyled = false;
     let disposed = false;
     const anchor = (element: T) => ports.source?.anchor ? ports.source.anchor(element) : element as unknown as HTMLElement;
 
@@ -93,6 +102,7 @@ export function createMangaCanvas<T extends object = HTMLCanvasElement>(ports: {
         const state = states.get(canvas);
         if (!state) return;
         state.controller?.abort();
+        state.recovery?.dispose();
         releaseSurface(state.surface);
         states.delete(canvas);
     }
@@ -102,7 +112,7 @@ export function createMangaCanvas<T extends object = HTMLCanvasElement>(ports: {
             const element = anchor(canvas);
             if (!element.isConnected || identity(canvas) !== state.identity) {release(canvas);continue;}
             const surface = state.surface;
-            if (!surface) continue;
+            if (!surface && !state.recovery) continue;
             const rect = ports.source ? ports.source.bounds(canvas) : element.getBoundingClientRect();
             let left = Math.max(0, rect.left), right = Math.min(window.innerWidth, rect.right);
             let top = Math.max(0, rect.top), bottom = Math.min(window.innerHeight, rect.bottom);
@@ -117,25 +127,65 @@ export function createMangaCanvas<T extends object = HTMLCanvasElement>(ports: {
             }
             visible &&= right > left && bottom > top;
             if (visible) {
-                const hit = document.elementFromPoint((left + right) / 2, (top + bottom) / 2);
+                const x = (left + right) / 2, y = (top + bottom) / 2;
+                let hit = document.elementFromPoint(x, y);
+                if (hit === host) hit = document.elementsFromPoint?.(x, y).find(element => element !== host) ?? null;
                 visible = !!hit && (hit === element || hit.contains(element) || ports.acceptsInteractionLayer?.(canvas, hit) === true);
             }
-            surface.style.cssText = `position:fixed;pointer-events:none;display:${visible ? 'block' : 'none'};left:${rect.left}px;top:${rect.top}px;width:${rect.width}px;height:${rect.height}px;clip-path:inset(${Math.max(0, top - rect.top)}px ${Math.max(0, rect.right - right)}px ${Math.max(0, rect.bottom - bottom)}px ${Math.max(0, left - rect.left)}px);`;
+            if (surface) surface.style.cssText = `position:fixed;pointer-events:none;display:${visible ? 'block' : 'none'};left:${rect.left}px;top:${rect.top}px;width:${rect.width}px;height:${rect.height}px;clip-path:inset(${Math.max(0, top - rect.top)}px ${Math.max(0, rect.right - right)}px ${Math.max(0, rect.bottom - bottom)}px ${Math.max(0, left - rect.left)}px);`;
+            if (state.recovery) {
+                const feedback = state.recovery.feedback;
+                feedback.hidden = !visible;
+                feedback.style.cssText = `position:fixed;left:${left + 8}px;top:${top + 8}px;max-width:${Math.max(0, Math.min(280, right - left - 16))}px;max-height:${Math.max(0, bottom - top - 16)}px;`;
+            }
         }
+    }
+
+    function ensureRoot(): ShadowRoot {
+        if (!host) {
+            host = document.createElement('div');host.id = ports.hostId ?? (ports.source ? 'fluent-read-manga-background-container' : 'fluent-read-manga-canvas-container');
+            host.setAttribute('data-fluent-read-ui', 'manga-canvas');
+            // Shadow DOM 隔离内部译图，外层宿主也需抵抗页面的全局 !important 规则。
+            host.style.cssText = 'all:initial!important;display:block!important;position:fixed!important;left:0!important;top:0!important;width:0!important;height:0!important;overflow:visible!important;pointer-events:none!important;z-index:2147483644!important;';
+            root = host.attachShadow({mode: 'closed'});document.documentElement.append(host);
+        }
+        return root!;
     }
 
     function show(state: CanvasState): void {
         state.showing = true;
-        if (state.surface) {
-            if (!host) {
-                host = document.createElement('div');host.id = ports.hostId ?? (ports.source ? 'fluent-read-manga-background-container' : 'fluent-read-manga-canvas-container');
-                host.setAttribute('data-fluent-read-ui', 'manga-canvas');
-                // Shadow DOM 隔离内部译图，外层宿主也需抵抗页面的全局 !important 规则。
-                host.style.cssText = 'all:initial!important;display:block!important;position:fixed!important;left:0!important;top:0!important;width:0!important;height:0!important;overflow:visible!important;pointer-events:none!important;z-index:2147483644!important;';
-                root = host.attachShadow({mode: 'closed'});document.documentElement.append(host);
-            }
-            root!.append(state.surface);
-        }
+        if (state.surface) ensureRoot().append(state.surface);
+        update();
+    }
+
+    function showFailure(canvas: T, state: CanvasState, error: unknown): void {
+        const recovery = ports.recovery;
+        if (!recovery) return;
+        const current = () => !disposed && state.showing && states.get(canvas) === state
+            && anchor(canvas).isConnected && ports.enabled() && identity(canvas) === state.identity;
+        const retry = () => {if (current() && recovery.retry(canvas)) controls.button.disabled = true;};
+        const controls = state.recovery = createImageControls({
+            translate: recovery.translateUi,
+            onAction: retry, onPrepare: retry,
+            onDismiss: () => {controls.dispose();state.recovery = null;},
+            onSettings: section => {
+                void Promise.resolve().then(() => {
+                    if (current() && state.recovery === controls) return recovery.openSettings(section);
+                }).catch(cause => {
+                    if (current() && state.recovery === controls) {
+                        controls.update('error', '无法打开设置，请从扩展菜单打开设置后重试',
+                            {quiet: true, errorDetails: cause instanceof Error ? cause.message : String(cause)});
+                        update();
+                    }
+                });
+            },
+        });
+        const message = error instanceof Error ? error.message : String(error), local = imageTranslationFailureCode(error);
+        controls.update('error', local ? imageLocalFailureMessage(local) : `图片翻译失败：${message}`,
+            {quiet: true, modelSettings: !!local, serviceSettings: true, errorDetails: message});
+        const target = ensureRoot();
+        if (!recoveryStyled) {const style = document.createElement('style');style.textContent = IMAGE_CONTROLS_CSS;target.append(style);recoveryStyled = true;}
+        target.append(controls.feedback);
         update();
     }
 
@@ -149,7 +199,7 @@ export function createMangaCanvas<T extends object = HTMLCanvasElement>(ports: {
         if (disposed || ports.source) return;
         revisions.set(canvas, (revisions.get(canvas) ?? 0) + 1);
         const state = states.get(canvas);
-        if (state) {state.controller?.abort();state.validationPending = true;state.showing = false;state.surface?.remove();}
+        if (state) {state.controller?.abort();state.validationPending = true;state.showing = false;state.surface?.remove();state.recovery?.dispose();state.recovery = null;}
     }
 
     function captureNative(canvas: T, target: HTMLCanvasElement): void {
@@ -170,7 +220,7 @@ export function createMangaCanvas<T extends object = HTMLCanvasElement>(ports: {
         else release(canvas);
         const controller = new AbortController();
         const revision = revisions.get(canvas) ?? 0;
-        const state: CanvasState = {identity: owner, controller, surface: retained?.surface ?? null, completed: false, failed: false, showing: true, validationPending: !ports.source};
+        const state: CanvasState = {identity: owner, controller, surface: retained?.surface ?? null, completed: false, failed: false, showing: true, recovery: null, validationPending: !ports.source};
         states.set(canvas, state);
         const original = document.createElement('canvas');
         let surface: HTMLCanvasElement | null = null;
@@ -231,7 +281,7 @@ export function createMangaCanvas<T extends object = HTMLCanvasElement>(ports: {
             }
             state.surface = surface;surface = null;state.contentKey = key;state.completed = true;state.validationPending = false;show(state);
         } catch (error) {
-            if (current()) {state.failed = true;releaseSurface(state.surface);state.surface = null;throw error;}
+            if (current()) {state.failed = true;state.validationPending = false;releaseSurface(state.surface);state.surface = null;showFailure(canvas, state, error);throw error;}
         } finally {
             releaseSurface(surface);
             original.width = original.height = 0;
@@ -242,10 +292,11 @@ export function createMangaCanvas<T extends object = HTMLCanvasElement>(ports: {
     const clear = () => {Array.from(states.keys()).forEach(release);lightCache.clear();};
     return {
         identity, translate, reuse, release, update, invalidate,
+        refreshLanguage() {states.forEach(state => state.recovery?.refreshLanguage());},
         failed: (canvas: T) => states.get(canvas)?.failed === true,
         restore(canvas: T) {
             const state = states.get(canvas);
-            if (state) {state.controller?.abort();state.showing = false;state.surface?.remove();}
+            if (state) {state.controller?.abort();state.showing = false;state.surface?.remove();state.recovery?.dispose();state.recovery = null;}
         },
         resetCache: clear,
         dispose() {disposed = true;clear();if (sample) sample.width = sample.height = 0;host?.remove();host = null;root = null;},

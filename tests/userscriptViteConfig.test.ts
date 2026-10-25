@@ -1193,7 +1193,7 @@ describe('userscript locked franc pure-data encoding', () => {
     const require = createRequire(resolve(process.cwd(), 'package.json'));
     const dataPath = realpathSync(require.resolve('franc-min/data.js'));
     const original = readFileSync(dataPath, 'utf8');
-    const createPlugin = (enabled = true, root = process.cwd()) => createUserscriptFrancDataCompressionPlugin(root, enabled) as unknown as {
+    const createPlugin = (enabled = true, root = process.cwd(), compact = false) => createUserscriptFrancDataCompressionPlugin(root, enabled, compact) as unknown as {
         name: string;
         transform: (code: string, id: string) => {code: string; map: null} | null;
     };
@@ -1202,11 +1202,11 @@ describe('userscript locked franc pure-data encoding', () => {
             .replace("import {decodeUserscriptData} from '@/userscript/dataEncoding';", '')
             .replace('export const data =', 'const data =');
         // 执行生成的纯数据模块与生产 bundled pako；不执行整包，也不复制检测算法。
-        return runInNewContext(body + '\ndata;', {atob, Uint8Array, JSON, inflateWithPako: inflate, decodeUserscriptData}, {timeout: 5_000});
+        return runInNewContext(body + '\ndata;', {atob, Uint8Array, JSON, decodeUserscriptData, inflateWithPako: inflate}, {timeout: 5_000});
     };
 
     it('restores every locked model string and its iteration order before the unchanged franc algorithm consumes it', () => {
-        const transformed = createPlugin().transform(original, dataPath)!;
+        const transformed = createPlugin(true, process.cwd(), true).transform(original, dataPath)!;
         expect(transformed.map).toBeNull();
         const [bytes] = encodedDataBytes(transformed.code);
         expect(Buffer.from(bytes)).toEqual(gzipUserscriptBuildData(Buffer.from(JSON.stringify(lockedFrancData))));
@@ -1224,6 +1224,19 @@ describe('userscript locked franc pure-data encoding', () => {
             }
         }
         expect(models).toBe(66);
+    });
+
+    it('compact standalone franc data decodes the identical gzip bytes and all models through the existing codec', () => {
+        const legacy = createPlugin().transform(original, dataPath)!.code;
+        const compact = createPlugin(true, process.cwd(), true).transform(original, dataPath)!.code;
+        const base64 = JSON.parse(legacy.match(/atob\(("[^"]+")\)/u)![1]);
+        const encoded = JSON.parse(compact.match(/decodeUserscriptData\(("[^"]+")\)/u)![1]);
+        expect(encoded.startsWith('~85:')).toBe(true);expect(compact).not.toContain('atob(');
+        expect(Buffer.from(decodeUserscriptData(encoded))).toEqual(Buffer.from(base64, 'base64'));
+        expect(restoreData(compact)).toEqual(restoreData(legacy));
+        expect(Buffer.byteLength(compact)).toBeLessThan(Buffer.byteLength(legacy));
+        // The same legacy call remains byte-for-byte stable when compact is omitted/false.
+        expect(createPlugin(true, process.cwd(), false).transform(original, dataPath)!.code).toBe(legacy);
     });
 
     it('preserves repeated characters, supplementary characters, escapes and empty model strings without sorting keys', () => {
@@ -1325,7 +1338,10 @@ describe('userscript locked franc pure-data encoding', () => {
             const plugin = config.plugins.find(item => item.name === 'compress-standalone-franc-data') as unknown as ReturnType<typeof createPlugin>;
             expect(plugin).toBeDefined();
             const result = plugin.transform(original, dataPath);
-            if (enabled) expect(restoreData(result!.code)).toEqual(lockedFrancData);
+            if (enabled) {
+                expect(restoreData(result!.code)).toEqual(lockedFrancData);
+                expect(result!.code.includes('decodeUserscriptData(')).toBe(enabled);
+            }
             else expect(result).toBeNull();
             const bundled = aliases.find(alias => alias.find === '@/userscript/pakoRuntime');
             expect(bundled?.replacement).toBe(standalone === '1' ? resolve(process.cwd(), 'userscript/pakoBundled.ts') : undefined);
@@ -1385,7 +1401,7 @@ describe('standalone locked public and private suffix pure-data encoding', () =>
         rulesRoot: number;
         exceptionsRoot: number;
     };
-    const createPlugin = (enabled = true, root = process.cwd()) => createUserscriptTldtsDataCompressionPlugin(root, enabled) as unknown as {
+    const createPlugin = (enabled = true, root = process.cwd(), compact = false) => createUserscriptTldtsDataCompressionPlugin(root, enabled, compact) as unknown as {
         name: string;
         transform: (code: string, id: string) => {code: string; map: null} | null;
     };
@@ -1395,7 +1411,7 @@ describe('standalone locked public and private suffix pure-data encoding', () =>
             .replace(/\bexport const\b/gu, 'const');
         // 仅执行原厂或生成的纯数据声明，复用真实 bundled decoder；不运行匹配算法或完整 userscript。
         return runInNewContext(body + '\n({' + exportNames.join(', ') + '});', {
-            atob, Uint8Array, Uint16Array, JSON, inflateBytesWithPako: inflate, decodeUtf8WithPako: decode, decodeUserscriptData,
+            atob, Uint8Array, Uint16Array, JSON, decodeUserscriptData, inflateBytesWithPako: inflate, decodeUtf8WithPako: decode,
         }, {timeout: 5_000}) as TrieData;
     };
     const locked = restoreData(original);
@@ -1410,7 +1426,7 @@ describe('standalone locked public and private suffix pure-data encoding', () =>
     ].join('\n');
 
     it('restores all seven exports, every typed-array value and both ICANN/private flag classes without changing order', () => {
-        const transformed = createPlugin().transform(original, dataPath)!;
+        const transformed = createPlugin(true, process.cwd(), true).transform(original, dataPath)!;
         const tables = arrayNames.map(name => {
             const array = locked[name], buffer = Buffer.alloc(array.byteLength);
             for (const [index, value] of array.entries()) {
@@ -1444,6 +1460,20 @@ describe('standalone locked public and private suffix pure-data encoding', () =>
         expect(Buffer.from(restored.labelText, 'utf8')).toEqual(Buffer.from(locked.labelText, 'utf8'));
         expect(restored.rulesRoot).toBe(locked.rulesRoot);
         expect(restored.exceptionsRoot).toBe(locked.exceptionsRoot);
+    });
+
+    it('compact standalone suffix data retains exact gzip bytes, typed arrays, roots and UTF-16 label order', () => {
+        const legacy = createPlugin().transform(original, dataPath)!.code;
+        const compact = createPlugin(true, process.cwd(), true).transform(original, dataPath)!.code;
+        const base64 = JSON.parse(legacy.match(/atob\(("[^"]+")\)/u)![1]);
+        const encoded = JSON.parse(compact.match(/decodeUserscriptData\(("[^"]+")\)/u)![1]);
+        expect(encoded.startsWith('~85:')).toBe(true);expect(compact).not.toContain('atob(');
+        expect(Buffer.from(decodeUserscriptData(encoded))).toEqual(Buffer.from(base64, 'base64'));
+        const a = restoreData(legacy), b = restoreData(compact);
+        for (const name of arrayNames) {expect(b[name].constructor).toBe(a[name].constructor);expect(Buffer.from(b[name].buffer)).toEqual(Buffer.from(a[name].buffer));}
+        expect(b.labelText).toBe(a.labelText);expect(b.rulesRoot).toBe(a.rulesRoot);expect(b.exceptionsRoot).toBe(a.exceptionsRoot);
+        expect(Buffer.byteLength(compact)).toBeLessThan(Buffer.byteLength(legacy));
+        expect(createPlugin(true, process.cwd(), false).transform(original, dataPath)!.code).toBe(legacy);
     });
 
     it('roundtrips boundary integers and escaped label text without retaining plain numeric arrays as exports', () => {
@@ -1532,6 +1562,7 @@ describe('standalone locked public and private suffix pure-data encoding', () =>
             const transformed = plugin.transform(original, dataPath);
             if (enabled) {
                 const restored = restoreData(transformed!.code);
+                expect(transformed!.code).toContain('decodeUserscriptData(');
                 for (const name of arrayNames) expect(Array.from(restored[name])).toEqual(Array.from(locked[name]));
                 expect(restored.labelText).toBe(locked.labelText);
                 expect(restored.rulesRoot).toBe(locked.rulesRoot);

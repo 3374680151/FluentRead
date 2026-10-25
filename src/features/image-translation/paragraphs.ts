@@ -1,7 +1,7 @@
 /**
  * @file src/features/image-translation/paragraphs.ts
  * 文件职责：将普通图片的 OCR 物理行恢复成可整段翻译与回填的文本区域。
- * 主要内容：按行距、字号、对齐和遮挡关系合并连续正文，按纵向邻域扫描候选并增量维护对齐范围；大输入首次尝试合段时建立有界深度的遮挡索引，暂时排除当前段成员并在结束后恢复，跳过无关区域及成员子树；保留标题、列表、栏位及竖排边界、原始擦除框与字号上限，并按完整 Unicode 码点衔接两侧 CJK 续行。
+ * 主要内容：按行距、字号、对齐和遮挡关系合并连续正文；竖排以从右到左的列序复用相同的邻接与遮挡约束，保留逐列擦除框；大输入首次尝试合段时建立有界深度的遮挡索引，暂时排除当前段成员并在结束后恢复，跳过无关区域及成员子树；保留标题、列表、栏位边界、原始擦除框与字号上限，并按完整 Unicode 码点衔接两侧 CJK 续行。
  * 模块边界：只处理原图坐标与识别文本，不运行 OCR、不调用翻译或 Canvas；漫画仍使用其气泡分组策略。
  */
 import type {OcrLine} from '@/src/shared/image/types';
@@ -131,7 +131,7 @@ function createObstructionIndex(lines: ImageTextRegion[]) {
 }
 
 /** 未合并区域保持原契约；合并区域只扩大排版范围，擦除仍使用逐行源框。 */
-export function groupImageParagraphs(input: ImageTextRegion[]): ImageTextRegion[] {
+function groupHorizontalParagraphs(input: ImageTextRegion[]): ImageTextRegion[] {
     const lines = [...input].sort((a, b) => a.bbox.y0 - b.bbox.y0 || a.bbox.x0 - b.bbox.x0);
     const used = new Set<ImageTextRegion>();
     const result: ImageTextRegion[] = [];
@@ -192,4 +192,32 @@ export function groupImageParagraphs(input: ImageTextRegion[]): ImageTextRegion[
             fontSize: sizes[Math.floor(sizes.length / 2)], textAlign: alignment(state) });
     }
     return result;
+}
+
+/** 将竖列投影为从上到下的物理行：列宽成为字号，原始框仍可无损回映。 */
+function projectVerticalBox(box: OcrLine['bbox']): OcrLine['bbox'] {
+    return {x0: box.y0, y0: -box.x1, x1: box.y1, y1: -box.x0};
+}
+
+function restoreVerticalBox(box: OcrLine['bbox']): OcrLine['bbox'] {
+    return {x0: -box.y1, y0: box.x0, x1: -box.y0, y1: box.x1};
+}
+
+/** 横排按行、东亚竖排按右到左的列整段翻译；不把另一方向或已合并区域当成续行。 */
+export function groupImageParagraphs(input: ImageTextRegion[]): ImageTextRegion[] {
+    const horizontal = groupHorizontalParagraphs(input);
+    if (horizontal.filter(line => line.vertical && !line.sourceBoxes).length < 2) return horizontal;
+    const originals = new Map<ImageTextRegion, ImageTextRegion>();
+    const projected = horizontal.map(line => {
+        const candidate: ImageTextRegion = {...line, bbox: projectVerticalBox(line.bbox),
+            fontSize: line.vertical ? line.fontSize ?? line.bbox.x1 - line.bbox.x0 : line.fontSize,
+            // 横排和已合并区域仍是遮挡，不能跨过它们连接竖列。
+            vertical: line.vertical ? undefined : true};
+        originals.set(candidate, line);
+        return candidate;
+    });
+    return groupHorizontalParagraphs(projected).map(line => originals.get(line) ?? {
+        ...line, bbox: restoreVerticalBox(line.bbox),
+        sourceBoxes: line.sourceBoxes!.map(restoreVerticalBox), vertical: true as const, textAlign: 'center' as const,
+    }).sort((a, b) => a.bbox.y0 - b.bbox.y0 || a.bbox.x0 - b.bbox.x0);
 }

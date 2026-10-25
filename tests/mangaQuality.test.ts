@@ -40,9 +40,24 @@ describe('漫画整段识别与噪声边界', () => {
         expect(result.map(line => line.text)).toEqual(['THIS STORY CONTINUES.', 'Another bubble', 'Next panel']);
         expect(result[0].bbox).toEqual({x0: 20, y0: 20, x1: 140, y1: 87});
     });
+    it('已定位气泡中的大写行按实际字形高度容许正常留白，整页和远距行仍独立', () => {
+        const first=item('THE TRAIN',145,215,201,27),next=item('LEAVES AT NINE',105,280,298,26);
+        const regions=groupMangaText([first,next],'en',1000,1400,'bubble');
+        expect(regions.map(region=>region.text)).toEqual(['THE TRAIN LEAVES AT NINE']);
+        expect(regions[0].sourceBoxes).toEqual([{x0:145,y0:215,x1:346,y1:242},{x0:105,y0:280,x1:403,y1:306}]);
+        expect(groupMangaText([first,next],'en',1000,1400)).toHaveLength(2);
+        expect(groupMangaText([first,{...next,box:{...next.box,y:283}}],'en',1000,1400,'bubble')).toHaveLength(2);
+        expect(groupMangaText([item('First',40,40,60,8),item('Distant',40,80,60,8)],'en',400,400,'bubble')).toHaveLength(2);
+    });
     it('同一行分词按从左到右排序，并按行合并完整对白', () => {
         const result = groupMangaText([item('world', 82, 19, 50), item('Hello', 20, 20, 55), item('again', 50, 44)], 'en', 300, 200);
         expect(result[0].text).toBe('Hello world again');
+    });
+    it('横排日文和中文跨行合句不插入模型原文中没有的空格，英文保留词间空格', () => {
+        expect(groupMangaText([item('そう',20,20),item('だね！',20,44)],'ja',400,300)[0].text).toBe('そうだね！');
+        expect(groupMangaText([item('そう。',20,20),item('ですね！',20,44)],'ja',400,300)[0].text).toBe('そう。ですね！');
+        expect(groupMangaOcrLines([{text:'原来',bbox:{x0:20,y0:20,x1:100,y1:40}},{text:'如此。',bbox:{x0:20,y0:44,x1:100,y1:64}}],'zh',400,300)[0].text).toBe('原来如此。');
+        expect(groupMangaText([item('Hello',20,20),item('again',20,44)],'en',400,300)[0].text).toBe('Hello again');
     });
     it('不同字号标题和正文、横排和竖排不被合并', () => {
         const result = groupMangaText([item('TITLE', 20, 20, 100, 50), item('body', 20, 65, 80, 20),
@@ -55,12 +70,51 @@ describe('漫画整段识别与噪声边界', () => {
         expect(result[0]).toMatchObject({text: '右列続き左列', vertical: true});
         expect(result[1].text).toBe('啊');
     });
-    it('过滤低置信度、符号、数字和英文漫画里的错误汉字，不丢掉合法 I/A 短句', () => {
+    it('宽竖列仅在同一已定位气泡内合段，仍限制列距、纵向覆盖与字号，横排行距不扩大',()=>{
+        const right=item('右の列',200,20,40,240),left=item('左の列',20,20,40,240);
+        expect(groupMangaText([left,right],'ja',500,500,'bubble')[0].text).toBe('右の列左の列');
+        expect(groupMangaText([left,right],'ja',500,500)).toHaveLength(2);
+        for(const separate of [item('遠い列',201,20,40,240),item('低い列',200,150,40,240),item('小さな注音',200,20,20,100)]){
+            expect(groupMangaText([left,separate],'ja',500,500,'bubble')).toHaveLength(2);
+        }
+        expect(groupMangaText([item('First',20,20,100,20),item('Second',20,71,100,20)],'en',500,500,'bubble')).toHaveLength(2);
+    });
+    it('过滤低置信度、符号、数字艺术碎片和英文漫画里的错误汉字，不丢掉合法 I/A 短句', () => {
         const bad = [item('noise', 20, 20, 80, 20, 0.64), item('nan', 20, 20, 80, 20, NaN),
             item(''), item('=='), item('3 3'), item('才', 200, 200, 100, 200), item('noise才'), item('j')];
         expect(groupMangaText(bad, 'en', 500, 500)).toEqual([]);
         expect(groupMangaText([item('I'), item('A', 200, 200)], 'en', 500, 500).map(line => line.text)).toEqual(['I', 'A']);
         expect(groupMangaText([item('才', 20, 20, 150, 200), item('啊', 20, 20, 20, 20, 0.85)], 'auto', 500, 500)).toEqual([]);
+    });
+    it.each(['en','ja','jpn','auto','zh','ko','ru'])('高置信数字信息不受源语言限制，判定可用 NFKC 但原文与框不变：%s', language => {
+        for(const text of ['42','123456','23:59','7:05','00:00:59','2024-02-29','2026/10/25','2026.1.3',
+            '$8','-£9.50','¥1,280.50','12.99€','１２３４','０９：１７','￥１２８０','２０２４／０２／２９']) {
+            const source=item(text,20,30,90,18,.9),original=structuredClone(source);
+            const result=groupMangaText([source],language,500,500);
+            expect(result).toEqual([{text,bbox:{x0:20,y0:30,x1:110,y1:48},fontSize:18,sourceBoxes:[{x0:20,y0:30,x1:110,y1:48}]}]);
+            expect(source).toEqual(original);
+        }
+    });
+    it('数字支路不放开低置信、孤立数字、无效日期时间与金额及空格艺术碎片', () => {
+        const noise=['1','７','3 3','123 456','①②','²³','..',':','$','09::17','24:00','12:60','9:5','99:99',
+            '2023-02-29','2024-02-30','2026-13-01','2026-00-01','2026-01-00','0000-01-01','2026-1-32','2026/01-02',
+            '$1,23','$1.234','$1,2345','12 34€','123--'];
+        for(const language of ['en','ja','auto']) {
+            expect(groupMangaText(noise.map(text=>item(text)),language,500,500,'bubble')).toEqual([]);
+            for(const text of ['42','23:59','2024-02-29','$8','￥１２８０']) {
+                expect(groupMangaText([item(text,20,20,80,20,.899999)],language,500,500,'bubble')).toEqual([]);
+            }
+        }
+        expect(groupMangaText([item('hello',20,20,80,20,.65)],'en',500,500)[0].text).toBe('hello');
+        for(const bad of [item('12:34',NaN),item('12:34',20,20,0),item('12:34',600),item('12:34',20,600)]) {
+            expect(groupMangaText([bad],'en',500,500)).toEqual([]);
+        }
+    });
+    it('实际聊天截图 SDK 的高置信时间框进入结果，不改变识别原文或几何', () => {
+        const actual=item('08:45',878,42,76,24,.998395),original=structuredClone(actual);
+        expect(groupMangaText([actual],'en',1024,1536)).toEqual([{text:'08:45',bbox:{x0:878,y0:42,x1:954,y1:66},
+            fontSize:24,sourceBoxes:[{x0:878,y0:42,x1:954,y1:66}]}]);
+        expect(actual).toEqual(original);
     });
     it('拒绝坏坐标、无效尺寸、图外框，夹紧可用区域且规范化空白', () => {
         for (const [width, height] of [[0, 20], [20, Infinity], [10.5, 20]]) expect(groupMangaText([item('text')], 'en', width, height)).toEqual([]);
@@ -72,9 +126,17 @@ describe('漫画整段识别与噪声边界', () => {
     it('同高区域按右到左保留漫画阅读顺序', () => {
         expect(groupMangaText([item('left'), item('right', 200)], 'en', 400, 300).map(line => line.text)).toEqual(['right', 'left']);
     });
-    it('连接跨行断词，保留口吃前缀和完整单词',()=>{
-        expect(groupMangaText([item('UNDER-',20,20),item('STOOD...',20,44)],'en',400,300)[0].text).toBe('UNDERSTOOD...');
-        expect(groupMangaText([item('A-ABSO-',20,20),item('LUTELY NOT!',20,44)],'en',400,300)[0].text).toBe('A-ABSOLUTELY NOT!');
+    it('只删除明确的行末软连字符，保留复合词的硬连字符与口吃前缀',()=>{
+        expect(groupMangaText([item('UNDER\u00ad',20,20),item('STOOD...',20,44)],'en',400,300)[0].text).toBe('UNDERSTOOD...');
+        expect(groupMangaText([item('A-ABSO\u00ad',20,20),item('LUTELY NOT!',20,44)],'en',400,300)[0].text).toBe('A-ABSOLUTELY NOT!');
+        expect(groupMangaText([item('well-',20,20),item('known',20,44)],'en',400,300)[0].text).toBe('well-known');
+        expect(groupMangaText([item('part-',20,20),item('2nd line',20,44)],'en',400,300)[0].text).toBe('part- 2nd line');
+    });
+    it('只在已定位气泡保留高置信度大单字，整页与低置信度绘画噪声保持过滤', () => {
+        const single=item('え',40,40,70,70);
+        expect(groupMangaText([single],'ja',400,400)).toEqual([]);
+        expect(groupMangaText([single],'ja',400,400,'bubble').map(r=>r.text)).toEqual(['え']);
+        expect(groupMangaText([{...single,confidence:.85}],'ja',400,400,'bubble')).toEqual([]);
     });
 });
 

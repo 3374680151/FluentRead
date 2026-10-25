@@ -1,7 +1,7 @@
 /**
  * @file src/features/image-translation/services/mangaInpainting.ts
  * 文件职责：用按需加载的本地 LaMa 漫画模型修补复杂背景上的原字形，保留气泡之外和蒙版之外的原始像素。
- * 主要内容：共享本次原图背景分类，按识别行及其有界描边余量建立局部蒙版，截取有上下文且最长边不超过 512 的有界补丁，归一化 ONNX 张量并仅回写蒙版区域；融合 ONNX 执行图，兼容的硬件 GPU 加速修补、设备失效有界切换 CPU；独立 Worker 串行推理、70% 计算时间预算、滚动取消保留模型端口并由 owner 有界收尾，三分钟空闲释放约束资源。
+ * 主要内容：共享本次原图背景分类，完整确认均匀的页面不等待其他页面的模型修补队列；默认返回独立像素副本，仅显式持有独占像素的调用方可在均匀页复用原缓冲，复杂页始终保留原图与输出分离；按识别行及其有界描边余量建立局部蒙版，以同样的最近邻源坐标将每个行框投影为补丁行段，避免每个补丁像素遍历全部文字行；截取有上下文且最长边不超过 512 的有界补丁，归一化 ONNX 张量并仅回写蒙版区域；融合 ONNX 执行图，兼容的硬件 GPU 加速修补、设备失效有界切换 CPU；独立 Worker 串行推理、70% 计算时间预算、滚动取消保留模型端口并由 owner 有界收尾，三分钟空闲释放约束资源。
  * 模块边界：不读取网页 DOM、不上传图像、不翻译文字；均匀气泡无需加载模型，最后的译文排版由 mangaRendering 处理，模型生成内容始终局限于检测文字蒙版。
  */
 import {localWasmThreads, paceLocalInference} from '@/src/shared/onnx/resources';
@@ -29,13 +29,20 @@ export function createMangaPatch(pixels: Uint8ClampedArray, width: number, heigh
     const patchHeight = Math.max(64, Math.ceil(sourceHeight * scale / 64) * 64);
     const count = patchWidth * patchHeight;
     const image = new Float32Array(count * 3), mask = new Float32Array(count);
-    const boxes = maskBoxes(region,width,height);
     for (let y = 0; y < patchHeight; y += 1) for (let x = 0; x < patchWidth; x += 1) {
         const sx = left + Math.min(sourceWidth - 1, Math.floor(x * sourceWidth / patchWidth));
         const sy = top + Math.min(sourceHeight - 1, Math.floor(y * sourceHeight / patchHeight));
         const input = (sy * width + sx) * 4, output = y * patchWidth + x;
         for (let channel = 0; channel < 3; channel += 1) image[channel * count + output] = pixels[input + channel] / 255;
-        if (boxes.some(line => sx >= line.x0 && sx < line.x1 && sy >= line.y0 && sy < line.y1)) mask[output] = 1;
+    }
+    // sx=left+floor(x*sourceWidth/patchWidth)：对整数源框反解其半开区间，
+    // 边界使用 ceil，保证上下采样时都与逐像素包含判断完全一致。
+    for (const box of maskBoxes(region,width,height)) {
+        const x0 = Math.min(patchWidth, Math.max(0, Math.ceil((box.x0-left)*patchWidth/sourceWidth)));
+        const x1 = Math.min(patchWidth, Math.max(0, Math.ceil((box.x1-left)*patchWidth/sourceWidth)));
+        const y0 = Math.min(patchHeight, Math.max(0, Math.ceil((box.y0-top)*patchHeight/sourceHeight)));
+        const y1 = Math.min(patchHeight, Math.max(0, Math.ceil((box.y1-top)*patchHeight/sourceHeight)));
+        for (let y = y0; y < y1; y += 1) mask.fill(1,y*patchWidth+x0,y*patchWidth+x1);
     }
     return {patch:{image,mask,width:patchWidth,height:patchHeight},left,top,sourceWidth,sourceHeight};
 }
@@ -60,8 +67,15 @@ export function createMangaInpaintingRuntime(create: (signal?: AbortSignal,progr
     function queue<T>(operation:()=>Promise<T>) {const result=tail.then(operation);tail=result.then(()=>undefined,()=>undefined);return result;}
     async function release() {clearTimeout(idle);idle=undefined;const current=service;service=undefined;await current?.release();}
     return {
-        repair(pixels:Uint8ClampedArray,width:number,height:number,regions:MangaRegion[],signal?:AbortSignal,onPreparing?:(percent?:number,initializing?:boolean)=>void,onRepair?:(done:number,total:number)=>void,backgrounds?:MangaBackground[]) {
-            return withMangaModelAdmission(() => queue(async()=>{
+        repair(pixels:Uint8ClampedArray,width:number,height:number,regions:MangaRegion[],signal?:AbortSignal,onPreparing?:(percent?:number,initializing?:boolean)=>void,onRepair?:(done:number,total:number)=>void,backgrounds?:MangaBackground[],options?:{reuseUniformPixels?:boolean}) {
+            return withMangaModelAdmission(() => {
+                // 不同标签页的图片任务可以并发到达这里。已确认无需模型的页面
+                // 默认复制像素；只有独占调用方显式选择时复用完整均匀页。
+                // 不访问端口、队列和空闲计时；缺失分类仍按原流程采样。
+                if (regions.every((_,index)=>backgrounds?.[index]?.uniform===true)) {
+                    return Promise.resolve().then(()=>{assertMangaOcrActive(signal);return options?.reuseUniformPixels===true ? pixels : new Uint8ClampedArray(pixels);});
+                }
+                return queue(async()=>{
                 assertMangaOcrActive(signal); clearTimeout(idle);
                 try {
                     return await (async () => {
@@ -86,7 +100,8 @@ export function createMangaInpaintingRuntime(create: (signal?: AbortSignal,progr
                         throw error;
                     });
                 } finally {idle=setTimeout(()=>{void queue(release).catch(()=>undefined);},180000);}
-            }));
+                });
+            });
         },
         dispose:()=>queue(release),
     };

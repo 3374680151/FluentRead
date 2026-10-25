@@ -30,6 +30,7 @@ const liveTranslation = process.argv.includes('--live-translation');
 const multilingual = process.argv.includes('--multilingual');
 const harFixture = process.argv.includes('--har-fixture');
 const unchangedFixture = process.argv.includes('--unchanged-fixture');
+const modelCacheDir = arg('model-cache-dir', process.env.FLUENTREAD_TEST_MODEL_CACHE_DIR);
 if (unchangedFixture && liveTranslation) throw new Error('--unchanged-fixture requires deterministic transport');
 const paragraphImage = arg('paragraph-image', null);
 const denseParagraphs = process.argv.includes('--dense-paragraphs');
@@ -425,6 +426,26 @@ async function verifyGeometryCases({worker, ui, wait, shot}) {
         });
         if (!response.success) throw new Error(response.error);
     }, {xSurface, xLightbox});
+    if (xLightbox) {
+        await popup.goto(`chrome-extension://${new URL(worker.url()).host}/options.html#settings-image-translation`);
+        const models = popup.locator('.manga-model-settings');
+        await models.waitFor();
+        await models.locator('.manga-download-settings > summary').click();
+        const input = models.locator('input[type=file]');
+        await input.waitFor({state: 'attached'});
+        // 浏览器与导入入口就绪后才准备模型；启动失败不产生无用下载。
+        const modelCache = await require('./image-model-cache.cjs').ensureImageTranslationModelFiles({
+            directory: modelCacheDir, kinds: ['ocr'],
+            sourceDirectories: [modelCacheDir || require('./image-model-cache.cjs').defaultImageTranslationModelCacheDirectory()],
+        });
+        report.modelCache = {directory: modelCache.directory, networkDownloads: modelCache.networkDownloads,
+            files: modelCache.files.map(({filename, bytes, sha256, cache}) => ({filename, bytes, sha256, cache}))};
+        await input.setInputFiles(modelCache.files.map(file => file.path));
+        await popup.waitForFunction(async () => (await chrome.runtime.sendMessage({type: 'fluentReadMangaModelStatus'})).ready,
+            null, {timeout: 60_000});
+        report.modelCache.importedIntoTemporaryProfile = true;
+        await popup.goto(`chrome-extension://${new URL(worker.url()).host}/popup.html`);
+    }
     await worker.evaluate(({liveTranslation, paragraphFixture, xLightbox, manyLineTranslation, unchangedFixture}) => {
         const originalFetch = globalThis.fetch.bind(globalThis);
         // Keep the real OCR path intact while giving the loading controls enough time to sample.

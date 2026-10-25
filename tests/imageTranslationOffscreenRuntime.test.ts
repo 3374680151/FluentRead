@@ -151,6 +151,23 @@ describe('Offscreen 图片完整操作生命周期', () => {
         await expect(translateImageInOffscreen('manga','en','',controller.signal,'cancel-manga',true)).rejects.toThrow('已取消');
         expect(canvases[0].toDataURL).not.toHaveBeenCalled();expect(images[0].src).toBe('');
     });
+    it.each([true,false])('漫画独占ImageData启用均匀复用，仅独立修补结果需要拷回：%s',async reuse=>{
+        mocks.mangaRecognize.mockResolvedValue([{...lines[0],fontSize:10}]);
+        const input=new Uint8ClampedArray(32*16*4).fill(91),set=vi.spyOn(input,'set');
+        vi.stubGlobal('document',{createElement:vi.fn(()=>{
+            const canvas=makeCanvas();if(canvases.length===1)canvas.context.getImageData.mockReturnValue({data:input});return canvas;
+        })});
+        mocks.sampleManga.mockReturnValue([{color:'rgb(255,255,255)',uniform:reuse}]);
+        mocks.repair.mockImplementationOnce(async(pixels,_w,_h,_regions,_signal,_preparing,_repair,backgrounds,options)=>{
+            expect(pixels).toBe(input);expect(backgrounds[0].uniform).toBe(reuse);expect(options).toEqual({reuseUniformPixels:true});
+            if(reuse)return pixels;const result=new Uint8ClampedArray(pixels);result[0]=173;return result;
+        });
+        await translateImageInOffscreen('manga','en','',undefined,'owned-pixels',true);
+        expect(set).toHaveBeenCalledTimes(reuse?0:1);expect(input[0]).toBe(reuse?91:173);
+        expect(mocks.mangaDraw.mock.calls[0][1]).toBe(input);
+        expect(canvases[0].context.putImageData).toHaveBeenCalledOnce();expect(canvases[0].context.putImageData).toHaveBeenCalledWith({data:input},0,0);
+        expect(mocks.encode).toHaveBeenCalledOnce();expect(images[0].src).toBe('');expect(canvases.every(canvas=>canvas.width===0&&canvas.height===0)).toBe(true);
+    });
     it.each([false, true])('漫画进度按请求所有权投递，解码宽高可安全回退，带信号=%s', async withSignal => {
         imageOptions.push({naturalWidth: 0, naturalHeight: 0});
         const controller = new AbortController();let notify!: (stage: string, progress?: number) => void;
@@ -235,6 +252,21 @@ describe('Offscreen 图片完整操作生命周期', () => {
         expect(mocks.inpaint.mock.calls[0][3][0].sourceBoxes).toEqual(source.map(line => line.bbox));
         expect(mocks.draw).toHaveBeenCalledWith(expect.anything(), '你好', 59, 76, 310, 44, 'rgb(240,240,240)', 12 * 1.2, 'left');
         if (engine === 'paddle') expect(mocks.mangaRecognize.mock.calls[0][7]).toBe('image');
+    });
+
+    it('Paddle 单图竖排列整段翻译一次，清字仍仅传入原始列框', async () => {
+        imageOptions.push({width: 240, height: 200});
+        const right = {text: '今日は', bbox: {x0: 90, y0: 20, x1: 102, y1: 120}, vertical: true as const};
+        const left = {text: '楽しかった。', bbox: {x0: 76, y0: 21, x1: 88, y1: 120}, vertical: true as const};
+        mocks.mangaRecognize.mockResolvedValue([left, right]);
+        sendMessage.mockImplementation((message, callback) => callback(message.type === 'fluentReadImageTranslateTexts'
+            ? {success: true, translations: ['今天玩得很开心。']} : undefined));
+        const result = await translateImageInOffscreen('vertical', 'ja', 'Page', undefined, 'vertical-image', false, 'paddle');
+        expect(sendMessage.mock.calls.find(([message]) => message.type === 'fluentReadImageTranslateTexts')![0].texts)
+            .toEqual(['今日は楽しかった。']);
+        expect(mocks.inpaint.mock.calls[0][3][0]).toMatchObject({sourceBoxes: [right.bbox, left.bbox], fontSize: 12, vertical: true});
+        expect(result.lines).toMatchObject([{text: '今天玩得很开心。', sourceText: '今日は楽しかった。'}]);
+        expect(mocks.repair).not.toHaveBeenCalled();
     });
 
     it('允许预算边界图像继续 OCR，natural 尺寸不可用时使用已解码尺寸', async () => {

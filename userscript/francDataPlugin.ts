@@ -1,7 +1,7 @@
 /**
  * @file userscript/francDataPlugin.ts
  * 文件职责：为标准版和独立完整 userscript 无损压缩锁定 franc-min 的生成式纯数据模块。
- * 主要内容：核对依赖版本与精确模块路径，拒绝非字符串表 AST，以 gzip 压缩全部模型并用既有 ASCII85 保存完整字节，在原模块求值时同步恢复。
+ * 主要内容：核对依赖版本与精确模块路径，拒绝非字符串表 AST，以 gzip 编码全部模型并在原模块求值时同步恢复；显式紧凑模式选择既有 ASCII85 表示，未指定时保留 Base64。
  * 模块边界：不处理检测算法或其他依赖模块，不修改依赖文件、许可、模型或 API；Greasy Fork 可读源码与扩展目标不启用。
  */
 import {createHash} from 'node:crypto';
@@ -14,7 +14,7 @@ import ts from 'typescript';
 import {normalizePath, type Plugin} from 'vite';
 
 /** 只编码一个锁定生成模块；结构或版本漂移时拒绝构建，禁止把可执行逻辑当成压缩数据。 */
-export function createUserscriptFrancDataCompressionPlugin(root: string, enabled = false): Plugin {
+export function createUserscriptFrancDataCompressionPlugin(root: string, enabled = false, compact = false): Plugin {
     let sourcePath = '';
     if (enabled) {
         const require = createRequire(resolve(root, 'package.json'));
@@ -72,16 +72,21 @@ export function createUserscriptFrancDataCompressionPlugin(root: string, enabled
             }));
             if (JSON.stringify(Object.keys(data)) !== JSON.stringify(['Latin', 'Cyrillic', 'Arabic', 'Devanagari'])
                 || Object.values(data).reduce((count, models) => count + Object.keys(models).length, 0) !== 66) throw unsupported();
-            const compressed = encodeUserscriptData(gzipUserscriptBuildData(Buffer.from(JSON.stringify(data))));
+            const bytes = gzipUserscriptBuildData(Buffer.from(JSON.stringify(data)));
+            const compressed = compact ? encodeUserscriptData(bytes) : bytes.toString('base64');
             const digest = createHash('sha256').update(code).digest('hex');
             return {
                 code: [
                     code.slice(0, statement.getStart(source)),
                     '/* Non-code locked franc-min data; source sha256 ' + digest + '. */',
                     "import {inflateWithPako} from '@/userscript/pakoRuntime';",
-                    "import {decodeUserscriptData} from '@/userscript/dataEncoding';",
+                    ...(compact ? ["import {decodeUserscriptData} from '@/userscript/dataEncoding';"] : []),
                     'export const data = (() => {',
-                    '    const bytes = decodeUserscriptData(' + JSON.stringify(compressed) + ');',
+                    ...(compact ? ['    const bytes = decodeUserscriptData(' + JSON.stringify(compressed) + ');'] : [
+                        '    const binary = atob(' + JSON.stringify(compressed) + ');',
+                        '    const bytes = new Uint8Array(binary.length);',
+                        '    for (let index = 0; index < binary.length; index++) bytes[index] = binary.charCodeAt(index);',
+                    ]),
                     '    return JSON.parse(inflateWithPako(bytes));',
                     '})();',
                 ].join('\n'),

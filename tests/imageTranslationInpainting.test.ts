@@ -12,6 +12,52 @@ function line(x0: number, y0: number, x1: number, y1: number) {
     return {text: '文字', bbox: {x0, y0, x1, y1}};
 }
 
+function boundaryFixture(kind: string) {
+    const width = 300, height = 120, background = [231, 242, 247, 185];
+    const source = solidPixels(width, height, background);
+    const pixel = (x: number, y: number, color: number[]) => source.set(color, (y * width + x) * 4);
+    for (let y = 35; y < 76; y++) for (let x = 60; x < 76; x++) pixel(x, y, [15, 24, 29, 255]);
+    if (kind === 'gray-fringe' || kind === 'color-fringe') {
+        const color = kind === 'gray-fringe' ? [245, 245, 245, 255] : [255, 250, 245, 255];
+        for (let y = 74; y < 76; y++) for (let x = 60; x < 76; x++) pixel(x, y, color);
+    } else if (kind === 'long-rule') {
+        for (let x = 45; x < 235; x++) pixel(x, 75, [15, 24, 29, 255]);
+    } else if (kind === 'short-icon') {
+        for (let y = 69; y < 76; y++) for (let x = 130; x < 138; x++) pixel(x, y, [15, 24, 29, 255]);
+    } else if (kind === 'touching-decoration') {
+        for (let x = 75; x < 95; x++) pixel(x, 75, [15, 24, 29, 255]);
+    } else if (kind === 'isolated-dot') {
+        pixel(160, 75, [15, 24, 29, 255]);
+    } else if (kind === 'nearby-pattern') {
+        pixel(150, 80, [255, 0, 0, 255]);
+    } else if (kind === 'gradient') {
+        for (let y = 0; y < height; y++) for (let x = 0; x < width; x++) pixel(x, y, [220 + Math.floor(x / 15), 231 + Math.floor(x / 15), 236 + Math.floor(x / 15), 185]);
+        for (let y = 35; y < 76; y++) for (let x = 60; x < 76; x++) pixel(x, y, [15, 24, 29, 255]);
+    } else if (kind === 'alpha-edge') {
+        for (let y = 76; y < height; y++) for (let x = 0; x < width; x++) pixel(x, y, [0, 0, 0, 0]);
+    } else if (kind === 'outer-texture') {
+        pixel(100, 76, [110, 170, 180, 185]);
+    } else if (kind.startsWith('channel-')) {
+        const channel = Number(kind.slice(-1)), color = [...background];
+        color[channel] -= 1;
+        for (let y = 74; y < 76; y++) for (let x = 60; x < 76; x++) pixel(x, y, background);
+        // 紧邻蒙版的上、下、左、右四段均需完整验证，单字节差异也不可被多数色吞掉。
+        const [x, y] = [[100, 25], [100, 74], [35, 45], [244, 45]][channel];
+        pixel(x, y, color);
+    }
+    return {source, width, height, background, boxes: [line(40, 30, 240, 70)]};
+}
+
+function knownHoleFixture() {
+    const width = 64, height = 48, source = solidPixels(width, height);
+    const boxes = [line(16, 12, 44, 16), line(16, 16, 20, 32), line(16, 32, 44, 36), line(40, 16, 44, 32)];
+    for (let y = 22; y < 27; y++) for (let x = 27; x < 32; x++) source.set([255, 0, 0, 155], (y * width + x) * 4);
+    // 一条红线接触孔洞左边界；仅检查外矩形周长会漏掉它。
+    for (let y = 22; y < 27; y++) source.set([255, 0, 0, 155], (y * width + 22) * 4);
+    source.set([0, 0, 0, 255], (14 * width + 30) * 4);
+    return {source, width, height, boxes};
+}
+
 afterEach(() => vi.unstubAllGlobals());
 
 describe('图片文字背景修复', () => {
@@ -185,5 +231,126 @@ describe('图片文字背景修复', () => {
         for (let y = 6; y < 15; y += 1) {
             for (let x = 6; x < 15; x += 1) expect(output[(y * 21 + x) * 4]).toBe(output[(y * 21 + 20 - x) * 4]);
         }
+    });
+
+    it.each([
+        ['black-fringe', 'c0a794dd6cd0f74d445a0cc34176aed42524eec43a8ed7a642b988ddf18892a6'], ['gray-fringe', '18ccb52c3f76704661d08f4774730a0c517d3a2d9c4958b629f56d4494b7475e'], ['color-fringe', 'bd00db1a09923db596d1df16eaca50f7486893662a75b6053c1f40d1e640b224'],
+        ['long-rule', 'afd095de5d204761a71e8a951e19ea000659e8422d66a70bbeeb7bd170a5999c'], ['short-icon', '54ca5ace82b2fa01fb51a4957923e3a743cb9339f71aecac34e8794df51035a0'], ['touching-decoration', '2ae4955dbb4a38d3a33ff9b78884b1eef531fc007907d4028bb10920de4f48a0'],
+        ['isolated-dot', 'e27f487fdcfef48ffc365d7cb7ab818baf5cced50ad9628dbcfd82e76610d298'], ['nearby-pattern', 'a92b2159cf202d26936995febc5ac1433a86181ff3d6b2684569dae45c386bb0'],
+        ['gradient', 'f8764f0cb9e1daccf9ef23bef67cea5166cf1d97b340d427cec403cbea56f236'], ['alpha-edge', '9c353db42363ee5b108eba2a47e1ae0b6981730987fdfce493e7a89059fa0e7f'], ['outer-texture', '2e822eacae3a9115b658c14a619e8d8f3f7e10a74d223b4314d93395999b7c75'],
+        ['channel-0', '82872665579fdd93242c773aecdfb010b371f1dae61accde2f333b5e3a3fd742'], ['channel-1', 'cdb0778073e31a46d34e2b27c1b7faf9adc146cdfa55cc42412ed08d9e1abd0b'], ['channel-2', 'b76c5c6e2b0308d625de48af7ab34616fb3bdf97ca5ce966f44852c37e1d7c86'], ['channel-3', '206eb909b97a2835ea794b606ba1747d2e681d6f51b6c66777a9f4228971b267'],
+    ])('%s：实际已知边界不同则保留旧扩散的完整像素与框外内容', (kind, expected) => {
+        const {source, width, height, boxes} = boundaryFixture(kind);
+        const before = source.slice();
+        const output = inpaintTextRegions(source, width, height, boxes);
+        expect(createHash('sha256').update(output).digest('hex')).toBe(expected);
+        expect(source).toEqual(before);
+        let outsideChanged = 0;
+        for (let y = 0; y < height; y++) for (let x = 0; x < width; x++) {
+            if (x >= 36 && x < 244 && y >= 26 && y < 74) continue;
+            for (let channel = 0; channel < 4; channel++) {
+                const offset = (y * width + x) * 4 + channel;
+                if (before[offset] !== output[offset]) outsideChanged++;
+            }
+        }
+        expect(outsideChanged).toBe(0);
+    });
+
+    it('远白圈中的黑卡仍使用紧邻黑色底边，白字修复后不把整张卡填白', () => {
+        const source = solidPixels(64, 48, [255, 255, 255, 255]);
+        for (let y = 16; y < 32; y++) for (let x = 16; x < 44; x++) source.set([0, 0, 0, 255], (y * 64 + x) * 4);
+        for (let y = 21; y < 26; y++) for (let x = 23; x < 37; x++) source.set([255, 255, 255, 255], (y * 64 + x) * 4);
+        const output = inpaintTextRegions(source, 64, 48, [line(20, 20, 40, 28)]);
+        for (let y = 16; y < 32; y++) for (let x = 16; x < 44; x++) expect(Array.from(output.slice((y * 64 + x) * 4, (y * 64 + x) * 4 + 4))).toEqual([0, 0, 0, 255]);
+    });
+
+    it('真实四边框围出的彩色半透明孔洞属于已知边界，不能被外矩形纯色吞掉', () => {
+        const {source, width, height, boxes} = knownHoleFixture(), queues: number[] = [], Queue = Uint32Array;
+        vi.stubGlobal('Uint32Array', class extends Queue {constructor(size: number) {super(size); queues.push(size);}});
+        const output = inpaintTextRegions(source, width, height, boxes);
+        expect(createHash('sha256').update(output).digest('hex')).toBe('61b152f159621f53106b61427013ee7288e72f7492ec00bb36c83f5a3c9ef8f9');
+        expect(queues).toHaveLength(1);
+        expect(Array.from(output.slice((24 * width + 22) * 4, (24 * width + 22) * 4 + 4))).toEqual([255, 0, 0, 155]);
+    });
+
+    it.each([[12, 12], [18, 12], [12, 18], [18, 18]])('薄框的对角已知像素也参与准入：%j', (x, y) => {
+        const source = solidPixels(40, 40), Queue = Uint32Array, queues: number[] = [];
+        source.set([0, 0, 0, 255], (15 * 40 + 15) * 4);
+        source.set([255, 0, 0, 155], (y * 40 + x) * 4);
+        vi.stubGlobal('Uint32Array', class extends Queue {constructor(size: number) {super(size); queues.push(size);}});
+        const output = inpaintTextRegions(source, 40, 40, [line(15, 15, 16, 16)]);
+        expect(queues).toEqual([25]);
+        expect(Array.from(output.slice((y * 40 + x) * 4, (y * 40 + x) * 4 + 4))).toEqual([255, 0, 0, 155]);
+    });
+
+    it.each([[15, 15, 16, 16], [15, 15, 15.1, 40], [15, 15, 40, 15.1]])('一像素或不足一像素的源框仍有完整周边：%j', (x0, y0, x1, y1) => {
+        const source = solidPixels(60, 60), Queue = Uint32Array, queues: number[] = [];
+        source.set([0, 0, 0, 255], (15 * 60 + 15) * 4);
+        vi.stubGlobal('Uint32Array', class extends Queue {constructor(size: number) {super(size); queues.push(size);}});
+        expect(inpaintTextRegions(source, 60, 60, [line(x0, y0, x1, y1)])).toEqual(solidPixels(60, 60));
+        expect(queues).toEqual([]);
+    });
+
+    it('成员内周被更大蒙版覆盖时不把待擦字误作已知边界', () => {
+        const source = solidPixels(60, 60), Queue = Uint32Array, queues: number[] = [];
+        source.set([0, 0, 0, 255], (17 * 60 + 17) * 4);
+        source.set([255, 0, 0, 155], (23 * 60 + 23) * 4);
+        vi.stubGlobal('Uint32Array', class extends Queue {constructor(size: number) {super(size); queues.push(size);}});
+        const boxes = [line(20, 20, 21, 21), line(15, 15, 35, 35)];
+        expect(inpaintTextRegions(source, 60, 60, boxes)).toEqual(solidPixels(60, 60));
+        expect(inpaintTextRegions(source, 60, 60, boxes.slice().reverse())).toEqual(solidPixels(60, 60));
+        expect(queues).toEqual([]);
+    });
+
+    it.each([[0, 20, 4, 24], [20, 0, 24, 4], [56, 20, 60, 24], [20, 56, 24, 60]])('外圈不完整时保留扩散路径：%j', (x0, y0, x1, y1) => {
+        const source = solidPixels(60, 60), Queue = Uint32Array, queues: number[] = [];
+        source.set([0, 0, 0, 255], (y0 * 60 + x0) * 4);
+        vi.stubGlobal('Uint32Array', class extends Queue {constructor(size: number) {super(size); queues.push(size);}});
+        expect(inpaintTextRegions(source, 60, 60, [line(x0, y0, x1, y1)])).toEqual(solidPixels(60, 60));
+        expect(queues).toHaveLength(1);
+    });
+
+    it('全透明外圈不使用隐藏 RGB 作为背景，保持旧预乘扩散语义', () => {
+        const source = solidPixels(60, 60, [255, 10, 20, 0]), queues: number[] = [], Queue = Uint32Array;
+        source.set([0, 0, 0, 255], (22 * 60 + 22) * 4);
+        vi.stubGlobal('Uint32Array', class extends Queue {constructor(size: number) {super(size); queues.push(size);}});
+        const output = inpaintTextRegions(source, 60, 60, [line(20, 20, 24, 24)]);
+        expect(Array.from(output.slice((22 * 60 + 22) * 4, (22 * 60 + 22) * 4 + 4))).toEqual([0, 0, 0, 0]);
+        expect(queues).toEqual([64]);
+    });
+
+    it.each([1, 2, 127, 128, 185, 254, 255])('已知边界 alpha=%i 的常量 RGBA 快填与原逐层扩散相同', alpha => {
+        const source = solidPixels(64, 48, [17, 83, 211, alpha]), queues: number[] = [], Queue = Uint32Array;
+        source.set([230, 30, 100, 255], (22 * 64 + 30) * 4);
+        vi.stubGlobal('Uint32Array', class extends Queue {constructor(size: number) {super(size); queues.push(size);}});
+        expect(inpaintTextRegions(source, 64, 48, [line(20, 20, 40, 28)])).toEqual(solidPixels(64, 48, [17, 83, 211, alpha]));
+        expect(queues).toEqual([]);
+    });
+
+    it('大量重叠框只填去重后的局部蒙版一次，纯色簇不分配队列或额外 RGBA', () => {
+        const source = solidPixels(60, 60, [20, 60, 90, 185]), Mask = Uint8Array, Queue = Uint32Array, Pixels = Uint8ClampedArray;
+        source.set([0, 0, 0, 255], (22 * 60 + 22) * 4);
+        const masks: number[] = [], queues: number[] = [], copies = vi.fn();
+        vi.stubGlobal('Uint8Array', class extends Mask {constructor(size: number) {super(size); masks.push(size);}});
+        vi.stubGlobal('Uint32Array', class extends Queue {constructor(size: number) {super(size); queues.push(size);}});
+        vi.stubGlobal('Uint8ClampedArray', class extends Pixels {constructor(input: Uint8ClampedArray) {super(input); copies();}});
+        expect(inpaintTextRegions(source, 60, 60, Array.from({length: 1000}, () => line(20, 20, 24, 24)), true)).toBe(source);
+        expect(masks).toEqual([100]);
+        expect(queues).toEqual([]);
+        expect(copies).not.toHaveBeenCalled();
+        expect(Array.from(source.slice((22 * 60 + 22) * 4, (22 * 60 + 22) * 4 + 4))).toEqual([20, 60, 90, 185]);
+    });
+
+    it('相邻独立簇逐簇等价快填，紧邻的非均匀边界仍使用原扩散', () => {
+        const source = solidPixels(60, 60), boxes = [line(10, 20, 14, 24), line(20, 20, 24, 24)];
+        source.set([0, 0, 0, 255], (18 * 60 + 18) * 4);
+        source.set([0, 0, 0, 255], (22 * 60 + 16) * 4);
+        source.set([0, 0, 0, 255], (22 * 60 + 12) * 4);
+        const first = inpaintTextRegions(source, 60, 60, boxes);
+        const reversed = inpaintTextRegions(source, 60, 60, boxes.slice().reverse());
+        expect(first).toEqual(reversed);
+        // 只依据实际紧邻边界，第二簇的快填不会抹去第一簇边界旁的黑色残字影响。
+        expect(first[(22 * 60 + 15) * 4]).toBeLessThan(180);
+        expect(inpaintTextRegions(source.slice(), 60, 60, boxes, true)).toEqual(first);
     });
 });

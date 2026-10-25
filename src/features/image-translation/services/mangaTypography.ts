@@ -1,7 +1,7 @@
 /**
  * @file src/features/image-translation/services/mangaTypography.ts
  * 文件职责：在漫画原有区域内排版完整译文，区分对白与大标题并保持东亚标点的阅读习惯。
- * 主要内容：保留词、字素与显式换行，闭标点跟随前字、开标点跟随后字；按真实 Canvas 度量二分适配字号，仅在本次排版内复用长词分段，逐项求最大宽度以兼容大量段落与行；末行过短时平衡行宽而不增加行数，不截字、不横向压缩。
+ * 主要内容：保留词、字素与显式换行，闭标点跟随前字、开标点跟随后字；按真实 Canvas 字宽和可用字形上下界二分适配字号，单行不重复扣除行距，多行仍保留基线间距，缺少完整字形指标时沿用行框；合并字形有效性与最大行距遍历，基线数组就地归一化，减少临时数组而不改变浮点运算顺序；仅在本次排版内复用长词分段，逐项求最大宽高以兼容大量段落与行；末行过短时平衡行宽而不增加行数或越过字形预算，不截字、不横向压缩。
  * 模块边界：纯文字和度量算法，不读取页面、配置或字体资源，不识别、翻译或修补图片；普通图片继续使用独立的通用排版。
  */
 import type {ImageTranslationTextLayout} from './rendering';
@@ -11,6 +11,9 @@ const OPEN = /^[（【「『《〈“‘(\[]+$/u;
 const CLOSE = /^[，。！？、；：）】」』》〉”’….,!?;:)\]]+$/u;
 const CJK = /\s+|[\u2e80-\u9fff\u3040-\u30ff\uac00-\ud7af]\p{Mark}*|[^\s\u2e80-\u9fff\u3040-\u30ff\uac00-\ud7af]+/gu;
 const segmenter = typeof Intl.Segmenter === 'function' ? new Intl.Segmenter(undefined, {granularity:'grapheme'}) : undefined;
+
+export interface MangaGlyphMetrics {ascent: number; descent: number}
+export interface MangaTextLayout extends ImageTranslationTextLayout {ink?: {height: number; baselines: number[]}}
 
 function bindPunctuation(tokens: string[]): string[] {
     const result: string[] = [];
@@ -26,7 +29,8 @@ function bindPunctuation(tokens: string[]): string[] {
 
 /** 准确测量候选整行；长单词仅在必须时拆字素，带组合音标和 emoji 的字素保持完整。 */
 export function layoutMangaTranslationText(text: string, width: number, height: number,
-    measure: (text: string, size: number) => number, maxSize: number): ImageTranslationTextLayout {
+    measure: (text: string, size: number) => number, maxSize: number,
+    measureInk?: (text: string, size: number) => MangaGlyphMetrics | undefined): MangaTextLayout {
     const normalized = text.replace(/\r\n?/gu, '\n').trim();
     if (!normalized || ![width,height,maxSize].every(value => Number.isFinite(value) && value > 0)) return {lines:[],fontSize:0,lineHeight:0};
     const paragraphs = normalized.split('\n').map(paragraph => paragraph.trim());
@@ -55,24 +59,42 @@ export function layoutMangaTranslationText(text: string, width: number, height: 
             }
             lines.push(current);
         }
-        return {lines,fontSize:size,lineHeight:size * 1.2};
+        const layout: MangaTextLayout = {lines,fontSize:size,lineHeight:size * 1.2};
+        if (!measureInk) return layout;
+        // 空段仍占一个行距；任何非空行缺少完整指标时保守使用既有行框。
+        const metrics = lines.map(line=>line ? measureInk(line,size) : {ascent:size*.6,descent:size*.6});
+        let lineHeight = layout.lineHeight;
+        for (const metric of metrics) {
+            if (!metric || !Number.isFinite(metric.ascent) || !Number.isFinite(metric.descent) || !Number.isFinite(metric.ascent+metric.descent) || metric.ascent+metric.descent<=0) return layout;
+            lineHeight = Math.max(lineHeight,metric.ascent+metric.descent);
+        }
+        layout.lineHeight = lineHeight;
+        let top = Infinity, bottom = -Infinity;
+        const baselines = (metrics as MangaGlyphMetrics[]).map((metric,index)=>{
+            const baseline = index*layout.lineHeight;
+            top = Math.min(top,baseline-metric.ascent);bottom = Math.max(bottom,baseline+metric.descent);
+            return baseline;
+        });
+        for (let index=0;index<baselines.length;index++) baselines[index] -= top;
+        layout.ink = {height:bottom-top,baselines};
+        return layout;
     };
-    const fits = (layout: ImageTranslationTextLayout) => layout.lines.length * layout.lineHeight <= height
+    const fits = (layout: MangaTextLayout) => (layout.ink?.height ?? layout.lines.length * layout.lineHeight) <= height
         && layout.lines.every(line => measure(line,layout.fontSize) <= width);
     // 保留字号与行数，仅在末行明显过短时收拢行宽，避免气泡中留下单独的「了。」。
-    const balance = (layout: ImageTranslationTextLayout) => {
+    const balance = (layout: MangaTextLayout) => {
         if (paragraphs.length !== 1 || layout.lines.length < 2) return layout;
         const lengths = layout.lines.map(line => measure(line,layout.fontSize));
         if (lengths[lengths.length-1] >= lengths.reduce((largest, length) => Math.max(largest, length), -Infinity) * .55) return layout;
         let low = 0, high = width, best = layout;
         for (let iteration = 0; iteration < 5; iteration++) {
             const limit = (low + high) / 2, candidate = wrap(layout.fontSize,limit);
-            if (candidate.lines.length === layout.lines.length && candidate.lines.every(line=>measure(line,layout.fontSize)<=limit)) {high = limit; best = candidate;}
+            if (candidate.lines.length === layout.lines.length && candidate.lines.every(line=>measure(line,layout.fontSize)<=limit) && fits(candidate)) {high = limit; best = candidate;}
             else low = limit;
         }
         return best;
     };
-    let high = Math.min(maxSize,height / 1.2);
+    let high = measureInk ? maxSize : Math.min(maxSize,height / 1.2);
     const largest = wrap(high);
     if (fits(largest)) return balance(largest);
     let low = Math.min(1,width / paragraphs.reduce((largest, paragraph) => Math.max(largest, measure(paragraph,1)), 1),height / (paragraphs.length * 1.2)) * .99;

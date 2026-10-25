@@ -1,7 +1,7 @@
 /**
  * @file src/features/image-translation/content/runtime.ts
  * 文件职责：实现网页图片翻译的独立悬浮/右键入口、可信目标快照、异步请求所有权和单图及漫画连续模式的原图/译图切换，保持宿主图片与响应式图片资源不变。
- * 主要内容：单图失败提供模型与服务导航，译图操作条随指针隐藏并保留键盘入口；指针局部检查仅在本次调用内复用同图几何与样式读取，第二个重叠命中立即停止，下一帧重新定位；单图识别方式纳入缓存身份，切换后不复用旧结果；在封闭 Shadow DOM 中挂载原生译图，跟随图片盒模型与祖先裁切；合并布局更新，默认 12 张可配置的快速缓存和 100 页/16 MiB 二进制局部结果，靠近视口时直接预合成画布，无文字页只保留轻量完成标记；返页不复用已经取消的预合成，旧任务结束不能删除新任务；漫画状态以订阅快照发送并隔离同步异常，避免订阅变化重复递送或阻断请求和卸载；图片重载、独立服务及模型变化使结果失效；组合按所选成员的安全连接摘要建立响应式依赖，成员变更撤销旧任务与缓存，漫画返页复用结果不等待其他页推理；预合成不得撤下当前译图，单页反馈展示真实阶段与进度，隐藏漫画操作条，换图、取消与卸载时释放资源。
+ * 主要内容：单图失败提供模型与服务导航，译图操作条随指针隐藏并保留键盘入口；指针局部检查仅在本次调用内复用同图几何与样式读取，第二个重叠命中立即停止，下一帧重新定位；单图识别方式纳入缓存身份，切换后不复用旧结果；在封闭 Shadow DOM 中挂载原生译图，跟随图片盒模型与祖先裁切；合并布局更新，默认 12 张可配置的快速缓存和 100 页/16 MiB 二进制局部结果，靠近视口时直接预合成画布，无文字页只保留轻量完成标记；返页不复用已经取消的预合成，旧任务结束不能删除新任务；漫画状态以订阅快照发送并隔离同步异常，避免订阅变化重复递送或阻断请求和卸载；图片重载、独立服务及模型变化使结果失效；组合按所选成员的安全连接摘要建立响应式依赖，成员变更撤销旧任务与缓存，漫画返页复用结果不等待其他页推理；预合成不得撤下当前译图，单页反馈展示真实阶段与进度，漫画错误恢复跟随图片可见边缘，正常处理与完成隐藏操作条，换图、取消与卸载时释放资源。
  * 模块边界：本运行时在读取预算内异步编码页面允许访问的 Canvas，污染画布先走网页 CORS，再按剩余预算授权后台读取当前任务图片；共用 PNG 编码器处理取消/迟到结果，识别、文本翻译、图像修复与语言包管理位于 background/services，控件交互由 controls 模块提供。
  */
 import {imageTranslationFailureCode, imageLocalFailureMessage, type ImageLocalFailure} from '../failure';
@@ -22,7 +22,7 @@ import {fetchPageImageForOcr} from '@/src/features/image-translation/services/re
 import {encodeImageCanvas} from '@/src/features/image-translation/services/imageEncoding';
 import {withImageSourceAuthorization} from './sourceAuthorization';
 import {resolveImagePresentation, surfaceStyleToBitmap, presentationMatchesSource, isImagePresentationOccluded, type ImagePresentation} from './presentation';
-import {createImageControls, IMAGE_CONTROLS_CSS, type ImageControlPhase} from './controls';
+import {createImageControls, IMAGE_CONTROLS_CSS, type ImageControlPhase, type ImageSettingsSection} from './controls';
 import {isImageHoverEligible} from './hoverEligibility';
 import {createMangaReader} from './mangaReader';
 import type {MangaTranslationStatus} from './mangaSession';
@@ -32,7 +32,7 @@ import {compressMangaPage, createMangaLightCache, type MangaCompressedPage} from
 import {composeMangaPage} from './mangaCompositor';
 import {createMangaCanvas} from './mangaCanvas';
 import {createMangaBackground} from './mangaBackground';
-import {createMangaImageSegments} from './mangaImageSegments';
+import {createMangaImageSegments, type MangaImageSegment} from './mangaImageSegments';
 import {getMangaOcrEngine} from '../ocrLanguages';
 
 const IMAGE_TRANSLATION_OVERLAY = 'fluent-read-image-translation-overlay';
@@ -200,7 +200,7 @@ function prepareMangaCachedImages(images: HTMLImageElement[]): void {
 }
 
 let mangaReader: ReturnType<typeof createMangaReader> | null = null;
-let mangaCanvas: ReturnType<typeof createMangaCanvas> | null = null;
+let mangaCanvas: ReturnType<typeof createMangaCanvas<HTMLCanvasElement>> | null = null;
 let mangaBackground: ReturnType<typeof createMangaBackground> | null = null;
 let mangaSegments: ReturnType<typeof createMangaImageSegments> | null = null;
 let mangaStatus: MangaTranslationStatus = {available: false, active: false, pending: false, errors: 0};
@@ -617,7 +617,7 @@ function updateOverlayPosition(state: ImageTranslationState): void {
     state.overlay.style.clipPath = `inset(${top - rect.top}px ${rect.right - right}px ${rect.bottom - bottom}px ${left - rect.left}px)`;
     state.controls.element.style.setProperty('left', `${left - rect.left + 8}px`, 'important');
     state.controls.element.style.setProperty('bottom', `${rect.bottom - bottom + 8}px`, 'important');
-    const edgeFeedback = state.manga && state.phase === 'loading';
+    const edgeFeedback = state.manga && (state.phase === 'loading' || state.phase === 'error');
     state.controls.feedback.style.left = `${edgeFeedback ? left - rect.left + 8 : (left + right) / 2 - rect.left}px`;
     state.controls.feedback.style.top = `${edgeFeedback ? top - rect.top + 8 : (top + bottom) / 2 - rect.top}px`;
     state.controls.feedback.style.maxHeight = `${Math.max(0, bottom - top - 16)}px`;
@@ -646,6 +646,12 @@ function updateOverlayPosition(state: ImageTranslationState): void {
     if (bitmap.isConnected && state.overlay.isConnected) hideOriginalImage(state);
 }
 
+async function openImageTranslationSettings(section: ImageSettingsSection): Promise<void> {
+    const response = await sendRuntimeMessage({type: 'openOptionsPage', section,
+        ...(section === 'settings-services' ? {service: 'localTranslation'} : {})});
+    if (response?.success !== true) throw new Error('无法打开设置，请从扩展菜单打开设置后重试');
+}
+
 function createState(image: HTMLImageElement, hoverEntry = false): ImageTranslationState {
     const overlay = document.createElement('div');
     overlay.className = IMAGE_TRANSLATION_OVERLAY;
@@ -666,10 +672,7 @@ function createState(image: HTMLImageElement, hoverEntry = false): ImageTranslat
         onSettings: (section) => {
             const state = states.get(image);
             if (!state) return;
-            void sendRuntimeMessage({type: 'openOptionsPage', section,
-                ...(section === 'settings-services' ? {service: 'localTranslation'} : {})}).then(response => {
-                if (response?.success !== true) throw new Error('无法打开设置，请从扩展菜单打开设置后重试');
-            }).catch(() => {
+            void openImageTranslationSettings(section).catch(() => {
                 if (states.get(image) === state) setButtonState(state, 'error', '无法打开设置，请从扩展菜单打开设置后重试');
             });
         },
@@ -854,6 +857,7 @@ function loadImage(dataUrl: string, signal: AbortSignal): Promise<HTMLImageEleme
 }
 
 function setButtonState(state: ImageTranslationState, phase: ImageControlPhase, message: string, progress?: number, stage?: ImageTranslationStage): void {
+    const phaseChanged = state.phase !== phase;
     state.phase = phase;
     if (state.manga && phase === 'loading') publishMangaStatus({...mangaStatus, message, progress, stage});
     state.controls.update(phase, message, {
@@ -861,6 +865,8 @@ function setButtonState(state: ImageTranslationState, phase: ImageControlPhase, 
         modelSettings: phase === 'error' && Boolean(state.localFailure),
         serviceSettings: phase === 'error' && !state.needsPreparation, errorDetails: state.errorDetails,
     });
+    // 状态改变本身未必触发下一帧布局；仅阶段切换时布置边缘提示，进度百分比不重复测量图片。
+    if (state.manga && phaseChanged && (phase === 'loading' || phase === 'error')) updateOverlayPosition(state);
 }
 
 function ownsHiddenImage(state: ImageTranslationState): boolean {
@@ -1302,10 +1308,16 @@ export function mountImageTranslator(): void {
                 publishMangaStatus({...mangaStatus, stage, progress});
             }});
     };
-    mangaCanvas = createMangaCanvas({
+    const recovery = {
+        retry: (surface: HTMLElement | MangaImageSegment) => mangaReader?.retry(surface) ?? false,
+        openSettings: openImageTranslationSettings,
+        translateUi: (source: string) => translateLegacyText(source, normalizeUiLanguage(config.uiLanguage)),
+    };
+    mangaCanvas = createMangaCanvas<HTMLCanvasElement>({
         enabled: () => mounted && imageTranslationAllowed(true),
         configurationIdentity: () => configurationIdentity(true),
         cacheEnabled: () => config.useCache,
+        recovery,
         acceptsInteractionLayer: (_canvas, hit) => {
             const selector = resolveMangaSite(window.location.href, config.imageTranslationMangaSites)?.canvasInteractionSelector;
             return !!selector && hit.matches(selector);
@@ -1316,6 +1328,7 @@ export function mountImageTranslator(): void {
         enabled: () => mounted && imageTranslationAllowed(true),
         configurationIdentity: () => configurationIdentity(true),
         cacheEnabled: () => config.useCache,
+        recovery,
         ready: () => mangaReader?.schedule(),
         translate: translateSnapshot,
     });
@@ -1323,6 +1336,7 @@ export function mountImageTranslator(): void {
         enabled: () => mounted && imageTranslationAllowed(true),
         configurationIdentity: () => configurationIdentity(true),
         cacheEnabled: () => config.useCache,
+        recovery,
         imageIdentity: sourceIdentity,
         readSource: (image, signal) => readAuthorizedImage(image, {signal}),
         translate: translateSnapshot,
@@ -1361,7 +1375,10 @@ export function mountImageTranslator(): void {
         if (next.uiLanguage === currentUiLanguage) return;
         const language = currentUiLanguage = next.uiLanguage;
         renderWithUiLanguageBundle(language, () => {
-            if (mounted && currentUiLanguage === language) activeStates.forEach(state => state.controls.refreshLanguage());
+            if (mounted && currentUiLanguage === language) {
+                activeStates.forEach(state => state.controls.refreshLanguage());
+                mangaCanvas?.refreshLanguage();mangaBackground?.refreshLanguage();mangaSegments?.refreshLanguage();
+            }
         });
     });
     document.addEventListener('contextmenu', handleImageContextMenu, true);

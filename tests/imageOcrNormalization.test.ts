@@ -86,6 +86,48 @@ describe('普通图片按完整段落翻译', () => {
         expect(groupImageParagraphs([])).toEqual([]);
     });
 
+    it('单图竖排列按右到左合为完整日文，保留逐列擦除框和字形宽度', () => {
+        const right = {...line('今日は', 90, 20, 12, 100), vertical: true as const};
+        const left = {...line('楽しかった。', 76, 21, 12, 99), vertical: true as const, fontSize: 12};
+        const input = [left, right];
+        const before = structuredClone(input);
+        expect(groupImageParagraphs(input)).toEqual([{
+            text: '今日は楽しかった。', bbox: {x0: 76, y0: 20, x1: 102, y1: 120},
+            vertical: true, fontSize: 12, sourceBoxes: [right.bbox, left.bbox], textAlign: 'center',
+        }]);
+        expect(input).toEqual(before);
+    });
+
+    it('竖排保留独立气泡、不同字号和横排遮挡边界，预合并区域原样返回', () => {
+        const column = (text: string, x: number, y = 20, width = 12) =>
+            ({...line(text, x, y, width, 100), vertical: true as const});
+        for (const input of [
+            [column('右列', 90), column('左列', 60)],
+            [column('右列', 90), column('左列', 76, 180)],
+            [column('右列', 90), column('小字', 80, 20, 5)],
+            [column('右列', 90), line('横排标签', 89, 50, 1, 12), column('左列', 76)],
+            [column('右列', 90), {...column('已有段落', 76), sourceBoxes: [column('', 76).bbox]}, column('左列', 62)],
+        ]) {
+            const output = groupImageParagraphs(input);
+            expect(output).toHaveLength(input.length);
+            for (const original of input) expect(output).toContain(original);
+        }
+    });
+
+    it('大图竖排复用遮挡索引，横排标签仍阻止跨列合并且输入不变', () => {
+        const column = (text: string, x: number, y = 20) => ({...line(text, x, y, 12, 100), vertical: true as const});
+        const right = column('今天', 190), next = column('很开心。', 176);
+        const blockedRight = column('右列', 90), blockedLeft = column('左列', 76);
+        const label = line('标签', 89, 50, 1);
+        const input = [blockedLeft, right, label, next, blockedRight,
+            ...Array.from({length: 80}, (_, index) => column(`独立${index}`, 200 + index * 40, 300))];
+        const before = structuredClone(input);
+        const output = groupImageParagraphs(input);
+        expect(output.find(region => region.text === '今天很开心。')?.sourceBoxes).toEqual([right.bbox, next.bbox]);
+        expect(output).toContain(blockedRight);expect(output).toContain(blockedLeft);expect(output).toContain(label);
+        expect(output).toHaveLength(input.length - 1);expect(input).toEqual(before);
+    });
+
     it('两千条连续正文的遮挡查找不反复读取后续整图横坐标', () => {
         let coordinateReads = 0;
         const input = Array.from({length: 2000}, (_, index) => {
