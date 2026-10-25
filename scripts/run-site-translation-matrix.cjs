@@ -195,7 +195,7 @@ function validateMatrix(caseConfigs = CASES) {
   if (!pr4038?.forbiddenMustExistSelectors?.includes("button[aria-haspopup='dialog'][aria-label*='search' i]") ||
       !pr4038?.interactionScenarios?.some((scenario) =>
         scenario.triggerSelector === "button[aria-haspopup='dialog'][aria-label*='search' i]" &&
-        scenario.dialogSelector === "[role='dialog'][aria-modal='true']" &&
+        scenario.dialogSelector === "[role='dialog'][aria-modal='true']:has([role='combobox'])" &&
         scenario.comboboxSelector === "[role='combobox']" &&
         scenario.listboxSelector === "[role='listbox']" && scenario.inputText === 'issues' &&
         scenario.closeAttempts === 3)) {

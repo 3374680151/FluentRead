@@ -2845,7 +2845,7 @@ describe('real-site translation matrix gates', () => {
       expect.objectContaining({
         triggerSelector: "button[aria-haspopup='dialog'][aria-label*='search' i]",
         openKey: 'click',
-        dialogSelector: "[role='dialog'][aria-modal='true']",
+        dialogSelector: "[role='dialog'][aria-modal='true']:has([role='combobox'])",
         comboboxSelector: "[role='combobox']",
         listboxSelector: "[role='listbox']",
         inputText: 'issues',
