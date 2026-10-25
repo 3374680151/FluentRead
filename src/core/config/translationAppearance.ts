@@ -69,6 +69,7 @@ export const TRANSLATION_STYLE_CATEGORIES: ReadonlyArray<{readonly value: Transl
  * 数组顺序即设置页卡片顺序；旧版下拉按分组内编号排序，已有预设的相对位置保持不变。
  * 24 以后的编号为新增预设，线条类改用 text-decoration，使多行译文逐行带线。
  * 29 以后的装饰预设以网页文字颜色调配线条与底色；49 至 57 号与三款既有趣味配色单列为“颜色”分类，品牌粉沿用界面品牌源色，与图标保持同一色系。
+ * 58 至 70 号补充卡片与趣味分类，各提供 12 种；新增效果仍共用外观变量，不改变已发布编号与保存的样式。
  */
 export const TRANSLATION_STYLE_PRESETS: readonly TranslationStylePreset[] = [
     {value: 0, className: 'fluent-display-default', label: '朴素模式', legacyGroup: 'basic', category: 'text', usesLine: false, usesFill: false},
@@ -127,6 +128,13 @@ export const TRANSLATION_STYLE_PRESETS: readonly TranslationStylePreset[] = [
     {value: 9, className: 'fluent-display-paper', label: '纸张卡片', legacyGroup: 'card', category: 'card', usesLine: true, usesFill: false},
     {value: 20, className: 'fluent-display-tech', label: '代码风格', legacyGroup: 'pro', category: 'card', usesLine: true, usesFill: false},
     {value: 39, className: 'fluent-display-glass', label: '毛玻璃卡片', legacyGroup: 'card', category: 'card', usesLine: false, usesFill: true},
+    {value: 58, className: 'fluent-display-card-outline', label: '细边卡片', legacyGroup: 'card', category: 'card', usesLine: true, usesFill: true},
+    {value: 59, className: 'fluent-display-card-accent', label: '侧栏卡片', legacyGroup: 'card', category: 'card', usesLine: true, usesFill: true},
+    {value: 60, className: 'fluent-display-card-double', label: '双线卡片', legacyGroup: 'card', category: 'card', usesLine: true, usesFill: true},
+    {value: 61, className: 'fluent-display-card-folded', label: '折角卡片', legacyGroup: 'card', category: 'card', usesLine: true, usesFill: true},
+    {value: 62, className: 'fluent-display-card-floating', label: '悬浮卡片', legacyGroup: 'card', category: 'card', usesLine: false, usesFill: true},
+    {value: 63, className: 'fluent-display-card-stacked', label: '叠层卡片', legacyGroup: 'card', category: 'card', usesLine: true, usesFill: true},
+    {value: 64, className: 'fluent-display-card-dashed', label: '虚线卡片', legacyGroup: 'card', category: 'card', usesLine: true, usesFill: true},
 
     {value: 43, className: 'fluent-display-rainbow-underline', label: '彩虹底线', legacyGroup: 'fun', category: 'fun', usesLine: false, usesFill: false, inlineText: true},
     {value: 44, className: 'fluent-display-hand-drawn', label: '手绘圈注', legacyGroup: 'fun', category: 'fun', usesLine: true, usesFill: false},
@@ -134,6 +142,12 @@ export const TRANSLATION_STYLE_PRESETS: readonly TranslationStylePreset[] = [
     {value: 46, className: 'fluent-display-chat-bubble', label: '对话气泡', legacyGroup: 'fun', category: 'fun', usesLine: false, usesFill: true},
     {value: 47, className: 'fluent-display-terminal', label: '终端风格', legacyGroup: 'fun', category: 'fun', usesLine: true, usesFill: false},
     {value: 48, className: 'fluent-display-spoiler', label: '黑幕遮挡', legacyGroup: 'fun', category: 'fun', usesLine: false, usesFill: false, inlineText: true, revealOnHover: true},
+    {value: 65, className: 'fluent-display-tape-note', label: '胶带手账', legacyGroup: 'fun', category: 'fun', usesLine: true, usesFill: true},
+    {value: 66, className: 'fluent-display-postage', label: '邮票边框', legacyGroup: 'fun', category: 'fun', usesLine: true, usesFill: true},
+    {value: 67, className: 'fluent-display-dot-note', label: '波点手账', legacyGroup: 'fun', category: 'fun', usesLine: true, usesFill: true},
+    {value: 68, className: 'fluent-display-grid-note', label: '方格笔记', legacyGroup: 'fun', category: 'fun', usesLine: true, usesFill: true},
+    {value: 69, className: 'fluent-display-spotlight', label: '聚光舞台', legacyGroup: 'fun', category: 'fun', usesLine: true, usesFill: true},
+    {value: 70, className: 'fluent-display-bookmark', label: '书签丝带', legacyGroup: 'fun', category: 'fun', usesLine: true, usesFill: true},
 ];
 
 export function getTranslationStylePreset(value: unknown): TranslationStylePreset | undefined {
