@@ -189,6 +189,6 @@ watch(() => [active.value, props.context, props.config], () => closeDialog(), {f
   .custom-provider-form :deep(.composite-setting-row) { grid-template-columns: minmax(0, 1fr); gap: 5px; }
   .custom-provider-form :deep(.composite-member-list li) { flex-wrap: wrap; }
   .custom-provider-form :deep(.member-actions) { flex-basis: 100%; justify-content: flex-end; gap: 4px; }
-  .custom-provider-form :deep(.composite-advanced summary) { box-sizing: border-box; min-height: 44px; max-width: 100%; padding-block: 12px; overflow-wrap: anywhere; }
+  .custom-provider-form :deep(.composite-advanced summary) { box-sizing: border-box; min-height: 44px; max-width: 100%; margin-inline-start: 0; padding-block: 12px; overflow-wrap: anywhere; }
 }
 </style>

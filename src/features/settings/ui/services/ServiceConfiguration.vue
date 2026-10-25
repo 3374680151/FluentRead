@@ -1427,18 +1427,18 @@ watch(serviceActionOpen, open => {if (!open) pendingServiceAction.value = null},
 .connection-card > :deep(.api-key-list:first-child) { border-top: 0; }
 .connection-card > .configuration-scope { padding: 14px 0 6px; }
 .connection-test-inline { display: flex; align-items: center; justify-content: flex-start; gap: 12px; flex-wrap: wrap; margin: 14px 0; }
-.connection-test-button { display: inline-flex; align-items: center; justify-content: center; gap: 7px; min-height: 36px; padding: 7px 12px; border: 1px solid var(--brand-border, #f3c0ce); border-radius: 9px; color: var(--brand-strong, #bd2853); background: var(--brand-soft, #fff0f4); font-size: 12px; font-weight: 600; cursor: pointer; }
+.connection-test-button { display: inline-flex; align-items: center; justify-content: center; gap: 7px; min-width: 0; max-width: 100%; min-height: 36px; padding: 7px 12px; border: 1px solid var(--brand-border, #f3c0ce); border-radius: 8px; color: var(--brand-strong, #bd2853); background: var(--brand-soft, #fff0f4); font-size: 12px; font-weight: 600; line-height: 1.5; overflow-wrap: anywhere; cursor: pointer; }
 .connection-test-button:hover:not(:disabled) { border-color: var(--brand); }
 .connection-test-button:disabled { cursor: wait; opacity: .65; }
 .connection-action-icon { flex: none; }
 .is-spinning { animation: connection-spin 1s linear infinite; }
 @keyframes connection-spin { to { transform: rotate(360deg); } }
-.service-connection-action { position: relative; }
-.service-connection-action .connection-test-button { width: auto; min-width: 116px; white-space: nowrap; }
+.service-connection-action { position: relative; display: flex; width: 100%; min-width: 0; }
+.service-connection-action .connection-test-button { width: 100%; white-space: normal; }
 .header-connection-status { position: absolute; top: calc(100% + 3px); right: 0; color: var(--muted); font-size: 11px; line-height: 17px; white-space: nowrap; }
 .header-connection-status.is-success { color: var(--el-color-success); }
 .header-connection-status.is-error { color: var(--el-color-danger); }
-.service-connection-action .connection-test-inline { margin: 0; justify-content: space-between; }
+.service-connection-action .connection-test-inline { width: 100%; margin: 0; align-items: stretch; }
 .connection-test-result { display: grid; gap: 4px; margin-top: 12px; padding: 12px 14px; border: 1px solid var(--line); border-radius: 10px; color: var(--ink); background: var(--surface-soft); font-size: 12px; line-height: 1.6; overflow-wrap: anywhere; }
 .chrome-preparation-progress { margin-top: 4px; }
 .connection-test-result.is-success { border-color: var(--el-color-success-light-5); color: var(--el-color-success); background: var(--el-color-success-light-9); }

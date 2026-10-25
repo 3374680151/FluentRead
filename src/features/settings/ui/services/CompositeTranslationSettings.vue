@@ -1,7 +1,7 @@
 <!--
  * @file src/features/settings/ui/services/CompositeTranslationSettings.vue
  * 文件职责：编辑已保存的组合服务，并提供有当前服务归属的删除确认。
- * 主要内容：草稿显式保存名称、成员顺序、三种策略和逐路超时，保存后由共享配置观察器持久化；配置或服务切换、停用和删除确认重开时淘汰旧事件。
+ * 主要内容：草稿显式保存名称、成员顺序、三种策略和逐路超时，保存后由共享配置观察器持久化；底部操作沿用字段列宽与间距，窄容器切为单列；配置或服务切换、停用和删除确认重开时淘汰旧事件。
  * 模块边界：只更新不含凭据的组合配置；删除事件由 SettingsSections 清理默认引用，连接测试由 ServiceConfiguration 经已有后台消息执行。
  -->
 <template>
@@ -64,12 +64,16 @@ watch(() => [props.config, props.service, provider.value], () => {Object.assign(
 watch(() => active.value, () => {deleteOpen.value = false}, {flush: 'sync'})
 </script>
 <style scoped>
-.composite-settings { display: grid; gap: 18px; width: 100%; max-width: 760px; }
-footer { display: flex; align-items: center; flex-wrap: wrap; gap: 9px; padding-left: 114px; }
-button { min-height: 34px; padding: 6px 12px; border: 1px solid var(--line); border-radius: 8px; color: var(--ink); background: var(--surface); font: inherit; font-size: 12px; cursor: pointer; }
+.composite-settings { --composite-label-width: 100px; --composite-column-gap: 14px; container: composite-editor / inline-size; display: grid; gap: 16px; width: 100%; max-width: 760px; }
+footer { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-inline-start: calc(var(--composite-label-width) + var(--composite-column-gap)); }
+button { display: inline-flex; align-items: center; justify-content: center; min-height: 36px; padding: 7px 14px; border: 1px solid var(--line); border-radius: 8px; color: var(--ink); background: var(--surface); font: inherit; font-size: 12px; line-height: 1.5; cursor: pointer; }
 .delete-button { border-color: transparent; color: var(--el-color-danger); }
 .save-button { border-color: var(--brand, #ef4776); color: white; background: var(--brand, #ef4776); }
+.delete-button:hover:not(:disabled) { background: var(--el-color-danger-light-9); }
+.save-button:hover:not(:disabled) { background: var(--brand-strong); border-color: var(--brand-strong); }
+button:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; }
 .saved-status { color: var(--muted); font-size: 12px; }
 button:disabled { opacity: .5; cursor: default; }
-@media (max-width: 560px) { footer { padding-left: 0; } }
+@container composite-editor (max-width: 480px) { footer { margin-inline-start: 0; } }
+@media (max-width: 560px) { footer { margin-inline-start: 0; } }
 </style>
