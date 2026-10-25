@@ -3,7 +3,6 @@ import {resolve} from 'node:path';
 import {describe, expect, it, vi} from 'vitest';
 import {buildConfigDiff} from '@/src/core/config/diff';
 import {createPopupPageFontActions, type PopupPageFontState} from '@/src/app/popup/pageFontActions';
-import type {PopupActiveTab} from '@/src/app/popup/pageContracts';
 
 describe('Popup actions across configuration and page state', () => {
     it('关闭前的记忆字段保存在配置中但不重复进入用户差异预览', () => {
@@ -21,126 +20,90 @@ describe('Popup actions across configuration and page state', () => {
 });
 
 function pageFontFixture() {
-    const state: PopupPageFontState = {browserDefault: null, loading: false, busy: false, unavailable: false, error: ''};
-    const tab: PopupActiveTab = {id: 7, url: 'https://example.com/article'};
-    const snapshot = {status: 'success', browserDefault: false, documentToken: 'document-a', pageUrl: tab.url!};
+    const state: PopupPageFontState = {busy: false, error: ''};
+    const preference = {value: false};
     let active = true;
-    const getTab = vi.fn(async (): Promise<PopupActiveTab | undefined> => ({...tab}));
-    const send = vi.fn(async (_id: number, message: {type: string; browserDefault?: boolean; documentToken?: string; pageUrl?: string}): Promise<unknown> => ({...snapshot,
-        browserDefault: message.type === 'setPageTranslationFont' ? message.browserDefault : snapshot.browserDefault}));
-    const actions = createPopupPageFontActions({state, getTab, send, active: () => active});
-    return {state, tab, snapshot, getTab, send, actions, pause: () => {active = false;}, deactivate: () => {active = false;actions.invalidate();}};
+    const save = vi.fn(async (browserDefault: boolean): Promise<void> => {preference.value = browserDefault;});
+    const actions = createPopupPageFontActions({state, read: () => preference.value, save, active: () => active});
+    return {state, preference, save, actions, pause: () => {active = false;}, resume: () => {active = true;},
+        deactivate: () => {active = false;actions.invalidate();}};
 }
-function pendingFontReply<T = unknown>() {
-    let resolve!: (value: T) => void;
-    const promise = new Promise<T>(yes => {resolve = yes;});
+function pendingFontReply() {
+    let resolve!: () => void;
+    const promise = new Promise<void>(yes => {resolve = yes;});
     return {promise, resolve};
 }
 async function flushFontTasks() {for (let index = 0; index < 12; index++) await Promise.resolve();}
 
-describe('Popup current-page font document ownership', () => {
-    it('读取真实来源并仅在确认后切换与还原，不发送翻译或配置消息', async () => {
-        const f = pageFontFixture();await f.actions.load();expect(f.state.browserDefault).toBe(false);
-        const pending = f.actions.set(true);expect(f.state.busy).toBe(true);expect(f.state.browserDefault).toBe(false);await pending;
-        expect(f.state.browserDefault).toBe(true);expect(f.state.busy).toBe(false);
-        expect(f.send).toHaveBeenLastCalledWith(7, {type: 'setPageTranslationFont', browserDefault: true, documentToken: 'document-a', pageUrl: f.tab.url});
-        await f.actions.set(false);expect(f.state.browserDefault).toBe(false);
-        expect(f.send.mock.calls.map(call => call[1].type)).toEqual(['getPageTranslationFontState', 'setPageTranslationFont', 'setPageTranslationFont']);
+describe('Popup global translation-font preference save feedback', () => {
+    it('通过已有配置端口保存双向选择，controller 不另存字体状态', async () => {
+        const f = pageFontFixture();
+        const pending = f.actions.set(true);expect(f.state.busy).toBe(true);await pending;
+        expect(f.preference.value).toBe(true);expect(f.state).toEqual({busy: false, error: ''});
+        await f.actions.set(false);expect(f.preference.value).toBe(false);expect(f.save.mock.calls).toEqual([[true], [false]]);
+        expect(f.state).not.toHaveProperty('browserDefault');
     });
 
-    it.each([undefined, {id: -1, url: 'https://example.com/'}, {id: 7}, {id: 7, url: 'chrome://settings'}, {id: 7, url: 'extension://popup.html'}])('不支持的来源 %j 禁用动作且不向其他页发送消息', async tab => {
-        const f = pageFontFixture();f.getTab.mockResolvedValue(tab);await f.actions.load();
-        expect(f.state).toMatchObject({unavailable: true, browserDefault: null, loading: false});
-        await f.actions.set(true);expect(f.send).not.toHaveBeenCalled();
+    it('相同选择、损坏值、忙碌和失活均不产生重复保存', async () => {
+        const f = pageFontFixture();await f.actions.retry();await f.actions.set(false);await f.actions.set('true' as never);
+        expect(f.save).not.toHaveBeenCalled();
+        const gate = pendingFontReply();f.save.mockReturnValueOnce(gate.promise);const pending = f.actions.set(true);
+        await f.actions.set(false);await f.actions.retry();expect(f.save).toHaveBeenCalledTimes(1);
+        f.deactivate();gate.resolve();await pending;await f.actions.set(true);expect(f.save).toHaveBeenCalledTimes(1);
+        expect(f.state).toEqual({busy: false, error: ''});
     });
 
-    it.each([undefined, {}, {status: 'error'}, {status: 'success'}, {status: 'success', browserDefault: true},
-        {status: 'success', browserDefault: true, documentToken: '', pageUrl: 'https://example.com/article'},
-        {status: 'success', browserDefault: true, documentToken: 'x'.repeat(129), pageUrl: 'https://example.com/article'},
-        {status: 'success', browserDefault: true, documentToken: 'new', pageUrl: ''}])('损坏回复 %j 不显示假选中且允许重新读取', async response => {
-        const f = pageFontFixture();f.send.mockResolvedValueOnce(response);await f.actions.load();
-        expect(f.state).toMatchObject({browserDefault: null, loading: false, error: 'popup.pageFont.readError'});
-        await f.actions.load();expect(f.state.browserDefault).toBe(false);expect(f.state.error).toBe('');
+    it.each(['reject', 'throw'] as const)('保存 %s 后保留失败目标，同按钮直接重试', async kind => {
+        const f = pageFontFixture();
+        if (kind === 'reject') f.save.mockRejectedValueOnce(Error('save rejected'));
+        else f.save.mockImplementationOnce(() => {throw Error('save threw');});
+        await f.actions.set(true);expect(f.preference.value).toBe(false);expect(f.state).toEqual({busy: false, error: 'popup.pageFont.changeError'});
+        await f.actions.retry();expect(f.preference.value).toBe(true);expect(f.save.mock.calls).toEqual([[true], [true]]);
+        expect(f.state).toEqual({busy: false, error: ''});await f.actions.retry();expect(f.save).toHaveBeenCalledTimes(2);
     });
 
-    it('回复页面地址不匹配及来源读取失败均显示明确错误', async () => {
-        const f = pageFontFixture();f.send.mockResolvedValueOnce({...f.snapshot, pageUrl: 'https://other.example/'});await f.actions.load();
-        expect(f.state.error).toBe('popup.pageFont.readError');
-        f.getTab.mockRejectedValueOnce(new Error('tab closed'));await f.actions.load();expect(f.state.error).toBe('popup.pageFont.readError');
+    it('失败后即便配置已由外部改成目标值，重试仍交给配置端口确认', async () => {
+        const f = pageFontFixture();f.save.mockRejectedValueOnce(Error('unknown confirmation'));await f.actions.set(true);
+        f.preference.value = true;await f.actions.retry();expect(f.save.mock.calls).toEqual([[true], [true]]);expect(f.state.error).toBe('');
     });
 
-    it('读取途中切换标签页只接受重新读取的新页状态', async () => {
-        const f = pageFontFixture(), gate = pendingFontReply();f.send.mockReturnValueOnce(gate.promise);
-        const pending = f.actions.load();await flushFontTasks();f.tab.id = 8;f.tab.url = 'https://example.net/b';
-        f.snapshot.pageUrl = f.tab.url;f.snapshot.documentToken = 'document-b';f.snapshot.browserDefault = true;
-        gate.resolve({status: 'success', browserDefault: false, documentToken: 'document-a', pageUrl: 'https://example.com/article'});await pending;
-        expect(f.state.browserDefault).toBe(true);expect(f.send.mock.calls.map(call => [call[0], call[1].type])).toEqual([[7, 'getPageTranslationFontState'], [8, 'getPageTranslationFontState']]);
+    it('等待期间外部配置胜出，迟到成功不覆盖配置订阅', async () => {
+        const f = pageFontFixture(), gate = pendingFontReply();f.save.mockReturnValueOnce(gate.promise);
+        const pending = f.actions.set(true);f.preference.value = false;gate.resolve();await pending;
+        expect(f.preference.value).toBe(false);expect(f.state).toEqual({busy: false, error: ''});
     });
 
-    it.each(['tab', 'url', 'pendingUrl'])('点击后发现 %s 已变只读新状态，不转发旧选择', async kind => {
-        const f = pageFontFixture();await f.actions.load();
-        if (kind === 'tab') f.tab.id = 8;
-        else if (kind === 'url') f.tab.url = 'https://example.net/new';
-        else f.tab.pendingUrl = 'https://example.net/new';
-        f.snapshot.pageUrl = f.tab.pendingUrl || f.tab.url!;f.snapshot.documentToken = 'new-document';
-        await f.actions.set(true);expect(f.state.browserDefault).toBe(false);
-        expect(f.send.mock.calls.filter(call => call[1].type === 'setPageTranslationFont')).toHaveLength(0);
+    it('关闭只结束界面等待，已接受保存继续持久化且重开读取现有真值', async () => {
+        const f = pageFontFixture(), gate = pendingFontReply();
+        f.save.mockImplementationOnce(async value => {await gate.promise;f.preference.value = value;});
+        const pending = f.actions.set(true);f.deactivate();await pending;expect(f.state).toEqual({busy: false, error: ''});
+        gate.resolve();await flushFontTasks();expect(f.preference.value).toBe(true);expect(f.state.error).toBe('');
+        f.resume();await f.actions.set(false);expect(f.preference.value).toBe(false);
     });
 
-    it('写入途中导航后不接受旧成功回复，并读取当前页状态', async () => {
-        const f = pageFontFixture();await f.actions.load();const gate = pendingFontReply();f.send.mockReturnValueOnce(gate.promise);
-        const pending = f.actions.set(true);await flushFontTasks();f.tab.id = 8;f.tab.url = 'https://example.net/b';
-        const old = {...f.snapshot, browserDefault: true};f.snapshot.pageUrl = f.tab.url;f.snapshot.documentToken = 'document-b';
-        gate.resolve(old);await pending;expect(f.state.browserDefault).toBe(false);expect(f.send).toHaveBeenLastCalledWith(8, {type: 'getPageTranslationFontState'});
+    it('失活后的失败不写回错误，且旧 finally 不能清除新一轮忙碌', async () => {
+        const f = pageFontFixture(), old = pendingFontReply(), fresh = pendingFontReply();
+        f.save.mockReturnValueOnce(old.promise);const first = f.actions.set(true);f.actions.invalidate();
+        f.save.mockReturnValueOnce(fresh.promise);const second = f.actions.set(true);await first;old.resolve();await flushFontTasks();
+        expect(f.state.busy).toBe(true);fresh.resolve();await second;expect(f.state.busy).toBe(false);expect(f.state.error).toBe('');
+        f.save.mockImplementationOnce(async () => {f.pause();throw Error('late failure');});await f.actions.set(true);expect(f.state.error).toBe('');
     });
 
-    it.each(['token', 'url', 'value', 'error', 'reject'])('写入 %s 未获确认时清除选择并提供重试，不声称切换成功', async kind => {
-        const f = pageFontFixture();await f.actions.load();
-        if (kind === 'reject') f.send.mockRejectedValueOnce(new Error('message failed'));
-        else f.send.mockResolvedValueOnce(kind === 'error' ? {status: 'error'} : {...f.snapshot, browserDefault: kind !== 'value',
-            ...(kind === 'token' ? {documentToken: 'new-document'} : {}), ...(kind === 'url' ? {pageUrl: 'https://other.example'} : {})});
-        await f.actions.set(true);expect(f.state).toMatchObject({browserDefault: null, busy: false, error: 'popup.pageFont.changeError'});
-        await f.actions.set(true);expect(f.send).toHaveBeenCalledTimes(2);
-        f.snapshot.browserDefault = true;await f.actions.load();expect(f.state.browserDefault).toBe(true);
+    it('失活期间完成的成功不保留可重试目标', async () => {
+        const f = pageFontFixture(), gate = pendingFontReply();f.save.mockReturnValueOnce(gate.promise);
+        const pending = f.actions.set(true);f.pause();gate.resolve();await pending;
+        expect(f.state).toEqual({busy: false, error: ''});f.resume();await f.actions.retry();expect(f.save).toHaveBeenCalledTimes(1);
     });
 
-    it('未读取、相同选择、忙碌与失活不发送额外写入', async () => {
-        const f = pageFontFixture();await f.actions.set(true);expect(f.send).not.toHaveBeenCalled();
-        await f.actions.load();await f.actions.set(false);await f.actions.set('true' as never);expect(f.send).toHaveBeenCalledTimes(1);
-        const gate = pendingFontReply();f.send.mockReturnValueOnce(gate.promise);const pending = f.actions.set(true);await flushFontTasks();
-        await f.actions.set(false);expect(f.send).toHaveBeenCalledTimes(2);f.deactivate();gate.resolve({...f.snapshot, browserDefault: true});await pending;
-        await f.actions.load();await f.actions.set(true);expect(f.send).toHaveBeenCalledTimes(2);expect(f.state.browserDefault).toBeNull();
-    });
-
-    it('关闭重开重新读取，前次迟到回复不能覆盖新文档或发出旧写入', async () => {
-        const f = pageFontFixture(), gate = pendingFontReply();f.send.mockReturnValueOnce(gate.promise);
-        const oldRead = f.actions.load();await flushFontTasks();f.actions.invalidate();f.snapshot.browserDefault = true;f.snapshot.documentToken = 'reopened';
-        await f.actions.load();gate.resolve({...f.snapshot, browserDefault: false, documentToken: 'old'});await oldRead;expect(f.state.browserDefault).toBe(true);
-        const query = pendingFontReply<PopupActiveTab | undefined>();f.getTab.mockReturnValueOnce(query.promise);const oldWrite = f.actions.set(false);
-        f.actions.invalidate();query.resolve(f.tab);await oldWrite;expect(f.send).toHaveBeenCalledTimes(2);expect(f.state.browserDefault).toBeNull();
-    });
-
-    it.each(['read-source', 'read-message', 'read-validation', 'write-source', 'write-message', 'write-validation'])('%s 等待结束时再次复验活跃上下文，不消费失活后的回复', async phase => {
-        const f = pageFontFixture(), gate = pendingFontReply<any>(), writing = phase.startsWith('write');
-        if (writing) await f.actions.load();
-        if (phase.endsWith('source')) f.getTab.mockReturnValueOnce(gate.promise);
-        else if (phase.endsWith('message')) f.send.mockReturnValueOnce(gate.promise);
-        else f.getTab.mockResolvedValueOnce({...f.tab}).mockReturnValueOnce(gate.promise);
-        const pending = writing ? f.actions.set(true) : f.actions.load();await flushFontTasks();f.pause();
-        gate.resolve(phase.endsWith('message') ? {...f.snapshot, browserDefault: true} : {...f.tab});await pending;
-        expect(f.state).toMatchObject({browserDefault: writing ? false : null, loading: false, busy: false, error: ''});
-        if (phase === 'write-source') expect(f.send.mock.calls.filter(call => call[1].type === 'setPageTranslationFont')).toHaveLength(0);
-    });
-
-    it('读取与切换均有等待上限，超时后的迟到回复不更新选择', async () => {
+    it('等待有上限，迟到保存仍可完成但不清除超时反馈', async () => {
         vi.useFakeTimers();
         try {
-            const f = pageFontFixture(), read = pendingFontReply();f.send.mockReturnValueOnce(read.promise);
-            const loading = f.actions.load();await flushFontTasks();await vi.advanceTimersByTimeAsync(10_000);await loading;
-            expect(f.state.error).toBe('popup.pageFont.readError');read.resolve(f.snapshot);await flushFontTasks();expect(f.state.browserDefault).toBeNull();
-            await f.actions.load();const write = pendingFontReply();f.send.mockReturnValueOnce(write.promise);const changing = f.actions.set(true);
-            await flushFontTasks();await vi.advanceTimersByTimeAsync(10_000);await changing;expect(f.state.error).toBe('popup.pageFont.changeError');
-            write.resolve({...f.snapshot, browserDefault: true});await flushFontTasks();expect(f.state.browserDefault).toBeNull();expect(vi.getTimerCount()).toBe(0);
+            const f = pageFontFixture(), gate = pendingFontReply();
+            f.save.mockImplementationOnce(async value => {await gate.promise;f.preference.value = value;});
+            const pending = f.actions.set(true);await vi.advanceTimersByTimeAsync(10_000);await pending;
+            expect(f.state).toEqual({busy: false, error: 'popup.pageFont.changeError'});
+            gate.resolve();await flushFontTasks();expect(f.preference.value).toBe(true);expect(f.state.error).toBe('popup.pageFont.changeError');
+            await f.actions.retry();expect(f.state.error).toBe('');expect(vi.getTimerCount()).toBe(0);
         } finally {vi.useRealTimers();}
     });
 });
