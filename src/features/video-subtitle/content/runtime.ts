@@ -1,7 +1,7 @@
 /**
  * @file src/features/video-subtitle/content/runtime.ts
  * 文件职责：装配视频及会议字幕运行时，并协调 YouTube/X 原生字幕、目标语言人工轨、逐条翻译、校时、菜单、完整句学习与下载。
- * 主要内容：挂载原句学习与独立本地读音控制器，原文变化立即作废旧读音，字幕隐藏或关闭取消请求；读音开关复用既有配置与菜单并保持仅译文模式语义，说明与下载可独立展开，Escape 逐层关闭且菜单关闭重置临时展开状态；显示模式变化重新授予同句翻译资格并复用已有缓存，不混入字幕原文及导出；媒体切换和配置变化取消有界字幕预取并清理控制，协调字幕校时、预翻译与补译导出确认，并为可选逐字高亮提供当前句时间；X 分片加载尊重原生轨道优先级和原译文成对显示，播放器内换模型保留取消焦点，完整 AI 识别提前展示稳定句，完成后才缓存和导出。
+ * 主要内容：挂载原句学习与独立本地读音控制器，原文变化立即作废旧读音，字幕隐藏或关闭取消请求；读音开关复用既有配置与菜单并保持仅译文模式语义，说明与下载可独立展开，Escape 逐层关闭且菜单关闭重置临时展开状态；双语顺序复用现有外观配置即时保存与重排，不重发翻译；显示模式变化重新授予同句翻译资格并复用已有缓存，不混入字幕原文及导出；媒体切换和配置变化取消有界字幕预取并清理控制，协调字幕校时、预翻译与补译导出确认，并为可选逐字高亮提供当前句时间；X 分片加载尊重原生轨道优先级和原译文成对显示，播放器内换模型保留取消焦点，完整 AI 识别提前展示稳定句，完成后才缓存和导出。
  * 模块边界：本文件只在 content 页面编排，同视频底控的局部显隐订阅与字幕布局共用帧调度，帧内先校准自有菜单宿主再测菜单，并随关闭、重绑和销毁清理；完整 AI 字幕缓存请求与提交身份由 subtitleSession 拥有，requestSession 将完整采集映射为后台单流的唯一请求代际；采集资源仍归 fullCapture，不拦截 fetch/XHR 也不实现翻译 provider，翻译经统一 service client。
  */
 import {createApp, h, shallowReactive} from 'vue';
@@ -92,7 +92,7 @@ import { encodeVideoAiPcm16Base64 } from './video-ai/audioWindow';
 import type { VideoAiStabilizedCue } from './video-ai/streamingTranscript';
 import {browserCapabilities} from '@/src/platform/browser/capabilities';
 import {
-  createVideoPlayerMenu, isVideoModelPromptOpen, renderVideoAiMenu, renderVideoAiModelSelection, renderVideoMenuMode, renderVideoModelPrompt,
+  createVideoPlayerMenu, isVideoModelPromptOpen, renderVideoAiMenu, renderVideoAiModelSelection, renderVideoMenuMode, renderVideoSubtitleOrder, renderVideoModelPrompt,
   renderVideoSubtitleTiming, renderVideoSourceStatus, handleVideoMenuNavigation, handleVideoMenuDisclosure, closeVideoMenuDisclosure, resetVideoMenuDisclosures, setVideoMenuToolsOpen, setVideoMenuDownloadStatus, syncVideoPlayerMenuLayout, revealVideoMenuBodyControl, type VideoMenuMode,
 } from './playerMenu';
 import {createVideoAiModelSetup} from './video-ai/modelSetup';
@@ -357,7 +357,7 @@ export function mountVideoSubtitleTranslation(): () => void {
   const nativeFullscreen = createNativeFullscreenSubtitles(() => ({
     video: observedVideo, enabled: canReadVideo() && isYouTubeVideoPage(),
     cues: pretranslationCues, mode: normalizeVideoSubtitleDisplayMode(config.videoSubtitleDisplayMode),
-    offsetMs: subtitleOffsetMs, language: config.to,
+    offsetMs: subtitleOffsetMs, language: config.to, bilingualOrder: config.videoSubtitleAppearance.bilingualOrder,
     revision: `${videoTranslator.revision}:${humanCaptions.revision}:${config.to}:${config.videoPreferHumanSubtitles}`,
     translation: (source, cue) => (config.videoPreferHumanSubtitles ? humanCaptions.at(cue.startMs + cue.durationMs / 2) : '')
       || (isVideoSubtitleInTargetLanguage(source, config.to) ? source : videoTranslator.peek(source)),
@@ -885,6 +885,7 @@ export function mountVideoSubtitleTranslation(): () => void {
     renderVideoModelPrompt(menu, choice && {options: VIDEO_LOCAL_TRANSCRIPTION_MODELS, ...choice}, language);
     const selectedMode: VideoMenuMode = enabled && visible ? normalizeVideoSubtitleDisplayMode(config.videoSubtitleDisplayMode) : 'off';
     renderVideoMenuMode(menu, selectedMode, !config.on, status);
+    renderVideoSubtitleOrder(menu, config.videoSubtitleAppearance.bilingualOrder, !enabled);
     const service = menu.querySelector<HTMLElement>('[data-service-label]');
     if (service) service.textContent = localizeVideoUiText(getVideoServiceLabel(config.videoService || config.service), language);
     refreshVideoUiText(menu, language);
@@ -1036,7 +1037,7 @@ export function mountVideoSubtitleTranslation(): () => void {
     if (!event.isTrusted) return;
     const menu = menuElement;
     if (!menu || !(event.target instanceof Element)) return;
-    const target = event.target.closest<HTMLElement>('[data-action], [data-mode], [data-model-choice]');
+    const target = event.target.closest<HTMLElement>('[data-action], [data-mode], [data-model-choice], [data-subtitle-order]');
     if (!target || !menu.contains(target) || (target instanceof HTMLButtonElement && target.disabled)) return;
 
     event.preventDefault();
@@ -1062,6 +1063,10 @@ export function mountVideoSubtitleTranslation(): () => void {
       const nextOffset = target.dataset.action === 'reset-subtitle-timing' ? 0
         : normalizeVideoSubtitleOffsetMs(config.videoSubtitleOffsetMs) + (target.dataset.action === 'subtitle-earlier' ? -500 : 500);
       persistVideoConfig({videoSubtitleOffsetMs: normalizeVideoSubtitleOffsetMs(nextOffset)});
+      return;
+    }
+    if (target.dataset.subtitleOrder === 'original-first' || target.dataset.subtitleOrder === 'translation-first') {
+      persistVideoConfig({videoSubtitleAppearance: {...config.videoSubtitleAppearance, bilingualOrder: target.dataset.subtitleOrder}});
       return;
     }
     if (target.dataset.mode) {

@@ -13,6 +13,7 @@ import {
   renderVideoAiModelSelection,
   focusVideoModelPromptReturn,
   renderVideoMenuMode,
+  renderVideoSubtitleOrder,
   renderVideoModelPrompt,
   renderVideoSubtitleTiming,
   setVideoMenuDownloadStatus,
@@ -140,6 +141,25 @@ afterEach(() => {
 });
 
 describe('video player menu composition', () => {
+  it.each([false, true])('双语顺序按钮独立保存选中态，语言刷新保留节点（紧凑菜单：%s）', compact => {
+    const {document} = parseHTML('<!doctype html><body></body>');
+    vi.stubGlobal('document', document);
+    const menu = createVideoPlayerMenu('zh-CN', compact);
+    const choices = [...menu.querySelectorAll<HTMLButtonElement>('[data-subtitle-order]')];
+    expect(choices.map(button => button.textContent)).toEqual(['原文在上', '译文在上']);
+    renderVideoSubtitleOrder(menu, 'original-first', false);
+    expect(choices.map(button => button.getAttribute('aria-checked'))).toEqual(['true', 'false']);
+    renderVideoSubtitleOrder(menu, 'translation-first', false);
+    expect(choices.map(button => button.getAttribute('aria-checked'))).toEqual(['false', 'true']);
+    expect(choices.every(button => button.getAttribute('role') === 'menuitemradio')).toBe(true);
+    refreshVideoUiText(menu, 'en-US');
+    expect(choices.map(button => button.textContent)).toEqual(['Original above', 'Translation above']);
+    expect(menu.querySelector('[data-subtitle-order]')).toBe(choices[0]);
+    expect(menu.querySelector('.fluent-read-video-menu-order-controls')?.getAttribute('aria-label')).toBe('Bilingual order');
+    renderVideoSubtitleOrder(menu, 'translation-first', true);
+    expect(choices.every(button => button.disabled)).toBe(true);
+  });
+
   it.each([false, true])('keeps subtitle downloads collapsed until requested (local generation: %s)', withLocalGeneration => {
     const {document} = parseHTML('<!doctype html><body></body>');
     vi.stubGlobal('document', document);

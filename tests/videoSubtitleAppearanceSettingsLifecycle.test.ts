@@ -1,7 +1,7 @@
 /**
  * @file tests/videoSubtitleAppearanceSettingsLifecycle.test.ts
  * 文件职责：执行字幕外观设置的真实客户端 SFC、共享布局与控件事件，验证设置草稿和实时预览的一致性。
- * 主要内容：覆盖移动端/X 自动贴底、手动偏移、位置显隐、七语可见标签与 ARIA、字号归一化、皮肤/重置、显示模式、读音示例显隐和父级草稿替换；读音示例使用固定演示数据，不加载转写引擎。
+ * 主要内容：覆盖双语上下顺序、移动端/X 自动贴底、手动偏移、位置显隐、七语可见标签与 ARIA、字号归一化、皮肤/重置、显示模式、读音示例显隐和父级草稿替换；读音示例使用固定演示数据，不加载转写引擎。
  * 模块边界：保留 Vue 模板、设置子组件、配置归一化及翻译字典；仅以 DOM 与 Element Plus UI ports 和受控语言上下文替代浏览器环境，不读取组件私有状态或复制产品事件。
  */
 import {afterEach, beforeEach, describe, expect, it, vi} from 'vitest';
@@ -126,6 +126,69 @@ beforeEach(() => {locale.value = 'zh-CN'; capabilities.extensionDom = true; dom.
 afterEach(() => {app?.unmount(); app = undefined; dom.document.body.replaceChildren();});
 
 describe('视频字幕外观设置实际客户端模板', () => {
+    it('双语顺序通过实际分段按钮更新草稿和预览，读音与单语显示保持原语义', async () => {
+        await mount(normalizeConfig({videoTranslationEnabled: true, videoSubtitleAppearance: {readingAnnotation: true}}));
+        const order = '[data-video-subtitle-order]';
+        const originalFirst = `${order} [data-option-index="0"]`;
+        const translationFirst = `${order} [data-option-index="1"]`;
+        expect(control(originalFirst).getAttribute('aria-checked')).toBe('true');
+        expect(control<HTMLElement>(previewSelector).style.getPropertyValue('--fluent-read-video-subtitle-translation-order')).toBe('3');
+        const reading = control(readingPreviewSelector);
+        await click(translationFirst);
+        expect(props.config.videoSubtitleAppearance.bilingualOrder).toBe('translation-first');
+        expect(control(translationFirst).getAttribute('aria-checked')).toBe('true');
+        expect(control<HTMLElement>(previewSelector).style.getPropertyValue('--fluent-read-video-subtitle-translation-order')).toBe('0');
+        expect(control(readingPreviewSelector)).toBe(reading);
+        expect(control(previewSelector).querySelector('span')?.textContent).toBe('今日はいい天気ですね。');
+        await click('[aria-label="视频字幕显示模式"] [data-option-index="1"]');
+        expect(control(previewSelector).querySelector('span')).toBeNull();
+        expect(root.querySelector(readingPreviewSelector)).toBeNull();
+        expect(control(previewSelector).querySelector('b')).not.toBeNull();
+        expect(props.config.videoSubtitleAppearance.bilingualOrder).toBe('translation-first');
+        await click('[aria-label="视频字幕显示模式"] [data-option-index="2"]');
+        expect(control(previewSelector).querySelector('b')).toBeNull();
+        expect(control(readingPreviewSelector).textContent).toBe('kyō wa ii tenki desu ne.');
+        await click('[aria-label="视频字幕显示模式"] [data-option-index="0"]');
+        await click(originalFirst);
+        expect(props.config.videoSubtitleAppearance.bilingualOrder).toBe('original-first');
+        expect(control<HTMLElement>(previewSelector).style.getPropertyValue('--fluent-read-video-subtitle-translation-order')).toBe('3');
+        await check('[role="switch"][aria-label="显示 流畅阅读 视频字幕"]', false);
+        expect([...control(order).querySelectorAll<HTMLButtonElement>('button')].every(button => button.disabled)).toBe(true);
+    });
+
+    it('双语顺序七语标签与可访问名称同步更新，替换草稿后选择只写入新草稿', async () => {
+        await mount(normalizeConfig({videoTranslationEnabled: true}));
+        const group = control('[data-video-subtitle-order]');
+        const expected: Array<[UiLanguage, string, string, string]> = [
+            ['zh-CN', '双语顺序', '原文在上', '译文在上'],
+            ['en-US', 'Bilingual order', 'Original above', 'Translation above'],
+            ['ja-JP', '二言語の表示順', '原文を上に', '訳文を上に'],
+            ['ko-KR', '이중 언어 순서', '원문 위에', '번역문 위에'],
+            ['fr-FR', 'Ordre bilingue', 'Original en haut', 'Traduction en haut'],
+            ['ru-RU', 'Порядок языков', 'Оригинал сверху', 'Перевод сверху'],
+            ['es-ES', 'Orden bilingüe', 'Original arriba', 'Traducción arriba'],
+        ];
+        for (const [language, label, first, second] of expected) {
+            locale.value = language; await settle();
+            expect(control('[data-video-subtitle-order]')).toBe(group);
+            expect(group.getAttribute('aria-label')).toBe(label);
+            expect([...group.querySelectorAll('button')].map(button => button.textContent)).toEqual([first, second]);
+            expect(props.config.videoSubtitleAppearance.bilingualOrder).toBe('original-first');
+        }
+        const previous = props.config;
+        props.config = normalizeConfig({videoTranslationEnabled: true, videoSubtitleAppearance: {bilingualOrder: 'translation-first'}});
+        await settle();
+        expect(control('[data-video-subtitle-order] [data-option-index="1"]').getAttribute('aria-checked')).toBe('true');
+        await click('[data-video-subtitle-order] [data-option-index="0"]');
+        expect(props.config.videoSubtitleAppearance.bilingualOrder).toBe('original-first');
+        expect(previous.videoSubtitleAppearance.bilingualOrder).toBe('original-first');
+        await click('[data-video-subtitle-order] [data-option-index="1"]');
+        expect(previous.videoSubtitleAppearance.bilingualOrder).toBe('original-first');
+        expect(props.config.videoSubtitleAppearance.bilingualOrder).toBe('translation-first');
+        await click('.appearance-reset-button');
+        expect(props.config.videoSubtitleAppearance.bilingualOrder).toBe('original-first');
+    });
+
     it('自动贴底开关写入当前草稿并即时切换预览和偏移说明，手动值始终保留', async () => {
         await mount();
         expect(control<HTMLInputElement>(autoSelector).checked).toBe(true);

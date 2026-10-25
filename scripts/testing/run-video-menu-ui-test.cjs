@@ -10,10 +10,11 @@ const {createRequire} = require('node:module');
 const {spawnSync} = require('node:child_process');
 const {createHash} = require('node:crypto');
 const {startFocusEventMonitor} = require('./mac-focus-event-monitor.cjs');
+const {assertFreshProductionExtension} = require('../run-site-translation-test.cjs');
 
 const arg = (name, fallback) => {const i = process.argv.indexOf(`--${name}`); return i < 0 ? fallback : process.argv[i + 1];};
 const suite = arg('suite', 'menu-ui');
-assert.ok(['menu-ui', 'subtitle-stability'].includes(suite), `unknown suite: ${suite}`);
+assert.ok(['menu-ui', 'subtitle-stability', 'subtitle-order'].includes(suite), `unknown suite: ${suite}`);
 const extensionDir = path.resolve(arg('extension-dir', '.output/chrome-mv3'));
 const artifactsDir = path.resolve(arg('artifacts-dir', path.join(os.tmpdir(), 'fluentread-video-menu-ui')));
 const runtimeRoot = arg('playwright-root', process.env.PLAYWRIGHT_ROOT);
@@ -168,6 +169,147 @@ async function runSubtitleStability({page, entry, diagnostics, result, checkFocu
   fs.writeFileSync(path.join(artifactsDir, 'subtitle-dom.html'), await page.content());
 }
 
+/** 双语顺序通过真实菜单输入切换，既检查排版也检查保存、节点复用及请求数。 */
+async function runSubtitleOrder({page, entry, control, background, mediaSrc, diagnostics, result, checkFocus}) {
+  const menu = page.locator('#fluent-read-video-subtitle-menu');
+  const source = page.locator('#fluent-read-video-subtitle-original');
+  const translated = page.locator('#fluent-read-video-subtitle');
+  const orderButton = order => menu.locator(`[data-subtitle-order="${order}"]`);
+  const waitCaption = () => page.waitForFunction(({source, translation}) =>
+    document.querySelector('#fluent-read-video-subtitle-original')?.textContent === source
+    && document.querySelector('#fluent-read-video-subtitle')?.textContent === translation,
+  {source: firstSource, translation: firstTranslation}, {timeout: 15000});
+  const waitOrderConfig = async expected => {
+    const deadline = Date.now() + 10000;
+    while (Date.now() < deadline) {
+      const config = await readConfig(control);
+      if (config.videoSubtitleAppearance?.bilingualOrder === expected) return config;
+      await new Promise(resolve => setTimeout(resolve, 100));
+    }
+    throw Error(`subtitle order not persisted: ${expected}`);
+  };
+  const geometry = [];
+  const assertOrder = async (order, phase) => {
+    checkFocus();
+    diagnostics.setPhase(phase);
+    await page.waitForFunction(expected => {
+      const original = document.querySelector('#fluent-read-video-subtitle-original');
+      const translation = document.querySelector('#fluent-read-video-subtitle');
+      if (!original || !translation) return false;
+      const a = original.getBoundingClientRect(), b = translation.getBoundingClientRect();
+      return a.height > 0 && b.height > 0 && (expected === 'original-first' ? a.bottom <= b.top + 1 : b.bottom <= a.top + 1);
+    }, order, {timeout: 15000});
+    for (const candidate of ['original-first', 'translation-first']) {
+      assert.equal(await orderButton(candidate).getAttribute('aria-checked'), String(candidate === order));
+    }
+    const metrics = await page.evaluate(() => {
+      const measure = id => {
+        const node = document.getElementById(id), rect = node.getBoundingClientRect();
+        return {top: rect.top, bottom: rect.bottom, width: rect.width, height: rect.height,
+          order: getComputedStyle(node).order, text: node.textContent};
+      };
+      const menu = document.getElementById('fluent-read-video-subtitle-menu');
+      const box = menu.getBoundingClientRect();
+      return {original: measure('fluent-read-video-subtitle-original'), translated: measure('fluent-read-video-subtitle'),
+        menu: {x: box.x, right: box.right, y: box.y, width: box.width, scrollWidth: menu.scrollWidth, clientWidth: menu.clientWidth},
+        viewport: {width: innerWidth, height: innerHeight}};
+    });
+    assert.equal(metrics.original.text, firstSource);
+    assert.equal(metrics.translated.text, firstTranslation);
+    geometry.push({phase, order, ...metrics});
+    fs.writeFileSync(path.join(artifactsDir, 'subtitle-order-geometry.json'), `${JSON.stringify(geometry, null, 2)}\n`);
+    return metrics;
+  };
+  const shoot = async name => {
+    checkFocus();
+    const file = `${name}.png`;
+    await page.screenshot({path: path.join(artifactsDir, file)});
+    result.screenshots.push(file);
+  };
+  await waitCaption();
+  await entry.click();
+  await visible(menu);
+  await assertOrder('original-first', 'order-default');
+  const originalNode = await source.elementHandle(), translationNode = await translated.elementHandle();
+  await page.waitForTimeout(500);
+  const before = await background.evaluate(() => globalThis.__videoMenuUiTranslations);
+  for (const order of ['translation-first', 'original-first', 'translation-first', 'original-first']) {
+    await orderButton(order).click();
+    await waitOrderConfig(order);
+    await assertOrder(order, `order-repeat-${geometry.length}`);
+    assert.equal(await originalNode.evaluate(node => node === document.querySelector('#fluent-read-video-subtitle-original')), true);
+    assert.equal(await translationNode.evaluate(node => node === document.querySelector('#fluent-read-video-subtitle')), true);
+  }
+  // 菜单方向键只移动本组选项焦点；Space 提交当前选项，不触发播放器暂停。
+  await orderButton('original-first').focus();
+  await page.keyboard.press('ArrowRight');
+  assert.equal(await orderButton('translation-first').evaluate(node => document.activeElement === node), true);
+  await page.keyboard.press('Space');
+  await waitOrderConfig('translation-first');
+  await assertOrder('translation-first', 'order-keyboard');
+  await shoot('subtitle-order-translation-first-desktop');
+  await page.waitForTimeout(300);
+  const after = await background.evaluate(() => globalThis.__videoMenuUiTranslations);
+  assert.equal(after, before, 'Changing subtitle order must reuse completed translations');
+  result.cases.push({name: 'repeat-order-switch-keeps-nodes-and-cached-translation', passed: true, before, after, keyboard: 'ArrowRight + Space'});
+  for (const mode of ['translation-only', 'original-only']) {
+    await menu.locator(`[data-mode="${mode}"]`).click();
+    if (mode === 'translation-only') {await visible(translated); await visible(source, false);}
+    else {
+      await visible(translated, false);
+      // 桌面仅原文可以恢复网站字幕；窄屏与读音模式则使用归一化原文。
+      await page.waitForFunction(() => ['#fluent-read-video-subtitle-original', '.ytp-caption-segment'].some(selector => {
+        const node = document.querySelector(selector);
+        if (!node?.textContent) return false;
+        const rect = node.getBoundingClientRect(), css = getComputedStyle(node);
+        return rect.width > 0 && rect.height > 0 && css.display !== 'none' && css.visibility !== 'hidden' && css.opacity !== '0';
+      }));
+    }
+    assert.equal((await readConfig(control)).videoSubtitleAppearance.bilingualOrder, 'translation-first');
+    result.cases.push({name: `${mode}-preserves-order-preference-and-visible-language`, passed: true});
+  }
+  await menu.locator('[data-mode="bilingual"]').click();
+  await waitCaption();
+  await assertOrder('translation-first', 'order-back-to-bilingual');
+  for (const width of [390, 320]) {
+    await menu.locator('[data-action="close-menu"]').click();
+    await page.setViewportSize({width, height: 844});
+    await page.locator('#movie_player').evaluate((player, width) => {
+      player.style.width = `${width - 32}px`; player.style.height = '480px'; player.style.margin = '16px';
+    }, width);
+    await entry.click();
+    for (const order of ['original-first', 'translation-first']) {
+      await orderButton(order).click();
+      await waitOrderConfig(order);
+      const metrics = await assertOrder(order, `order-narrow-${width}-${order}`);
+      assert.ok(metrics.menu.x >= -1 && metrics.menu.right <= width + 1 && metrics.menu.y >= -1, JSON.stringify(metrics));
+      assert.ok(metrics.menu.scrollWidth <= metrics.menu.clientWidth + 1, JSON.stringify(metrics));
+      const buttons = await menu.locator('[data-subtitle-order]').evaluateAll(nodes => nodes.map(node => {
+        const rect = node.getBoundingClientRect(); return {left: rect.left, right: rect.right, width: rect.width, height: rect.height};
+      }));
+      assert.ok(buttons.every(button => button.left >= 0 && button.right <= width + 1 && button.width > 30 && button.height >= 24), JSON.stringify(buttons));
+      await shoot(`subtitle-order-${width}-${order}`);
+    }
+    result.cases.push({name: `narrow-${width}-order-controls-fit-and-work`, passed: true});
+  }
+  diagnostics.setPhase('order-reload');
+  await page.reload();
+  await page.locator('#movie_player').evaluate(player => {player.style.width = '288px'; player.style.height = '480px'; player.style.margin = '16px';});
+  await page.locator('video').evaluate((video, src) => {video.src = src; video.load();}, mediaSrc);
+  await entry.waitFor({timeout: 15000});
+  await waitCaption();
+  await entry.click();
+  await assertOrder('translation-first', 'order-persisted-after-reload');
+  result.cases.push({name: 'saved-subtitle-order-survives-page-reload', passed: true});
+  const saved = await readConfig(control);
+  await persist(control, {videoSubtitleAppearance: {...saved.videoSubtitleAppearance, bilingualOrder: 'original-first'}});
+  await assertOrder('original-first', 'order-external-config-sync');
+  await shoot('subtitle-order-external-config-sync');
+  result.cases.push({name: 'external-config-order-syncs-without-reopening-menu', passed: true});
+  result.subtitleOrderGeometry = geometry;
+  fs.writeFileSync(path.join(artifactsDir, 'subtitle-order-dom.html'), await page.content());
+}
+
 async function main() {
   if (!runtimeRoot) throw Error('--playwright-root required');
   assert.ok(fs.existsSync(path.join(extensionDir, 'manifest.json')), 'build not found');
@@ -188,6 +330,7 @@ async function main() {
     assert.ok(!browserPid || !focusMonitor.events.some(event => event.pid === browserPid), 'owned Edge became foreground');
   };
   try {
+    result.buildFreshness = assertFreshProductionExtension(extensionDir, path.resolve(__dirname, '../..'));
     const mediaPath = path.join(artifactsDir, 'fixture.mp4');
     const mediaSize = suite === 'subtitle-stability' ? '320x180' : '16x16';
     const media = spawnSync(arg('ffmpeg', '/opt/homebrew/bin/ffmpeg'), ['-y', '-f', 'lavfi', '-i', `color=c=black:s=${mediaSize}:r=1`, '-t', '30', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-movflags', '+faststart', mediaPath], {encoding: 'utf8', timeout: 30000});
@@ -268,6 +411,8 @@ async function main() {
     await entry.waitFor({timeout: 15000});
     if (suite === 'subtitle-stability') {
       await runSubtitleStability({page, entry, diagnostics, result, checkFocus});
+    } else if (suite === 'subtitle-order') {
+      await runSubtitleOrder({page, entry, control, background, mediaSrc: `data:video/mp4;base64,${fs.readFileSync(mediaPath).toString('base64')}`, diagnostics, result, checkFocus});
     } else {
     await entry.click();
     const menu = page.locator('#fluent-read-video-subtitle-menu');

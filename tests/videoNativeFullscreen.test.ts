@@ -1,7 +1,7 @@
 /**
  * @file tests/videoNativeFullscreen.test.ts
  * 文件职责：验证 Safari 系统全屏字幕桥接的数据、轨道所有权与退出恢复契约。
- * 主要内容：覆盖显示模式、缓存空缺、转义与校时，系统全屏事件、手动关闭、迟到译文、失败、切视频和卸载。
+ * 主要内容：覆盖显示模式、双语顺序与读音相邻、缓存空缺、转义与校时，系统全屏事件、手动关闭、迟到译文、失败、切视频和卸载。
  * 模块边界：以可控 TextTrack API 验证产品代码，不将 DOM 夹具当作 iOS AVKit 实机渲染验收。
  */
 import {describe, expect, it, vi} from 'vitest';
@@ -60,6 +60,46 @@ function setup() {
 }
 
 describe('native fullscreen subtitles', () => {
+  it('切换双语顺序时读音始终紧跟原文，单语和相同译文保留原有语义', () => {
+    const {state} = setup();
+    state.bilingualOrder = 'translation-first';
+    state.cues = [{startMs: 0, durationMs: 2000, text: '<原文>\n原文第二行'}];
+    state.translation = () => '译文 & <标记>\n译文第二行';
+    state.reading = {enabled: true, source: '<原文>\n原文第二行', text: 'gen & bun'};
+    expect(buildNativeFullscreenCues(state)[0].text).toBe('译文 &amp; &lt;标记&gt;\n译文第二行\n&lt;原文&gt;\n原文第二行\ngen &amp; bun');
+    state.bilingualOrder = 'original-first';
+    expect(buildNativeFullscreenCues(state)[0].text).toBe('&lt;原文&gt;\n原文第二行\ngen &amp; bun\n译文 &amp; &lt;标记&gt;\n译文第二行');
+    state.bilingualOrder = 'translation-first';
+    state.mode = 'original-only';
+    expect(buildNativeFullscreenCues(state)[0].text).toBe('&lt;原文&gt;\n原文第二行\ngen &amp; bun');
+    state.mode = 'translation-only';
+    expect(buildNativeFullscreenCues(state)[0].text).toBe('译文 &amp; &lt;标记&gt;\n译文第二行');
+    state.mode = 'bilingual'; state.translation = () => state.cues[0].text;
+    expect(buildNativeFullscreenCues(state)[0].text).toBe('&lt;原文&gt;\n原文第二行\ngen &amp; bun');
+    state.translation = () => undefined;
+    expect(buildNativeFullscreenCues(state)[0].text).toBe('&lt;原文&gt;\n原文第二行\ngen &amp; bun');
+  });
+
+  it('顺序变化使已有原生轨道重新准备，保留当前选择和缓存读音，系统 Off 期间等待重新选择', () => {
+    const f = setup();
+    f.state.revision = 1;
+    f.state.reading = {enabled: true, source: 'Original', text: 'orijinaru'};
+    f.bridge.sync(); f.enter(); const track = f.tracks[0], node = f.document.querySelector('track'); f.select(track);
+    f.state.reading.text = '';
+    f.state.bilingualOrder = 'translation-first'; f.bridge.sync();
+    expect(f.document.querySelector('track')).toBe(node);
+    expect(track.mode).toBe('showing'); expect(f.original.mode).toBe('disabled');
+    expect(track.cues![0].text).toBe('译文\nOriginal\norijinaru');
+    f.state.reading.text = 'new reading'; f.bridge.sync();
+    expect(track.cues![0].text).toBe('译文\nOriginal\nnew reading');
+    f.select(null);
+    const add = vi.spyOn(track, 'addCue'), remove = vi.spyOn(track, 'removeCue'), mode = vi.spyOn(track, 'mode', 'set');
+    f.state.bilingualOrder = 'original-first'; f.bridge.sync();
+    expect(add).not.toHaveBeenCalled(); expect(remove).not.toHaveBeenCalled(); expect(mode).not.toHaveBeenCalled();
+    f.select(track); expect(track.cues![0].text).toBe('Original\nnew reading\n译文');
+    f.bridge.destroy();
+  });
+
   it('原生轨道按原文、读音、译文排序并转义WebVTT，仅译文模式不泄漏读音', () => {
     const {state} = setup();
     state.cues = [{startMs: 0, durationMs: 2000, text: '<原文>'}];

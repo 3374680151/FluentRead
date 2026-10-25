@@ -652,6 +652,34 @@ function clickMenu(f: ReturnType<typeof fixture>, selector: string) {
 }
 
 describe('public mounted player menu entry semantics', () => {
+  it.each(['youtube', 'x'] as const)('双语顺序从 %s 实际菜单保存并立即重排，保留节点与翻译缓存', async platform => {
+    const f = fixture(platform === 'x' ? nativeSource : undefined, platform);
+    if (platform === 'youtube') f.setCaption(nativeSource);
+    f.start(); await vi.advanceTimersByTimeAsync(300);
+    const menu = f.document.getElementById(VIDEO_TRANSLATION_MENU_ID)!; menu.hidden = false;
+    const source = f.document.getElementById(VIDEO_NORMALIZED_CAPTION_OVERLAY_ID)!;
+    const translated = f.document.getElementById(VIDEO_TRANSLATION_OVERLAY_ID)!;
+    const panel = f.document.getElementById(VIDEO_SUBTITLE_PANEL_ID)!;
+    const initial = f.displayed(), calls = ports.translate.mock.calls.length;
+    const appearance = {...(ports.config as unknown as Config).videoSubtitleAppearance};
+    expect(initial.source).toBeTruthy(); expect(initial.translated).toBeTruthy();
+    for (const order of ['translation-first', 'original-first', 'translation-first'] as const) {
+      clickMenu(f, `[data-subtitle-order="${order}"]`); await settle();
+      expect(ports.patch).toHaveBeenLastCalledWith({videoSubtitleAppearance: {...appearance, bilingualOrder: order}});
+      expect(menu.querySelector(`[data-subtitle-order="${order}"]`)?.getAttribute('aria-checked')).toBe('true');
+      expect(panel.style.getPropertyValue('--fluent-read-video-subtitle-translation-order')).toBe(order === 'translation-first' ? '0' : '3');
+      expect(f.displayed()).toEqual(initial);
+      expect(f.document.getElementById(VIDEO_NORMALIZED_CAPTION_OVERLAY_ID)).toBe(source);
+      expect(f.document.getElementById(VIDEO_TRANSLATION_OVERLAY_ID)).toBe(translated);
+      expect(ports.translate).toHaveBeenCalledTimes(calls);
+    }
+    // 外部设置更新走同一订阅，单语显示方式和其偏好均保持。
+    f.changeConfig({videoSubtitleDisplayMode: 'original-only', videoSubtitleAppearance: {...appearance, bilingualOrder: 'original-first'}});
+    await settle();
+    expect((ports.config as unknown as Config).videoSubtitleDisplayMode).toBe('original-only');
+    expect(menu.querySelector('[data-subtitle-order="original-first"]')?.getAttribute('aria-checked')).toBe('true');
+  });
+
   it('fetches an uncaptured YouTube track for export while hidden and reuses that captured track when captions reopen', async () => {
     const f = fixture(undefined, 'youtube');Object.assign(ports.config, {videoSubtitleVisible: false});
     const track = {baseUrl: 'https://www.youtube.com/api/timedtext?v=cue-proof&lang=en', languageCode: 'en'};

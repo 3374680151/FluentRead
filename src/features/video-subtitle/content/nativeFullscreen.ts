@@ -1,17 +1,20 @@
 /**
  * @file src/features/video-subtitle/content/nativeFullscreen.ts
  * 文件职责：将已有 YouTube 字幕时间轴映射到 Safari 系统视频全屏可选择的原生 TextTrack。
- * 主要内容：页面内预备原生轨道，按显示方式组合已缓存译文、原文与可选读音；读音按原文索引只更新对应 cue，缓存和模式变化保留用户选择，退出、禁用、换视频和卸载时仅保守恢复最近可证明让位的站点原轨道；不重启网络翻译，也不承诺系统播放器显示网页覆盖层。
+ * 主要内容：页面内预备原生轨道，按显示方式和双语顺序组合已缓存译文、原文与始终紧跟原文的可选读音；读音按原文索引只更新对应 cue，缓存、模式和顺序变化保留用户选择，退出、禁用、换视频和卸载时仅保守恢复最近可证明让位的站点原轨道；不重启网络翻译，也不承诺系统播放器显示网页覆盖层。
  * 模块边界：只持有自己创建的 track 节点与 cue，运行时注入媒体、配置和缓存读取；系统字幕样式和后台脚本调度由浏览器负责。
  */
 import type {VideoSubtitleCue} from './youtubeSubtitleData';
 import type {VideoSubtitleDisplayMode} from '@/src/core/config/model';
+import type {VideoSubtitleBilingualOrder} from '@/src/core/config/videoSubtitleAppearance';
 
 export interface NativeFullscreenSubtitleState {
   video: HTMLVideoElement | null;
   enabled: boolean;
   cues: readonly VideoSubtitleCue[];
   mode: VideoSubtitleDisplayMode;
+  /** 省略时保留原文在上的既有顺序。 */
+  bilingualOrder?: VideoSubtitleBilingualOrder;
   offsetMs: number;
   language: string;
   /** 提供时必须随 translation 的可见缓存变化；省略时每轮重读。 */
@@ -29,14 +32,17 @@ function nativeCue(state: NativeFullscreenSubtitleState, cue: VideoSubtitleCue) 
   const original = cue.text.trim();
   const translated = state.mode === 'original-only' ? '' : state.translation(original, cue)?.trim() || '';
   const base = state.mode === 'translation-only' ? translated
-    : state.mode === 'original-only' || !translated || translated === original ? original : `${original}\n${translated}`;
+    : state.mode === 'original-only' || !translated || translated === original ? original
+      : state.bilingualOrder === 'translation-first' ? `${translated}\n${original}` : `${original}\n${translated}`;
   const startMs = Math.max(0, cue.startMs + state.offsetMs);
   const endMs = cue.startMs + cue.durationMs + state.offsetMs;
   if (!base || !Number.isFinite(startMs) || !Number.isFinite(endMs) || endMs <= startMs) return null;
   return {source: original, cue: {startMs, durationMs: endMs - startMs, text: escapeCueText(base)}};
 }
 
-function withReading(base: string, original: string, reading: string): string {
+function withReading(base: string, original: string, reading: string, translationFirst: boolean): string {
+  // 译文在上时原文位于末尾；读音仍紧跟原文，不依据字幕正文中的相同词句猜测插入位置。
+  if (translationFirst) return `${base}\n${escapeCueText(reading)}`;
   const escapedOriginal = escapeCueText(original);
   return `${escapedOriginal}\n${escapeCueText(reading)}${base.slice(escapedOriginal.length)}`;
 }
@@ -52,7 +58,7 @@ export function buildNativeFullscreenCues(state: NativeFullscreenSubtitleState):
     if (!item) return [];
     const reading = state.reading;
     if (reading?.enabled && state.mode !== 'translation-only' && readingKey(reading.source) === readingKey(item.source) && reading.text.trim()) {
-      item.cue.text = withReading(item.cue.text, item.source, reading.text.trim());
+      item.cue.text = withReading(item.cue.text, item.source, reading.text.trim(), state.bilingualOrder === 'translation-first');
     }
     return [item.cue];
   });
@@ -185,7 +191,7 @@ export function createNativeFullscreenSubtitles(read: () => NativeFullscreenSubt
           readings.delete(oldest); dirtyReadings.add(oldest);
         }
       }
-      const preparationKey = JSON.stringify([state.revision, state.mode, state.offsetMs, state.language, readingEnabled]);
+      const preparationKey = JSON.stringify([state.revision, state.mode, state.bilingualOrder === 'translation-first', state.offsetMs, state.language, readingEnabled]);
       if (state.revision === undefined || state.cues !== preparedCues || preparationKey !== preparedKey) {
         prepared = []; baseTexts = []; preparedSources = [];
         sourceIndices.clear();
@@ -207,7 +213,7 @@ export function createNativeFullscreenSubtitles(read: () => NativeFullscreenSubt
       }
       for (const source of dirtyReadings) for (const index of sourceIndices.get(source) || []) {
         const reading = state.mode === 'translation-only' ? '' : readings.get(source);
-        prepared[index].text = reading ? withReading(baseTexts[index], preparedSources[index], reading) : baseTexts[index];
+        prepared[index].text = reading ? withReading(baseTexts[index], preparedSources[index], reading, state.bilingualOrder === 'translation-first') : baseTexts[index];
       }
       if (node && node.parentElement !== video) { removeTrackNode(); fingerprint = ''; }
       if (!node) {

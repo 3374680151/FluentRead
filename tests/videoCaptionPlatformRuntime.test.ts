@@ -52,6 +52,46 @@ function fixture(url: string, html: string, translate = vi.fn().mockResolvedValu
 }
 const sentence = 'This is the first sentence in the meeting.';
 
+describe('平台字幕双语顺序', () => {
+    it('顺序立即切换并让读音紧跟原文，保持节点、缓存和单语偏好', async () => {
+        const f = fixture('https://meet.google.com/abc-defg-hij', '<span data-caption-text>今日はいい天気です。</span>');
+        f.config.from = 'ja'; f.config.videoSubtitleAppearance.readingAnnotation = true;
+        f.start(); await vi.advanceTimersByTimeAsync(0);
+        const panel = f.shadow()!.querySelector<HTMLElement>('.panel')!;
+        const source = panel.querySelector<HTMLElement>('.source')!, reading = panel.querySelector<HTMLElement>('.reading')!, translated = panel.querySelector<HTMLElement>('.translation')!;
+        const order = () => Array.from(panel.children).map(node => node.className);
+        expect(order()).toEqual(['source fluent-read-video-subtitle-original', 'reading', 'translation', 'tools']);
+        expect(reading.textContent).toBe('Reading: 今日はいい天気です。'); expect(reading.hidden).toBe(false);
+        f.config.videoSubtitleAppearance.bilingualOrder = 'translation-first'; f.change();
+        expect(order()).toEqual(['translation', 'source fluent-read-video-subtitle-original', 'reading', 'tools']);
+        expect(panel.querySelector('.source')).toBe(source); expect(panel.querySelector('.reading')).toBe(reading); expect(panel.querySelector('.translation')).toBe(translated);
+        expect(translated.textContent).toBe('测试译文');
+        f.config.videoSubtitleDisplayMode = 'translation-only'; f.change(); await vi.advanceTimersByTimeAsync(0);
+        expect(source.hidden).toBe(true); expect(reading.hidden).toBe(true);
+        expect(f.config.videoSubtitleAppearance.bilingualOrder).toBe('translation-first');
+        f.config.videoSubtitleDisplayMode = 'original-only'; f.change(); await vi.advanceTimersByTimeAsync(0);
+        expect(source.hidden).toBe(false); expect(reading.hidden).toBe(false); expect(translated.textContent).toBe('');
+        f.config.videoSubtitleDisplayMode = 'bilingual'; f.change(); await vi.advanceTimersByTimeAsync(0);
+        expect(translated.textContent).toBe('测试译文'); expect(order()[0]).toBe('translation');
+        f.config.videoSubtitleAppearance.bilingualOrder = 'original-first'; f.change();
+        expect(order()).toEqual(['source fluent-read-video-subtitle-original', 'reading', 'translation', 'tools']);
+        expect(f.translate).toHaveBeenCalledOnce(); expect(readingPort.annotate).toHaveBeenCalledOnce();
+    });
+
+    it('翻译等待时切换顺序不会重启请求，迟到结果写入相同译文节点', async () => {
+        let finish!: (value: string) => void;
+        const translate = vi.fn(() => new Promise<string>(resolve => {finish = resolve;}));
+        const f = fixture('https://meet.google.com/abc-defg-hij', `<span data-caption-text>${sentence}</span>`, translate);
+        f.start(); await vi.advanceTimersByTimeAsync(0);
+        const panel = f.shadow()!.querySelector<HTMLElement>('.panel')!, translated = panel.querySelector('.translation');
+        f.config.videoSubtitleAppearance.bilingualOrder = 'translation-first'; f.change();
+        expect(panel.firstElementChild).toBe(translated); expect(translate).toHaveBeenCalledOnce();
+        finish('Late translation'); await vi.advanceTimersByTimeAsync(0);
+        expect(panel.firstElementChild).toBe(translated); expect(translated?.textContent).toBe('Late translation');
+        expect(translate).toHaveBeenCalledOnce();
+    });
+});
+
 describe('平台字幕独立读音生命周期', () => {
     it('默认不计算，原文模式不等待翻译，当前句结果只适配一次并在仅译文时隐藏', async () => {
         let finish!: (value: {text: string; language: string; scheme: string}) => void;
