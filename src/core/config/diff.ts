@@ -670,6 +670,8 @@ const FIELD_DEFINITIONS: Record<string, FieldDefinition> = {
     translationCacheMaxEntries: {group: 'advanced', label: '翻译缓存条数上限', format: (value) => formatNumber(value, ' 条')},
     enableAIContext: {group: 'general', label: 'AI 智能上下文', format: formatBoolean},
     enableAIMultiSegment: {group: 'translation', label: 'AI 多段翻译', format: formatBoolean},
+    aiMultiSegmentMaxSegments: {group: 'translation', label: 'AI 多段每批最多片段数'},
+    aiMultiSegmentMaxCharacters: {group: 'translation', label: 'AI 多段每批最多字符数'},
     maxConcurrentTranslations: {group: 'advanced', label: '翻译并发数'},
     aiRequestTimeoutMs: {group: 'advanced', label: 'AI 翻译请求超时', format: value => typeof value === 'number' ? `${value / 1000} 秒` : formatValue(value)},
     translationRequestsPerSecond: {group: 'advanced', label: '每秒最多请求数', format: formatRequestRate},

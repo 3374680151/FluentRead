@@ -52,6 +52,26 @@ import {
 const pakoGzip = createRequire(import.meta.url)('pako').gzip as
     (data: Uint8Array, options: {level: 9; memLevel: 8}) => Uint8Array;
 
+function encodedDataBytes(source: string, decoder = 'decodeUserscriptData'): Uint8Array[] {
+    const pattern = new RegExp(`\\b${decoder}\\(("[^"\\n]+")\\)`, 'gu');
+    const values = [...source.matchAll(pattern)].map(match => JSON.parse(match[1]) as string);
+    expect(values.length).toBeGreaterThan(0);
+    return values.map(value => {
+        expect(value.startsWith('~85:')).toBe(true);
+        return decodeUserscriptData(value);
+    });
+}
+
+// Observe the existing production decoder inside real consumer builds, retaining its complete implementation.
+function observeDataDecoder(): import('vite').Plugin {
+    return {name: 'observe-userscript-data-decoder', enforce: 'pre', transform(code, id) {
+        if (id !== resolve(process.cwd(), 'userscript/dataEncoding.ts')) return null;
+        const declaration = 'export function decodeUserscriptData(value: string): Uint8Array {';
+        expect(code.split(declaration)).toHaveLength(2);
+        return code.replace(declaration, declaration + '\n globalThis.__observeUserscriptDataDecode(value);');
+    }};
+}
+
 const entrypointId = resolve(process.cwd(), 'entrypoints/userscript-injection-fixture.ts');
 const sourceModuleId = resolve(process.cwd(), 'src/app/content/runtime.ts');
 const vueScriptModuleId = `${resolve(process.cwd(), 'src/features/selection-translation/ui/SelectionTranslator.vue')}?vue&type=script&setup=true&lang.ts`;
@@ -422,12 +442,13 @@ describe('userscript inline CSS compression', () => {
         const code = kind === 'quoted' ? `export default ${JSON.stringify(css)};` : 'export default `' + css.replace(/\\/gu, '\\\\').replace(/`/gu, '\\`') + '`;';
         const result = transform(code);
         expect(result.map).toBeNull(); expect(Buffer.byteLength(result.code)).toBeLessThan(Buffer.byteLength(code));
-        const base64 = JSON.parse(result.code.match(/atob\(("[^"]+")\)/u)![1]);
-        expect(gunzipSync(Buffer.from(base64, 'base64')).toString('utf8')).toBe(css);
+        const [bytes] = encodedDataBytes(result.code);
+        expect(Buffer.from(bytes)).toEqual(gzipUserscriptBuildData(Buffer.from(css, 'utf8')));
+        expect(gunzipSync(bytes).toString('utf8')).toBe(css);
         vi.stubGlobal('pako', {ungzip});
         try {
-            const realm = {inflateWithPako, Uint8Array, atob, restored: undefined};
-            runInNewContext(result.code.replace(/^import[^\n]+\n/u, '').replace('export default ', 'restored = '), realm);
+            const realm = {inflateWithPako, decodeUserscriptData, Uint8Array, atob, restored: undefined};
+            runInNewContext(result.code.replace(/^import[^\n]+\n/gmu, '').replace('export default ', 'restored = '), realm);
             expect(realm.restored).toBe(css);
         } finally {vi.unstubAllGlobals();}
     });
@@ -1076,11 +1097,12 @@ describe('userscript lossless Unicode character data', () => {
     };
     const restoreExports = (moduleSource: string, names: readonly string[]) => {
         const body = moduleSource.replace("import {inflateWithPako} from '@/userscript/pakoRuntime';", '')
+            .replace("import {decodeUserscriptData} from '@/userscript/dataEncoding';", '')
             .replace(/export const /gu, 'const ');
         // 使用生产解压适配器和真实 pako；禁止 fromCodePoint，覆盖旧内核上的补充平面还原。
         return runInNewContext(
             'String.fromCodePoint = undefined;\n' + body + '\n({' + names.join(',') + '})',
-            {atob: (value: string) => Buffer.from(value, 'base64').toString('binary'), Uint8Array, inflateWithPako},
+            {atob: (value: string) => Buffer.from(value, 'base64').toString('binary'), Uint8Array, inflateWithPako, decodeUserscriptData},
         );
     };
 
@@ -1122,6 +1144,13 @@ describe('userscript lossless Unicode character data', () => {
         }
     });
 
+    it.each([[dataPath, [[65, 128]], 'AÁ'], [wordDataPath, ['AÁ'], 'AÁ']] as const)(
+        'changes only the byte representation of the original gzip payload in %s', (path, tables, value) => {
+            const source = 'export const sample = ' + JSON.stringify(value) + ';';
+            const [bytes] = encodedDataBytes(createPlugin().transform(source, path)!.code);
+            expect(Buffer.from(bytes)).toEqual(gzipUserscriptBuildData(Buffer.from(JSON.stringify(tables))));
+        });
+
     it.each([dataPath, wordDataPath])('preserves unsorted strings, repeated characters, surrogate pairs and empty exports in %s', currentPath => {
         const values = {sample: 'A𱊯A\0\ud800', empty: ''};
         const original = Object.entries(values).map(([name, value]) => 'export const ' + name + ' = ' + JSON.stringify(value) + ';').join('\n');
@@ -1162,14 +1191,17 @@ describe('userscript locked franc pure-data encoding', () => {
     };
     const restoreData = (moduleSource: string, inflate = inflateBundledFrancData): typeof lockedFrancData => {
         const body = moduleSource.replace("import {inflateWithPako} from '@/userscript/pakoRuntime';", '')
+            .replace("import {decodeUserscriptData} from '@/userscript/dataEncoding';", '')
             .replace('export const data =', 'const data =');
         // 执行生成的纯数据模块与生产 bundled pako；不执行整包，也不复制检测算法。
-        return runInNewContext(body + '\ndata;', {atob, Uint8Array, JSON, inflateWithPako: inflate}, {timeout: 5_000});
+        return runInNewContext(body + '\ndata;', {atob, Uint8Array, JSON, inflateWithPako: inflate, decodeUserscriptData}, {timeout: 5_000});
     };
 
     it('restores every locked model string and its iteration order before the unchanged franc algorithm consumes it', () => {
         const transformed = createPlugin().transform(original, dataPath)!;
         expect(transformed.map).toBeNull();
+        const [bytes] = encodedDataBytes(transformed.code);
+        expect(Buffer.from(bytes)).toEqual(gzipUserscriptBuildData(Buffer.from(JSON.stringify(lockedFrancData))));
         const restored = restoreData(transformed.code);
         expect(Object.keys(restored)).toEqual(Object.keys(lockedFrancData));
         expect(Object.getPrototypeOf(restored)).toBe(Object.getPrototypeOf(lockedFrancData));
@@ -1351,10 +1383,11 @@ describe('standalone locked public and private suffix pure-data encoding', () =>
     };
     const restoreData = (moduleSource: string, inflate = inflateBundledTldtsData, decode = decodeBundledTldtsLabels): TrieData => {
         const body = moduleSource.replace("import {inflateBytesWithPako, decodeUtf8WithPako} from '@/userscript/pakoBundled';", '')
+            .replace("import {decodeUserscriptData} from '@/userscript/dataEncoding';", '')
             .replace(/\bexport const\b/gu, 'const');
         // 仅执行原厂或生成的纯数据声明，复用真实 bundled decoder；不运行匹配算法或完整 userscript。
         return runInNewContext(body + '\n({' + exportNames.join(', ') + '});', {
-            atob, Uint8Array, Uint16Array, JSON, inflateBytesWithPako: inflate, decodeUtf8WithPako: decode,
+            atob, Uint8Array, Uint16Array, JSON, inflateBytesWithPako: inflate, decodeUtf8WithPako: decode, decodeUserscriptData,
         }, {timeout: 5_000}) as TrieData;
     };
     const locked = restoreData(original);
@@ -1370,6 +1403,18 @@ describe('standalone locked public and private suffix pure-data encoding', () =>
 
     it('restores all seven exports, every typed-array value and both ICANN/private flag classes without changing order', () => {
         const transformed = createPlugin().transform(original, dataPath)!;
+        const tables = arrayNames.map(name => {
+            const array = locked[name], buffer = Buffer.alloc(array.byteLength);
+            for (const [index, value] of array.entries()) {
+                if (array.BYTES_PER_ELEMENT === 1) buffer[index] = value;
+                else buffer.writeUInt16LE(value, index * 2);
+            }
+            return buffer;
+        });
+        const [bytes] = encodedDataBytes(transformed.code);
+        expect(Buffer.from(bytes)).toEqual(gzipUserscriptBuildData(Buffer.concat([
+            ...tables, Buffer.from(JSON.stringify(locked.labelText), 'utf8'),
+        ])));
         const restored = restoreData(transformed.code);
         expect(transformed.map).toBeNull();
         expect(Object.keys(restored)).toEqual(exportNames);
@@ -1789,9 +1834,10 @@ describe('standalone service brand paths at actual icon use', () => {
         const {transformWithEsbuild} = await import('vite');
         const compiled = await transformWithEsbuild(source, 'service-brands-owner.js', {format: 'cjs', target: 'es2018'});
         const module = {exports: {} as BrandApi};
-        const decode = vi.fn(atob), parse = vi.fn(JSON.parse), hostData = {controlledHostData: true};
-        const realm = {module, exports: module.exports, Uint8Array, atob: decode, JSON: {parse}, controlledHostData: hostData,
+        const decode = vi.fn(decodeUserscriptData), parse = vi.fn(JSON.parse), hostData = {controlledHostData: true};
+        const realm = {module, exports: module.exports, Uint8Array, atob, JSON: {parse}, controlledHostData: hostData,
             require: (id: string) => {
+                if (id === '@/userscript/dataEncoding') return {decodeUserscriptData: decode};
                 expect(id).toBe('@/userscript/pakoRuntime');
                 return {inflateWithPako: decoder};
             }};
@@ -1820,7 +1866,10 @@ describe('standalone service brand paths at actual icon use', () => {
     }
 
     it.each(['deepL', 'openai'])('restores the entire ordered table only at the first existing %s brand and shares the successful cache', async first => {
-        const h = await loadAccessors();
+        const source = positiveSource();
+        const [bytes] = encodedDataBytes(source);
+        expect(Buffer.from(bytes)).toEqual(gzipUserscriptBuildData(Buffer.from(JSON.stringify(expected))));
+        const h = await loadAccessors(undefined, source);
         for (const service of unknownServices) {expect(Object.hasOwn(expected, service)).toBe(false);expect(h.api.getServiceBrandIcon(service)).toBeUndefined();}
         expect(h.decoder).not.toHaveBeenCalled();expect(h.decode).not.toHaveBeenCalled();expect(h.parse).not.toHaveBeenCalled();
         expect(h.api.getServiceBrandIcon(first)).toEqual(expected[first]);
@@ -1921,7 +1970,7 @@ describe('standalone service brand paths at actual icon use', () => {
             const entryPath = resolve(fixture, 'entry.mjs');
             writeFileSync(entryPath, 'import {getServiceBrandIcon} from "@/src/ui/assets/serviceBrandIcons"; globalThis.serviceBrandOwner={getServiceBrandIcon};');
             const {build} = await import('vite');
-            const result = await build({root, configFile: false, publicDir: false, logLevel: 'silent', plugins: [plugin!], resolve: config.resolve,
+            const result = await build({root, configFile: false, publicDir: false, logLevel: 'silent', plugins: [plugin!, observeDataDecoder()], resolve: config.resolve,
                 build: {...config.build, write: false, outDir: resolve(fixture, 'unused-output'),
                     lib: {entry: entryPath, name: 'ServiceBrandOwner', formats: ['iife']}, rollupOptions: {output: {inlineDynamicImports: true}}}});
             const outputs = Array.isArray(result) ? result : [result];
@@ -1931,8 +1980,9 @@ describe('standalone service brand paths at actual icon use', () => {
             expect(chunk.imports).toEqual([]);expect(chunk.dynamicImports).toEqual([]);
             expect(chunk.moduleIds).toContain(helperId);
             expect(chunk.moduleIds.includes(dataPath)).toBe(!enabled);
-            const decode = vi.fn(atob), parse = vi.fn(JSON.parse), hostData = {controlledHostData: true};
-            const realm = {serviceBrandOwner: undefined as BrandApi | undefined, atob: decode, Uint8Array, ArrayBuffer, JSON: {parse}, controlledHostData: hostData};
+            const decode = vi.fn(), parse = vi.fn(JSON.parse), hostData = {controlledHostData: true};
+            const realm = {serviceBrandOwner: undefined as BrandApi | undefined, atob, Uint8Array, ArrayBuffer, JSON: {parse}, controlledHostData: hostData,
+                __observeUserscriptDataDecode: decode};
             runInNewContext(chunk.code, realm, {timeout: 5_000});
             const api = realm.serviceBrandOwner;
             if (!api) throw new Error('Actual brand owner API missing');
@@ -2133,7 +2183,9 @@ describe('userscript appearance registry data owner', () => {
         const {transformWithEsbuild}=await import('vite');
         const compiled=await transformWithEsbuild(source,'appearance-owner.ts',{format:'cjs',target:'es2018'});
         const module={exports:{} as typeof originalAppearance},decode=vi.fn(inflateBundledFrancData),unrelated={unchanged:true};
-        const realm={module,exports:module.exports,Uint8Array,atob,unrelated,require:(name:string)=>{expect(name).toBe('@/userscript/pakoRuntime');return {inflateWithPako:decode};}};
+        const realm={module,exports:module.exports,Uint8Array,atob,unrelated,require:(name:string)=>{
+            if(name==='@/userscript/dataEncoding')return {decodeUserscriptData};
+            expect(name).toBe('@/userscript/pakoRuntime');return {inflateWithPako:decode};}};
         runInNewContext(compiled.code,realm,{timeout:5000});expect(realm.unrelated).toBe(unrelated);
         return {api:module.exports,decode};
     }
@@ -2200,11 +2252,11 @@ describe('userscript appearance registry data owner', () => {
             vi.resetModules();const {default:configuration}=await import('@/userscript/vite.config');const config=configuration as import('vite').UserConfig;
             const selected=(config.plugins as import('vite').Plugin[]).find(item=>item.name==='standalone-settings-data');expect(selected).toBeDefined();
             const entry=resolve(directory,'entry.ts');writeFileSync(entry,'import * as appearance from "@/src/core/config/interfaceAppearance";globalThis.appearanceOwner=appearance;');
-            const {build}=await import('vite');const result=await build({root,configFile:false,publicDir:false,logLevel:'silent',plugins:[selected!],resolve:config.resolve,
+            const {build}=await import('vite');const result=await build({root,configFile:false,publicDir:false,logLevel:'silent',plugins:[selected!,observeDataDecoder()],resolve:config.resolve,
                 build:{...config.build,write:false,outDir:resolve(directory,'unused'),lib:{entry,name:'AppearanceOwner',formats:['iife']},rollupOptions:{output:{inlineDynamicImports:true}}}});
             const results=Array.isArray(result)?result:[result];if(results.length!==1||!('output' in results[0])||results[0].output.length!==1||results[0].output[0].type!=='chunk')throw Error('Expected one real appearance consumer chunk');
             const chunk=results[0].output[0];expect(chunk.imports).toEqual([]);expect(chunk.dynamicImports).toEqual([]);
-            const decode=vi.fn(atob),realm={appearanceOwner:undefined as typeof originalAppearance|undefined,atob:decode,Uint8Array,ArrayBuffer,pako:{ungzip}};
+            const decode=vi.fn(),realm={appearanceOwner:undefined as typeof originalAppearance|undefined,atob,Uint8Array,ArrayBuffer,pako:{ungzip},__observeUserscriptDataDecode:decode};
             runInNewContext(chunk.code,realm,{timeout:5000});expect(realm.appearanceOwner).toBeDefined();complete(realm.appearanceOwner!);expect(decode).toHaveBeenCalledTimes(enabled?2:0);
             expect(readFileSync(resolve(root,'public/third-party-notices/lobe-icons-MIT.txt'),'utf8')).toContain('Copyright (c) 2023 LobeHub');
         }finally{rmSync(directory,{recursive:true,force:true});vi.unstubAllEnvs();vi.resetModules();}
@@ -2238,11 +2290,14 @@ describe('standalone immutable glossary and UI catalogs', () => {
         async function readCatalog(source: string) {
             const ast = ts.createSourceFile(id, source, ts.ScriptTarget.Latest, true);
             const dataStatements = ast.statements.filter(statement => ts.isVariableStatement(statement) && statement.declarationList.declarations.some(declaration => (names as readonly string[]).includes(declaration.name.getText(ast)))).map(statement => statement.getText(ast)).join('\n');
-            const decoderImport = source.includes('__fluentreadInflateSettingsData') ? "import {inflateWithPako as __fluentreadInflateSettingsData} from '@/userscript/pakoRuntime';\n" : '';
+            const decoderImport = source.includes('__fluentreadInflateSettingsData') ? "import {inflateWithPako as __fluentreadInflateSettingsData} from '@/userscript/pakoRuntime';\nimport {decodeUserscriptData as __fluentreadDecodeSettingsData} from '@/userscript/dataEncoding';\n" : '';
             const compiled = await transformWithEsbuild(`${decoderImport}${dataStatements}\nexport const auditCatalogs = {${names.join(',')}};`, 'actual-catalog.ts', {format: 'cjs', target: 'es2018'});
             const module = {exports: {} as {auditCatalogs: unknown}}, decode = vi.fn(inflateBundledFrancData);
             runInNewContext(compiled.code, {module, exports: module.exports, Uint8Array, atob,
-                require: (name: string) => name === '@/userscript/pakoRuntime' ? {inflateWithPako: decode} : {}}, {timeout: 5000});
+                require: (name: string) => {
+                    if (name === '@/userscript/dataEncoding') return {decodeUserscriptData};
+                    expect(name).toBe('@/userscript/pakoRuntime');return {inflateWithPako: decode};
+                }}, {timeout: 5000});
             return {json: JSON.stringify(module.exports.auditCatalogs), decode};
         }
         const baseline = await readCatalog(original), candidate = await readCatalog(transformed);
@@ -2268,6 +2323,7 @@ describe('standalone shared AI timeout locale data', () => {
         const compiled = await transformWithEsbuild(transform(original).code, 'shared-timeout-catalog.ts', {format: 'cjs', target: 'es2018'});
         const module = {exports: {} as typeof import('@/src/core/i18n/messages/aiRequestTimeout')}, decode = vi.fn(inflateBundledFrancData);
         runInNewContext(compiled.code, {module, exports: module.exports, Uint8Array, atob, require: (name: string) => {
+            if (name === '@/userscript/dataEncoding') return {decodeUserscriptData};
             expect(name).toBe('@/userscript/pakoRuntime');return {inflateWithPako: decode};
         }}, {timeout: 5000});
         expect(JSON.stringify(module.exports.aiRequestTimeoutMessages)).toBe(JSON.stringify(aiRequestTimeoutMessages));

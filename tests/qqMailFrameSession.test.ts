@@ -28,6 +28,22 @@ describe('QQ mail frame session snapshots', () => {
         }
     });
 
+    it('validates optional AI batch budgets as bounded integers without coercion', () => {
+        for (const aiMultiSegmentMaxSegments of [undefined, 2, 8, 32]) {
+            for (const aiMultiSegmentMaxCharacters of [undefined, 500, 2_000, 12_000]) {
+                expect(isFrameTranslationState(state({translationConfig: {
+                    ...config, aiMultiSegmentMaxSegments, aiMultiSegmentMaxCharacters,
+                }}))).toBe(true);
+            }
+        }
+        for (const aiMultiSegmentMaxSegments of [null, '8', 1, 33, 8.5, NaN, Infinity]) {
+            expect(isFrameTranslationState(state({translationConfig: {...config, aiMultiSegmentMaxSegments} as never}))).toBe(false);
+        }
+        for (const aiMultiSegmentMaxCharacters of [null, '2000', 499, 12_001, 500.5, NaN, Infinity]) {
+            expect(isFrameTranslationState(state({translationConfig: {...config, aiMultiSegmentMaxCharacters} as never}))).toBe(false);
+        }
+    });
+
     it('validates glossary versions and bounded selections before sharing a full-page session', () => {
         for (const glossaryIds of [null, [], ['technical']]) {
             expect(isFrameTranslationState(state({translationConfig: {...config, glossaryIds, glossaryRevision: 'glossary-v1:disabled'}}))).toBe(true);

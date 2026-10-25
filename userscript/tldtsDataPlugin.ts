@@ -1,7 +1,7 @@
 /**
  * @file userscript/tldtsDataPlugin.ts
  * 文件职责：仅为独立完整 userscript 无损压缩锁定 tldts 的生成式后缀规则表。
- * 主要内容：核对版本、精确模块路径与静态导出，以 gzip 编码完整规则并同步恢复原 typed arrays。
+ * 主要内容：核对版本、精确模块路径与静态导出，以 gzip 压缩完整规则，用既有 ASCII85 保留二进制字节并同步恢复原 typed arrays。
  * 模块边界：不改变后缀匹配算法、规则、许可或 API；普通脚本、Greasy Fork 与扩展目标不启用。
  */
 import {createHash} from 'node:crypto';
@@ -9,6 +9,7 @@ import {readFileSync, realpathSync} from 'node:fs';
 import {createRequire} from 'node:module';
 import {dirname, resolve} from 'node:path';
 import {gzipUserscriptBuildData} from './buildGzip';
+import {encodeUserscriptData} from './buildDataEncoding';
 import ts from 'typescript';
 import {normalizePath, type Plugin} from 'vite';
 
@@ -92,17 +93,16 @@ export function createUserscriptTldtsDataCompressionPlugin(root: string, enabled
                 offsets.push(offset);
             }
             payload.set(labels, tableByteLength);
-            const compressed = gzipUserscriptBuildData(payload).toString('base64');
+            const compressed = encodeUserscriptData(gzipUserscriptBuildData(payload));
             const digest = createHash('sha256').update(code).digest('hex');
             return {
                 code: [
                     code.slice(0, source.statements[0].getStart(source)),
                     '/* Non-code locked tldts data; source sha256 ' + digest + '. */',
                     "import {inflateBytesWithPako, decodeUtf8WithPako} from '@/userscript/pakoBundled';",
+                    "import {decodeUserscriptData} from '@/userscript/dataEncoding';",
                     'export const [' + names.slice(0, arrayTypes.length + 1).join(', ') + '] = (() => {',
-                    '    const binary = atob(' + JSON.stringify(compressed) + ');',
-                    '    const bytes = new Uint8Array(binary.length);',
-                    '    for (let index = 0; index < binary.length; index++) bytes[index] = binary.charCodeAt(index);',
+                    '    const bytes = decodeUserscriptData(' + JSON.stringify(compressed) + ');',
                     '    const data = inflateBytesWithPako(bytes);',
                     '    if (data.byteLength !== ' + payload.byteLength + ') throw new Error("Invalid locked suffix data length");',
                     '    const view = new DataView(data.buffer, data.byteOffset, data.byteLength);',
