@@ -405,6 +405,8 @@ node scripts/testing/run-webdav-backup-ui-test.cjs \
 
 译文样式由 `tests/translationAppearance.test.ts` 与 `tests/translationAppearanceStyles.test.ts` 覆盖预设注册表、旧版选项顺序、外观归一化、颜色换算与网页样式节点的安装、原位更新和移除；颜色换算还保留旧配置中的字母裸 hex（包括不透明四位与八位），继续拒绝透明和损坏值。`tests/pageStyles.test.ts` 验证外观样式随公共页面样式一起安装、订阅配置更新，并在移除或 context 失效时一起清理。生产扩展构建后执行 `node scripts/testing/run-translation-style-ui-test.cjs --extension-dir .output/chrome-mv3 --playwright-root <Node包目录> --focus-safe-helper <focus-safe-browser.cjs路径> --artifacts-dir /private/tmp/fluentread-translation-style`：在临时 Edge 与第二屏后台窗口中验证界面风格页第一组为译文样式、六类 71 张样式卡片逐一写入配置并同步预览，其中卡片与趣味各 12 种；覆盖色板与方向键、滑块、分段控件和自定义取色器、仅译文提示、逐句高亮开关、重新打开后的保存结果、设置搜索直达外观面板与逐句高亮开关、深色界面与 1024/820/390 宽度；再用本地确定性夹具真实悬浮翻译，确认外观调整无需新请求即可更新已有译文，停用插件或恢复默认时移除外观样式节点，并检查简约卡片底色在网页上生效。
 
+网页阅读样式兼容专项执行 `node scripts/testing/run-reading-style-compatibility-test.cjs --extension-dir .output/chrome-mv3 --playwright-root <Node包目录> --runtime-diagnostics <浏览器测试技能>/scripts/runtime-diagnostics.cjs --artifacts-dir <证据目录>`。它使用临时 Edge、第二屏后台正常窗口和本地确定性服务，让 24 款卡片与趣味样式经过真实内容脚本翻译；覆盖白色、黑色、暖黄、紫色页面、与网站相反的系统主题、同页深浅区域、已译文主题切换且没有新请求、390px 换行、链接点击与键盘焦点、自定义前景背景覆盖、强制颜色和打印。常规卡片还检查无实时背景滤镜、无外阴影、长页屏外隔离可用和完整滚动；该检查证明渲染路径与功能，不将单次滚动观察解释为 FPS 提升。报告保留运行时诊断、采集缺口、计算颜色与截图，受控页面结果不能替代所有真实网站、远程翻译服务或 Firefox 实机验收。
+
 ## 关键内容空间与交互工作量
 
 划词卡片定向回归使用 `tests/selectionTranslatorLifecycle.test.ts`、`tests/readingPanelLifecycle.test.ts` 与 `tests/readingPanelStreamingResize.test.ts`，检查单帧合并拖动、结束时刷新最后位置、取消与迟到帧、视口变化、UTF-16 朗读偏移和流式正文的尺寸通知。生产构建后执行 `node scripts/testing/run-selection-key-information-test.cjs --extension-dir .output/chrome-mv3 --playwright-root <Node包目录> --artifacts-dir <证据目录> --phase optimized`，在第二屏临时后台 Edge 中检查译文首屏、完整原文、单行工具栏的滚轮与键盘操作、手动拖动/缩放、流式阅读期间的卡片尺寸和网页内容保留。`--phase baseline` 允许记录优化前的关键内容失败，但仍要求基础交互、原文和清理契约通过。性能探针在核对扩展 ID 的隔离世界统计实际送达的受信指针事件与卡片几何读取；请求的输入数量不等于实际事件数量，也不代表 FPS。
@@ -1299,6 +1301,8 @@ node scripts/testing/run-section-translation-flow-test.cjs \
 ```
 
 使用 `--case-set sweep` 可单独验证真实 Alt+R 进入后左键划过两段、往返去重和间隙排除、从段落空白起划后收窄外壳、旧选择器退出动画不打断下一轮拖动、逐块高亮、松开仅锁定且确认前零请求、整组扩大缩小、精确翻译/恢复、混合已译状态补译、重新选择、Esc 取消后网页点击恢复，以及非首段被移除后的失效保护。`core` 保留原有单击、快捷键和页面生命周期回归，可与 `sweep` 分别运行。传入 `--runtime-diagnostics` 后保存内容脚本隔离世界、Popup 和后台的错误与告警；报告同时保留附加前启动日志等采集空窗。
+
+划过体验专项使用 `--case-set quality --quality-cases pointer,layout,nested-scroll,boundary,cancel,narrow`：`pointer` 记录同段内 120 次可信指针移动的高亮隐藏帧、几何变化、浮层 DOM 写入以及布局、样式与脚本开销，核对最终邻段命中、原文布局不变和确认前零请求；原生时序指标仅用于同环境对照。`sweep` 另验证单次跨六段并立即松手仍精确选择和翻译六段。`sectionTranslationPicker` 单测覆盖同帧折线保留、松手统一盘点、稳定窗迟到复验、无关侧栏滚动与路径内滚动的区分，以及多框读写分离；样式和几何同值时不重复写入浮层。
 
 使用临时 Edge profile、防抢焦点 helper 和 CDP 真实指针/按键，在类 GitHub 仓库页夹具上验证：Popup 局部按钮与主按钮同排等高，消息进入选择模式后稳定预览鼠标下的段落，边缘轻微移动不换选；点击只锁定选区、不请求服务且不跳转，锁定后鼠标移动与滚动不改变范围；可见按钮扩大到 README、缩小及重新选择，确认按钮才翻译该区域，网页收不到选择点击，视口外段落排在最后翻译，导航、文件列表、侧栏、页脚和代码保持原文；再次选择同一区域显示“恢复原文”并只恢复该区域。伪造点击和 Esc 不影响选择，真实 Esc 与右键退出且不发请求；主动选择侧栏时按全部节点范围翻译；已是目标语言与空白区域给出提示且不请求服务；快捷键默认关闭、开启后可进入和退出且在输入框中让行；全文恢复原文同时清除局部译文，关闭插件立即退出选择模式。追加 `--github-url <仓库地址>` 可在真实 GitHub README 上重复点选流程并断言 README 之外没有译文。翻译传输是确定性 Google 夹具，不代表外部服务可用性。
 

@@ -18,6 +18,8 @@ If the webpage font is hard to read, select **Aa** at the bottom right of the qu
 
 Styles are grouped into **Text, Colors, Lines, Highlights, Cards, and Fun**. Start with plain text or a color, then try a card, sticky note, or speech bubble to emphasize translations. **Blur until hover** and blackout styles hide the translation until you point at it, useful for checking your understanding after reading the original.
 
+Cards and most Fun styles pair their background, text, and link colors with the text brightness in each part of the webpage. Different sections adapt separately, and existing translations follow website theme changes independently of the extension or system theme. **Terminal** and **Starlit reading** keep their dark themes. Browsers without automatic color support keep each style’s fixed palette.
+
 | Control | Effect |
 | --- | --- |
 | Text and background color | Give translations their own colors; Default uses the selected style’s colors |
@@ -25,7 +27,7 @@ Styles are grouped into **Text, Colors, Lines, Highlights, Cards, and Fun**. Sta
 | Highlight color | Recolor markers, study highlights, and card backgrounds |
 | Font size, weight, font, and opacity | Change size and emphasis; font size ranges from 50% to 250% of the original |
 
-Use swatches, the color picker, or a CSS color value. Invalid values are not saved. Choosing a color card clears text-color and CSS overrides that conflict with its palette while keeping other font and size adjustments. **Reset** returns to the current style’s own appearance.
+Use swatches, the color picker, or a CSS color value. Invalid values are not saved. Choosing a color card clears text-color and CSS overrides that conflict with its palette while keeping other font and size adjustments. **Reset** returns to the current style’s own appearance. Your chosen text, background, line, and highlight colors take priority over automatic colors. Check readability in both light and dark previews.
 
 If you know CSS, enter declarations under **Enter CSS directly**:
 
@@ -36,6 +38,8 @@ font-size: 117%;
 ```
 
 Leave out selectors. Valid declarations override matching controls; only appearance properties such as colors, fonts, and borders are allowed. URLs, selectors, and positioning properties are ignored. Save a named style to apply it again from its card.
+
+Focusing a translation link with the keyboard also reveals blur and blackout styles. Touch devices without hover show the translation directly. Forced-colors mode uses system text, background, and link colors. Printing removes decorative backgrounds and masks to keep translations readable.
 
 ## Bilingual sentence highlighting
 

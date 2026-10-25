@@ -7,8 +7,8 @@ Translate an article or selected section, compare both languages, and return to 
 ## Page translation
 
 1. Open an article and click FluentRead in the browser toolbar.
-2. Choose the target language and service, then click **Translate this page**.
-3. Read in bilingual mode. Use the display-mode button at the bottom right of the translation card to switch between **Bilingual / Translation only**. Choose **Restore original** to return.
+2. Choose the target language and service, then click **Translate**.
+3. Read in bilingual mode. Use the display-mode button at the bottom right of the translation card to switch between **Bilingual / Translation only**. Choose **Restore** to return.
 
 Display mode is saved and updates existing translations without another request. Google Translate supports bilingual display only; switch back to bilingual before using it.
 
@@ -29,15 +29,19 @@ Passages already in the target or an excluded language usually keep their source
 
 To translate only an article, README, or comment thread:
 
-1. Click **Section** beside **Translate this page**, then move the pointer to preview a highlighted section.
+1. Click **Section** beside **Translate**, then move the pointer to preview a highlighted section.
 2. Click to lock it. Use **Expand / Shrink selection** or **↑ / ↓** to adjust. You can also drag over several paragraphs and release to lock them.
 3. Click **Translate selected section** or press **Enter**. Locking a section alone does not translate it.
+
+The selection keeps sections crossed by fast or back-and-forth dragging. While dragging, you see the range; releasing the button checks its translatable content. Hover previews wait briefly for the pointer to settle before switching sections, reducing flicker. Moving to the toolbar keeps the selection unchanged.
 
 Choose **Reselect** to pick again. **Esc**, right-click, or the close button exits. Picking does not open links or activate page buttons. Scroll after locking to check the range.
 
 Select an already translated section again and confirm **Restore original** to stop its remaining work and restore that section. Confirm translation again to retry failed passages. Restoring the whole page also restores translated sections. Pausing the extension or leaving the page stops unfinished work.
 
 Section translation uses the webpage service, language, and display mode by default. Enable **Alt+R** (Option+R on Mac) under **Settings → Translation → Section translation** if used often. See [Shortcuts](/en/guide/custom-hotkey) for independent profiles.
+
+Full-page translation usually leaves headers, navigation, and sidebars unchanged. You can still select these areas explicitly. Their interface labels show only the translation to preserve the layout.
 
 ### Remember a section
 
