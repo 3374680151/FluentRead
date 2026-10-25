@@ -52,7 +52,7 @@ function configureSectionPorts(data: Record<string, any>, {template = false, req
     development?: boolean; browserName?: string; failureDisplay?: boolean; serviceEvents?: boolean; uiEvents?: boolean} = {}) {
     vi.resetModules();
     const empty = {render: () => null};
-    const slots = {setup(_: unknown, {slots}: any) {return () => runtime.h('div', null, slots.default?.());}};
+    const slots = {setup(_: unknown, {slots}: any) {return () => runtime.h('div', null, [slots.copy?.(), slots.default?.()]);}};
     const componentPort = (path: string, component: import('vue').Component = empty) => vi.doMock(path, () => ({__esModule: true, default: component}));
     vi.doMock('@/src/services/config/store', () => data);
     vi.doMock('webextension-polyfill', () => ({default: data.browser}));
@@ -120,7 +120,7 @@ function configureSectionPorts(data: Record<string, any>, {template = false, req
             };
         }} : empty);
     if (uiEvents) {
-        componentPort('@/src/features/settings/ui/components/SettingsItem.vue', {setup(_, {slots}) {return () => runtime.h('div', null, [slots.description?.(),slots.default?.()]);}});
+        componentPort('@/src/features/settings/ui/components/SettingsItem.vue', {setup(_, {slots}) {return () => runtime.h('div', null, [slots.copy?.(),slots.description?.(),slots.default?.()]);}});
         // 仅替换已单独测试的子组件边界，保留真实父模板及其 v-model/事件处理器。
         for (const [name, path] of Object.entries({
             feature: '@/src/ui/components/FeatureEnableCard.vue',
@@ -1293,9 +1293,22 @@ describe('设置父模板实际功能事件', () => {
         f.patch.mockClear();await f.emit('profiles:hover','update:profiles',[hover]);expect(f.patch).toHaveBeenCalledOnce();expect(f.state.config.quickTranslationProfiles).toEqual([hover]);
         const full={...hover,id:'full-one',action:'full-page',hotkey:'Alt+K'};
         f.patch.mockClear();await f.emit('profiles:full-page','update:profiles',[hover,full]);expect(f.patch).toHaveBeenCalledOnce();expect(f.state.config.quickTranslationProfiles).toEqual([hover,full]);
-        await f.emit('el-switch:AI 多段翻译','update:modelValue',false);expect(f.state.config.enableAIMultiSegment).toBe(false);
+        await f.emit('el-switch:settings.fullPage.multiSegmentTitle','update:modelValue',false);expect(f.state.config.enableAIMultiSegment).toBe(false);
         await f.choose('全文翻译范围','翻译到页底');expect(f.state.config.fullPageTranslationMode).toBe('all');
         await f.emit('excluded:','update:modelValue',['en','ja']);expect(f.state.config.excludedLanguages).toEqual(['en','ja']);
+    });
+    it('AI 多段预算实际子组件编辑及恢复默认各原子保存一次，关闭保留两项预算',async()=>{
+        const f=await settingsUiFixture('settings-translation',{enableAIMultiSegment:true,aiMultiSegmentMaxSegments:12,aiMultiSegmentMaxCharacters:3500});
+        const fragments='settings.fullPage.multiSegmentFragmentsAria';
+        await vi.waitFor(()=>expect(f.numericPorts.has(fragments)).toBe(true));f.patch.mockClear();
+        f.numericPorts.get(fragments)!.change(24);await settle();
+        expect(f.patch).toHaveBeenCalledOnce();expect(f.state.config).toMatchObject({aiMultiSegmentMaxSegments:24,aiMultiSegmentMaxCharacters:3500});
+        f.patch.mockClear();f.document.querySelector('[data-testid="ai-multi-segment-reset"]')!.dispatchEvent(new f.domWindow.Event('click'));await settle();
+        expect(f.patch).toHaveBeenCalledOnce();expect(f.patch.mock.calls[0][0]).toMatchObject({aiMultiSegmentMaxSegments:8,aiMultiSegmentMaxCharacters:2000});
+        expect(f.state.config.enableAIMultiSegment).toBe(true);
+        await f.emit('el-switch:settings.fullPage.multiSegmentTitle','update:modelValue',false);
+        expect(f.document.querySelector('[data-testid="ai-multi-segment-limits"]')).toBeNull();
+        expect(f.state.config).toMatchObject({enableAIMultiSegment:false,aiMultiSegmentMaxSegments:8,aiMultiSegmentMaxCharacters:2000});
     });
     it('网站适配显式保存仅交接适配补丁，并把保存失败留给实际子界面处理',async()=>{
         const f=await settingsUiFixture('settings-sites',{service:'microsoft'}),port=await f.port('adaptation:');

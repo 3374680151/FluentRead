@@ -1,10 +1,11 @@
 /**
  * @file src/features/full-page-translation/content/frameSession.ts
  * 文件职责：让受支持邮件与正文子页面跟随顶层全文会话，并隔离异步状态读取的过期响应。
- * 主要内容：定义不含凭据的会话与当前页字体快照，校验响应，合并通知的在途读取；字体独立同步，不因字体变化重启翻译，按会话标识与恢复版本决定启动、保留或清理子页面翻译。
+ * 主要内容：定义不含凭据的会话与当前页字体快照，校验响应及可选 AI 合批整数预算，合并通知的在途读取；字体独立同步，不因字体变化重启翻译，按会话标识与恢复版本决定启动、保留或清理子页面翻译。
  * 模块边界：不访问 browser、DOM 或配置存储；可信消息传输和功能挂载由 content composition root 注入。
  */
 import {translationLanguageOptions} from '@/src/core/language/catalog';
+import {normalizeAiMultiSegmentMaxCharacters, normalizeAiMultiSegmentMaxSegments} from '@/src/core/config/aiMultiSegment';
 import type {TranslationScope} from '@/src/core/translation/public';
 import type {FullPageTranslationMode} from '@/src/core/config/model';
 import type {FullPageTranslationConfigSnapshot} from './translationRequest';
@@ -33,6 +34,10 @@ export function isFrameTranslationState(value: unknown): value is FrameTranslati
     return ['service', 'model', 'sourceLanguage', 'targetLanguage'].every(key => typeof config[key as keyof typeof config] === 'string')
         && ['thinking', 'useCache', 'enableAIContext', 'enableAIMultiSegment'].every(key => typeof config[key as keyof typeof config] === 'boolean')
         && (config.enableNativeBatch === undefined || typeof config.enableNativeBatch === 'boolean')
+        && (config.aiMultiSegmentMaxSegments === undefined || (Number.isInteger(config.aiMultiSegmentMaxSegments)
+            && normalizeAiMultiSegmentMaxSegments(config.aiMultiSegmentMaxSegments) === config.aiMultiSegmentMaxSegments))
+        && (config.aiMultiSegmentMaxCharacters === undefined || (Number.isInteger(config.aiMultiSegmentMaxCharacters)
+            && normalizeAiMultiSegmentMaxCharacters(config.aiMultiSegmentMaxCharacters) === config.aiMultiSegmentMaxCharacters))
         && (config.displayMode === 'bilingual' || config.displayMode === 'single') && Number.isFinite(config.style)
         && (config.excludedLanguages === undefined || (Array.isArray(config.excludedLanguages)
             && config.excludedLanguages.length <= translationLanguageOptions.length

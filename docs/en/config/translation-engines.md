@@ -53,6 +53,14 @@ Compact directory rows keep full service names visible and leave more room for m
 
 </details>
 
+## AI multi-segment translation
+
+In **Translation settings → Full-page translation**, enable **AI multi-segment translation** to combine directly adjacent passages using a prompt-based AI service. It is off by default and does not require AI context. Composite services and translation-only models do not use this option.
+
+The default batch budget is **8 text fragments / 2,000 source characters**. Adjust fragments from 2 to 32 and characters from 500 to 12,000; either limit can split a batch. More fragments help with short sentences, while a smaller character budget can suit long passages or smaller models. A rich-text paragraph may contain several fragments. An oversized single passage is sent on its own without truncation; batches are not held indefinitely to fill the budget. Larger batches do not always finish faster.
+
+Turning the option off retains your budgets. **Restore defaults** resets them to 8 / 2,000. Restore the original page and start full-page translation again to apply changes. Hover translation keeps its single-passage behavior, actual HTTP requests still follow your concurrency limit, and invalid batch results fall back to individual translation.
+
 ## Google translation speed and fallback
 
 Google translation requires no user API key. Full-page translation groups paragraphs with the same language settings for about 120 milliseconds, with up to 32 paragraphs and a budget of 10,000 escaped characters per batch. A single paragraph exceeding that budget is sent separately. Full batches are sent immediately, reducing small requests on long pages and during continuous scrolling. The first request favors the browser batch endpoint; later requests rank the four endpoints by recent success rate, response time, and current load. Every tenth batch uses a less-observed available endpoint to discover faster or recovered routes. No additional speed setting is needed.
