@@ -1,6 +1,6 @@
 <!--
  * @file src/features/selection-translation/ui/SelectionTranslator.vue
- * 两点选取：默认关闭及文档适配器跳过快捷键冲突计算，快捷键开启单次起终点选择并放行开放 Shadow DOM 编辑区；复用原生选区与现有划词入口，短状态提示不捕获页面指针，未命中文字或起终点重合时说明可继续操作，配置变更和卸载释放控制器。
+ * 两点选取：默认关闭及文档适配器跳过快捷键冲突计算，快捷键开启单次起终点选择并放行开放 Shadow DOM 编辑区；复用原生选区与现有划词入口，完成后的首次选区读取保留同轮延迟滚动，随后恢复普通滚动收起，取消、编辑与卸载撤销首帧保护；短状态提示不捕获页面指针，未命中文字或起终点重合时说明可继续操作，配置变更和卸载释放控制器。
  * 通知布局：收藏与语音设置通知沿用安全可见视口订阅，触摸动作保留完整命中区；通知不增加独立监听或请求。
  * 极矮视口：同一卡片改为整卡滚动并收紧顶栏间距，保留输入与请求、手动几何和语音状态；Safari 键盘视口变化后仅在当前有限窗口内滚动卡片自身显露原聚焦输入，主动操作取消待处理显露；恢复尺寸后沿用原定位，不增加监听或计时器。
  * 文件职责：实现划词翻译的主要页面组件，覆盖选区捕获、触摸原生句柄稳定等待、避开原生菜单上下区域的行侧入口、可见视口与安全区定位、后台及宿主恢复来源校验、图标/小点/悬停/快捷键/仅右键菜单/直接弹出、原生菜单可信选区恢复与重复请求复用、翻译与词卡展示、免费 AI 讲解的显式启用、朗读、收藏选中的单词/表达/句子、双语分享卡片、鉴权服务配置入口、重试和关闭。
@@ -368,6 +368,7 @@ const vocabularyBusy = ref(false);
 let readingHoverTimer: number | null = null;
 let entryDismissTimer: number | null = null;
 let selectionFrame: number | null = null;
+let clickSelectionFirstReadPending = false;
 let positionFrame: number | null = null;
 let positionRevision = 0;
 let zoomRequestGeneration = 0;
@@ -452,6 +453,7 @@ const clickSelection = createClickSelectionController({
     dismissedSelection = null;
     lastTrustedSelectionInteractionAt = Date.now();
     scheduleSelectionRead();
+    clickSelectionFirstReadPending = selectionFrame !== null;
   },
 });
 // 文档阅读器有自己的选区模型；此处只在普通网页启用两点选取。
@@ -610,6 +612,7 @@ function scheduleSelectionRead(shortcutTriggered = false): void {
   if (selectionFrame !== null) return;
   selectionFrame = window.requestAnimationFrame(() => {
     selectionFrame = null;
+    clickSelectionFirstReadPending = false;
     const shouldTriggerShortcut = pendingSelectionShortcutUntil >= performance.now();
     pendingSelectionShortcutUntil = 0;
     if (!isSelecting && !isSelectionReadSuppressed()) applySelection(readSelectionSnapshot(), shouldTriggerShortcut);
@@ -635,6 +638,7 @@ function scheduleTouchSelectionRead(): void {
 }
 
 function suppressSelectionRead(duration = UI_SELECTION_SUPPRESSION_MS): void {
+  clickSelectionFirstReadPending = false;
   suppressSelectionUntil = Math.max(suppressSelectionUntil, performance.now() + duration);
   if (selectionFrame !== null) {
     window.cancelAnimationFrame(selectionFrame);
@@ -2072,6 +2076,7 @@ function closeTooltip(): void {
   hideAll();
 }
 function hideAll(): void {
+  clickSelectionFirstReadPending = false;
   clearReadingKeyboardFocus();
   cancelIndicatorTouch();
   touchOpenedSelection = null;
@@ -2501,6 +2506,8 @@ function handleScroll(event: Event): void {
   // 选区读取可能还在下一帧或 selectionchange 队列中；连同显示计时器一起清理，
   // 避免滚动结束后才出现小点或卡片。拖选中的自动滚动仍由 pointerup 处理新选区。
   if (!showTooltip.value) {
+    // 两点已完成但尚未读取原生 Selection 时，保留此前定位引发的同轮延迟滚动。
+    if (clickSelectionFirstReadPending && selectionFrame !== null && !snapshot.value) return;
     if (!isSelecting && (snapshot.value || selectionFrame !== null
       || Date.now() - lastTrustedSelectionInteractionAt <= TRUSTED_SELECTION_INTERACTION_GRACE_MS)) hideAll();
     return;
@@ -2509,6 +2516,10 @@ function handleScroll(event: Event): void {
   if (readingMode.value && readingEvidenceScrollFrame !== undefined) { schedulePositionUpdate(); return; }
   if (selectionSettings.value.autoDismiss) { hideAll(); return; }
   schedulePositionUpdate();
+}
+function isClickSelectionEditingEvent(event: KeyboardEvent): boolean {
+  return (event.composedPath?.() ?? [event.target]).some(target => target instanceof Element
+    && target.closest('input, textarea, select, [contenteditable]:not([contenteditable="false"])'));
 }
 function handleKeydown(event: KeyboardEvent): void {
   if (!event.isTrusted || (event.target instanceof Element && event.target.id === 'fluent-read-share-card-container')) return;
@@ -2523,6 +2534,7 @@ function handleKeydown(event: KeyboardEvent): void {
     if (event.key === 'Escape' && snapshot.value) { event.preventDefault(); event.stopPropagation(); closeTooltip(); }
     return;
   }
+  if (clickSelectionFirstReadPending && (event.key === 'Escape' || isClickSelectionEditingEvent(event))) { hideAll(); return; }
   if (event.key === 'Escape' && clickSelection.active) {
     event.preventDefault();
     event.stopPropagation();
@@ -2534,8 +2546,7 @@ function handleKeydown(event: KeyboardEvent): void {
   if (event.target instanceof Element && event.target.closest('input, textarea, select, [contenteditable]:not([contenteditable="false"])')) { clickSelection.cancel(); return; }
   if (!props.selectionAdapter && matchesClickSelectionShortcut(event, config)) {
     // 开放 Shadow DOM 的键盘事件会把 target 重定向到 host；仅为两点入口审核原始编辑路径。
-    if ((event.composedPath?.() ?? []).some(target => target instanceof Element
-      && target.closest('input, textarea, select, [contenteditable]:not([contenteditable="false"])'))) { clickSelection.cancel(); return; }
+    if (isClickSelectionEditingEvent(event)) { clickSelection.cancel(); return; }
     event.preventDefault();
     event.stopPropagation();
     if (!clickSelection.active) hideAll();
@@ -2753,6 +2764,7 @@ onMounted(() => {
 
 onBeforeUnmount(() => {
   componentDisposed = true;
+  clickSelectionFirstReadPending = false;
   clickSelection.dispose();
   clearReadingKeyboardFocus();
   cancelIndicatorTouch();
@@ -2767,6 +2779,7 @@ onBeforeUnmount(() => {
   unsubscribeVisualViewport?.();
   unsubscribeVisualViewport = null;
   if (selectionFrame !== null) window.cancelAnimationFrame(selectionFrame);
+  selectionFrame = null;
   cancelPositionUpdate();
   // 悬停延迟可能跨过卸载；卸载后不能再按旧选区打开阅读卡片。
   cancelReadingHover();

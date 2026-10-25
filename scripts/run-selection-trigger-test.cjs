@@ -3,6 +3,7 @@
 // 使用临时 Edge profile 验证划词翻译的触发矩阵；--context-menu-only 只运行右键入口专项，
 // --lifecycle-only 仅检查宿主节点恢复、启停、路由、失败重试与键盘/窄屏界面。
 // --click-selection-only 只验证按需两点选取；通过 --runtime-diagnostics 传入 CDP 诊断收集器。
+// --click-selection-stress-only 只诊断滚动后立即确认终点的重复手势与事件时序。
 // Popup 快捷抽屉提供独立启用开关与双语/仅译文选择；触发方式、显示延迟和自定义快捷键在完整设置页修改，
 // 两个真实扩展页面同时打开，断言设置页写入、Popup 模式同步与网页中的真实划词手势结果一致。
 // 该脚本只操作本次创建的隔离 profile，不连接用户正在使用的浏览器。
@@ -45,7 +46,8 @@ function parseArgs(argv) {
     zoomOnly: argv.includes('--zoom-only'),
     scrollOnly: argv.includes('--scroll-only'),
     inlineCodeOnly: argv.includes('--inline-code-only'),
-    clickSelectionOnly: argv.includes('--click-selection-only'),
+    clickSelectionOnly: argv.includes('--click-selection-only') || argv.includes('--click-selection-stress-only'),
+    clickSelectionStressOnly: argv.includes('--click-selection-stress-only'),
     runtimeDiagnostics: readArg(argv, 'runtime-diagnostics', ''),
   };
   if (args.clickSelectionOnly && (!args.runtimeDiagnostics || !fs.existsSync(args.runtimeDiagnostics))) {
@@ -1232,7 +1234,7 @@ async function createClickSelectionPerformanceProbe(context, page, extensionId) 
     const newSample = () => ({querySelectorAllCalls: 0, broadQueryCalls: 0, unrelatedMatches: 0, elementChecks: 0, unrelatedElementChecks: 0,
       semanticQuerySelectorCalls: 0, semanticQuerySelectorAllCalls: 0, semanticBroadQueryCalls: 0,
       semanticUnrelatedMatches: 0, semanticElementChecks: 0, unrelatedSemanticElementChecks: 0, rangeCloneContentsCalls: 0, semanticQueries: [],
-      queryRoots: [], pointerupAt: null, nativeSelectionMs: null, nativeOperationMs: null,
+      queryRoots: [], eventTrace: [], pointerupAt: null, nativeSelectionMs: null, nativeOperationMs: null,
       nextFrameMs: null, longTasks: []});
     sample = newSample();
     for (const prototype of [Document.prototype, DocumentFragment.prototype, Element.prototype]) {
@@ -1299,6 +1301,7 @@ async function createClickSelectionPerformanceProbe(context, page, extensionId) 
       const value = Reflect.apply(selectionDescriptor.value, this, args);
       if (active && sample.pointerupAt !== null) {
         const observed = sample;
+        observed.eventTrace.push({type: 'native-selection-completed', at: performance.now(), scrollY});
         observed.nativeOperationMs = performance.now() - before;
         observed.nativeSelectionMs = performance.now() - observed.pointerupAt;
         requestAnimationFrame(() => {observed.nextFrameMs = performance.now() - observed.pointerupAt;});
@@ -1306,8 +1309,17 @@ async function createClickSelectionPerformanceProbe(context, page, extensionId) 
       return value;
     }});
     restorers.push(() => Object.defineProperty(Selection.prototype, 'setBaseAndExtent', selectionDescriptor));
-    const pointerup = event => {if (active && event.isTrusted) sample.pointerupAt = performance.now();};
+    const pointerdown = event => {if (active && event.isTrusted) sample.eventTrace.push({type: 'pointerdown', at: performance.now(), scrollY});};
+    const pointerup = event => {
+      if (active && event.isTrusted) {
+        sample.pointerupAt = performance.now();
+        sample.eventTrace.push({type: 'pointerup', at: sample.pointerupAt, scrollY});
+      }
+    };
+    const scrolled = event => {if (active) sample.eventTrace.push({type: 'scroll', at: performance.now(), scrollY, trusted: event.isTrusted});};
+    window.addEventListener('pointerdown', pointerdown, true);
     window.addEventListener('pointerup', pointerup, true);
+    window.addEventListener('scroll', scrolled, true);
     if (PerformanceObserver.supportedEntryTypes?.includes('longtask')) {
       observer = new PerformanceObserver(list => {
         if (active) sample.longTasks.push(...list.getEntries().map(entry => ({durationMs: entry.duration, startTime: entry.startTime})));
@@ -1330,7 +1342,8 @@ async function createClickSelectionPerformanceProbe(context, page, extensionId) 
       },
       stop() {
         active = false;
-        observer?.disconnect(); window.removeEventListener('pointerup', pointerup, true);
+        observer?.disconnect(); window.removeEventListener('pointerdown', pointerdown, true); window.removeEventListener('pointerup', pointerup, true);
+        window.removeEventListener('scroll', scrolled, true);
         for (const restore of restorers.reverse()) restore();
         delete globalThis.__fluentReadClickSelectionProbe;
       },
@@ -1464,6 +1477,42 @@ async function runClickSelectionCases({page, popup, context, extensionId, result
     const screenshotPath = path.join(args.artifactsDir, `${label}.png`);
     await page.screenshot({path: screenshotPath}); result.screenshots.push(screenshotPath);
   };
+
+  if (args.clickSelectionStressOnly) {
+    runtimeDiagnostics.setPhase('scroll-immediately-before-endpoint-stress-only');
+    await patchStoredConfig(popup, {selectionClickSelectEnabled: true}); await page.waitForTimeout(150);
+    await page.evaluate(() => {
+      const main = document.getElementById('selection-test-fixture');
+      for (const suffix of ['before', 'after']) {
+        const section = document.createElement('section'); section.id = `click-selection-unrelated-${suffix}`;
+        section.dataset.clickSelectionUnrelated = ''; section.style.cssText = 'font:12px/1.2 Arial,sans-serif';
+        section.innerHTML = Array.from({length: 2000}, (_, index) => `<div><button>Unrelated ${index}</button><input/><span role="checkbox">Choice</span></div>`).join('');
+        if (suffix === 'before') main.insertBefore(section, document.getElementById('target'));
+        else document.getElementById('neighbor').after(section);
+      }
+    });
+    const probe = await createClickSelectionPerformanceProbe(context, page, extensionId), samples = [];
+    result.scrollRaceDiagnostic = {samples, probeWorld: probe.world};
+    try {
+      for (let index = 0; index < 20; index++) {
+        await begin(); await clickText('#target', 8, false, true); await waitState('end');
+        await probe.reset();
+        const endpoint = await point('#neighbor', 20, true, true);
+        await page.mouse.click(endpoint.x, endpoint.y); await waitState('idle');
+        try {await waitForSelectionUi(page, {indicator: true, tooltip: false}, `快速滚动第${index + 1}轮入口`);}
+        catch (error) {
+          result.scrollRaceDiagnostic.failedSample = {iteration: index + 1, probe: await probe.read(), selected: await selection()};
+          await screenshot('click-selection-scroll-race-failure'); throw error;
+        }
+        samples.push({...await probe.read(), selected: await selection()});
+      }
+      check('scroll-immediately-before-endpoint-stress-only', {iterations: samples.length});
+    } finally {await probe.stop();}
+    await assertBackgroundFocus('click selection stress final'); await runtimeDiagnostics.flush(); runtimeDiagnostics.assertClean();
+    result.runtimeDiagnostics = runtimeDiagnostics.snapshot(); result.ok = result.consoleErrors.length === 0;
+    fs.writeFileSync(path.join(args.artifactsDir, 'report.json'), `${JSON.stringify(result, null, 2)}\n`);
+    process.stdout.write(`${JSON.stringify(result, null, 2)}\n`); return;
+  }
 
   runtimeDiagnostics.setPhase('default-disabled');
   await activateInputPage(page);
@@ -1607,32 +1656,47 @@ async function runClickSelectionCases({page, popup, context, extensionId, result
   runtimeDiagnostics.setPhase('bounded-selection-performance');
   const probe = await createClickSelectionPerformanceProbe(context, page, extensionId);
   const performanceGroups = [];
+  result.clickSelectionPerformance = {probeWorld: probe.world, groups: performanceGroups,
+    metric: 'Trusted pointerup capture to native Selection.setBaseAndExtent completion in the extension isolated world; CDP/DOM polling time excluded. Next-frame and long-task observations are diagnostic.',
+    acceptance: 'Native range boundaries, zero unrelated-control queries/checks, zero broad formula/code queries and zero plain-range cloneContents are asserted. Test-owned canaries prove the probes see the old broad queries, outside matches and cloneContents. p50/p95 are recorded without a brittle wall-clock gate; small sample counts and fixture-only results do not establish all-site latency.'};
   try {
-    const measure = async (id, startSelector, endSelector, repetitions = 9) => {
-      const samples = [];
-      for (let index = 0; index < repetitions; index++) {
-        await begin(); await clickText(startSelector, 8, false, true); await waitState('end');
-        const endpoint = await point(endSelector, 20, true, true);
-        await probe.reset(); await page.mouse.click(endpoint.x, endpoint.y);
-        await waitState('idle');
-        await waitForSelectionUi(page, {indicator: true, tooltip: false}, `${id} 第${index + 1}轮原生选区入口`);
-        await page.waitForTimeout(35);
-        const sample = await probe.read(), selected = await selection();
-        assert(Number.isFinite(sample.nativeSelectionMs), `${id} 缺少真实 pointerup 到原生选区测量：${JSON.stringify(sample)}`);
-        const expected = await page.evaluate(({startSelector, endSelector}) => ({
-          start: document.querySelector(startSelector).firstChild.data.slice(8),
-          end: document.querySelector(endSelector).firstChild.data.slice(0, 21),
-          same: document.querySelector(startSelector).firstChild.data.slice(8, 21),
-        }), {startSelector, endSelector});
-        assert(selected.anchorId === startSelector.slice(1) && selected.focusId === endSelector.slice(1)
-          && selected.anchor === 8 && selected.focus === 21 && selected.text.length > 0,
-          `${id} 第${index + 1}轮原生选区错误：${JSON.stringify(selected)}`);
-        assert(startSelector === endSelector ? selected.text === expected.same : selected.text.startsWith(expected.start) && selected.text.endsWith(expected.end),
-          `${id} 第${index + 1}轮原生文本错误：${JSON.stringify(selected)}`);
-        samples.push({...sample, selected});
-      }
-      const group = {id, summary: summarizeClickSelectionTiming(samples), samples};
+    const measure = async (id, startSelector, endSelector, repetitions = 9, settleReveal = true) => {
+      const samples = [], group = {id, samples, settleReveal};
       performanceGroups.push(group);
+      for (let index = 0; index < repetitions; index++) {
+        try {
+          await begin(); await clickText(startSelector, 8, false, true); await waitState('end');
+          if (!settleReveal) await probe.reset();
+          const endpoint = await point(endSelector, 20, true, true);
+          if (settleReveal) {
+            await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+            await probe.reset();
+          }
+          await page.mouse.click(endpoint.x, endpoint.y);
+          await waitState('idle');
+          await waitForSelectionUi(page, {indicator: true, tooltip: false}, `${id} 第${index + 1}轮原生选区入口`);
+          await page.waitForTimeout(35);
+          const sample = await probe.read(), selected = await selection();
+          assert(Number.isFinite(sample.nativeSelectionMs), `${id} 缺少真实 pointerup 到原生选区测量：${JSON.stringify(sample)}`);
+          const expected = await page.evaluate(({startSelector, endSelector}) => ({
+            start: document.querySelector(startSelector).firstChild.data.slice(8),
+            end: document.querySelector(endSelector).firstChild.data.slice(0, 21),
+            same: document.querySelector(startSelector).firstChild.data.slice(8, 21),
+          }), {startSelector, endSelector});
+          assert(selected.anchorId === startSelector.slice(1) && selected.focusId === endSelector.slice(1)
+            && selected.anchor === 8 && selected.focus === 21 && selected.text.length > 0,
+            `${id} 第${index + 1}轮原生选区错误：${JSON.stringify(selected)}`);
+          assert(startSelector === endSelector ? selected.text === expected.same : selected.text.startsWith(expected.start) && selected.text.endsWith(expected.end),
+            `${id} 第${index + 1}轮原生文本错误：${JSON.stringify(selected)}`);
+          samples.push({...sample, selected});
+        } catch (error) {
+          group.failedSample = {iteration: index + 1, probe: await probe.read(), selected: await selection(), error: String(error.stack || error)};
+          fs.writeFileSync(path.join(args.artifactsDir, 'click-selection-performance-failure.json'), `${JSON.stringify(result.clickSelectionPerformance, null, 2)}\n`);
+          await screenshot('click-selection-performance-failure');
+          throw error;
+        }
+      }
+      group.summary = summarizeClickSelectionTiming(samples);
       return group;
     };
     await measure('short-adjacent-paragraphs', '#target', '#neighbor');
@@ -1688,6 +1752,9 @@ async function runClickSelectionCases({page, popup, context, extensionId, result
     assert(semanticGroup.summary.semanticElementChecks > 0, '没有观测到选区内公式/代码局部检查，无法证明链路已完成');
     check('outside-formulas-and-code-do-not-trigger-scan-or-clone', {fixture: outsideSemantics,
       testOwnedProbeCalibration: semanticCalibration, timing: semanticGroup.summary});
+    runtimeDiagnostics.setPhase('scroll-immediately-before-endpoint');
+    const quickScroll = await measure('scroll-immediately-before-endpoint', '#target', '#neighbor', 20, false);
+    check('scroll-immediately-before-endpoint-keeps-completed-entry', {iterations: quickScroll.samples.length, timing: quickScroll.summary});
     await page.evaluate(() => {
       document.getElementById('click-selection-unrelated-before').remove(); document.getElementById('click-selection-unrelated-after').remove();
       const paragraph = document.createElement('p'); paragraph.id = 'click-single-long';
@@ -1697,9 +1764,6 @@ async function runClickSelectionCases({page, popup, context, extensionId, result
     });
     const single = await measure('short-range-in-200000-character-text-node', '#click-single-long', '#click-single-long', 5);
     check('long-single-text-node-short-range', {textNodeLength: 200000, timing: single.summary});
-    result.clickSelectionPerformance = {probeWorld: probe.world, groups: performanceGroups,
-      metric: 'Trusted pointerup capture to native Selection.setBaseAndExtent completion in the extension isolated world; CDP/DOM polling time excluded. Next-frame and long-task observations are diagnostic.',
-      acceptance: 'Native range boundaries, zero unrelated-control queries/checks, zero broad formula/code queries and zero plain-range cloneContents are asserted. Test-owned canaries prove the probes see the old broad queries, outside matches and cloneContents. p50/p95 are recorded without a brittle wall-clock gate; small sample counts and fixture-only results do not establish all-site latency.'};
   } finally {
     await probe.stop();
     await page.evaluate(() => {
@@ -1788,7 +1852,7 @@ async function main() {
     extensionDir: args.extensionDir,
     artifactsDir: args.artifactsDir,
     browser: 'Microsoft Edge',
-    testScope: args.clickSelectionOnly ? 'click-selection-only' : args.lifecycleOnly ? 'selection-host-lifecycle-only'
+    testScope: args.clickSelectionStressOnly ? 'click-selection-scroll-race-only' : args.clickSelectionOnly ? 'click-selection-only' : args.lifecycleOnly ? 'selection-host-lifecycle-only'
       : args.contextMenuOnly ? 'context-menu-only' : 'selection-trigger-filter-or-matrix',
     profileMode: 'temporary-isolated',
     windowMode: args.headed ? 'headed-dedicated-profile' : 'background-visible-no-focus',
