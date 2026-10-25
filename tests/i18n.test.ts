@@ -46,7 +46,7 @@ registerAllUiLanguageBundles();
 
 describe('界面 i18n 契约', () => {
   it('两点选取的设置与动态状态提示覆盖六种语言，不把扫描占位登记为固定译文', () => {
-    const states = ['点击文字起点', '点击文字终点', '选区过长，请点击较近的终点', '此范围不支持，请换一个终点'];
+    const states = ['点击文字起点', '点击文字终点', '选区过长，请点击较近的终点', '此范围不支持，请换一个终点', '未点中文字，请点击起点', '未点中文字，请点击终点', '起点与终点相同，请换一个位置'];
     const settings = ['两点选取', '编辑两点选取快捷键', '开启后按快捷键，再依次点击文字起点和终点，无需按住鼠标；完成自动退出，Esc 取消', '请选择带 Ctrl、Alt 或 Shift 的组合键'];
     for (const language of ['en-US', 'ja-JP', 'ko-KR', 'fr-FR', 'ru-RU', 'es-ES'] as const) {
       for (const source of [...states, ...settings, 'Esc 取消']) {
@@ -63,6 +63,24 @@ describe('界面 i18n 契约', () => {
       }
     }
     expect(translateLegacyText('点击文字起点 · Esc 取消', 'en-US')).toBe('Click the start of the text · Esc to cancel');
+  });
+
+  it('两点选取的动态快捷键冲突说明翻译整句和实际占用功能名', () => {
+    const owners = ['鼠标悬停翻译', '全文翻译', '划词翻译', '圈选翻译', '段落复制', '局部翻译', '输入框翻译', '额外翻译方案'];
+    for (const language of ['en-US', 'ja-JP', 'ko-KR', 'fr-FR', 'ru-RU', 'es-ES'] as const) {
+      for (const owner of owners) {
+        const translatedOwner = translateLegacyText(owner, language);
+        expect(translatedOwner, `${language} ${owner}`).not.toBe(owner);
+        for (const source of [`快捷键已用于${owner}，请点击快捷键更换后使用`, `此快捷键已用于${owner}，请更换组合键`]) {
+          const result = translateLegacyText(source, language);
+          expect(result, `${language} ${source}`).not.toBe(source);
+          expect(result).toContain(translatedOwner);
+          if (language !== 'ja-JP') expect(result).not.toMatch(/[\u3400-\u9fff]/u);
+        }
+      }
+    }
+    expect(translateLegacyText('快捷键已用于段落复制，请点击快捷键更换后使用', 'en-US')).toBe('This shortcut is used for Paragraph copy. Click the shortcut to change it before use.');
+    expect(translateLegacyText('此快捷键已用于额外翻译方案，请更换组合键', 'en-US')).toBe('This shortcut is already used for Additional translation profile. Choose another combination.');
   });
 
   it('原型属性名既不是资源键也不是旧文案，不会被替换为原生函数或对象', () => {

@@ -36,7 +36,9 @@ Hover, page and section translation each support up to eight extra profiles with
 
 Enable **Two-point selection** under **Settings → Selection translation → Activation and display**. Press **Alt+Shift+S**, then click the start and end of the text to select across lines or backward without dragging. The second click leaves a native browser selection; translation follows your existing selection trigger.
 
-Press **Esc**, use the shortcut again or leave the page to cancel. Clicking a link, button or editor ends selection and keeps the normal page action. Choose another end point when prompted about protected content or the 4,096-character limit. Touch devices keep native long-press selection. Two-point, section and area selection use one selection mode at a time.
+Press **Esc**, use the shortcut again or leave the page to cancel. Clicking a link, button or editor ends selection and keeps the normal page action. If you click blank space or the same point twice, follow the retry prompt; an established start point is kept. Choose another end point when prompted about protected content or the 4,096-character limit.
+
+If another feature takes the shortcut, the settings row shows the conflict. Click the key label to change it. Two-point selection does not start inside editable areas. Touch devices keep native long-press selection. Two-point, section and area selection use one selection mode at a time.
 
 <details class="guide-details">
 <summary>Paragraph copying and selection entries</summary>
