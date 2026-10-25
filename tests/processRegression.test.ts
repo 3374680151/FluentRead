@@ -10,6 +10,12 @@ import {resolve} from 'node:path';
 import {afterEach, describe, expect, it} from 'vitest';
 
 const nativeGroups = [
+  {name: 'release packaging and publication', files: [
+    'tests/releaseBundle.test.mjs',
+    'tests/releaseManifest.test.mjs',
+    'tests/releasePublish.test.mjs',
+    'tests/releaseEdge.test.mjs',
+  ], arguments: ['--test-concurrency=1']},
   {name: 'agent bridge', files: ['tests/agentBridge.test.mjs'], arguments: []},
   {name: 'focus-safe lifecycle', files: [
     'tests/focusSafeBrowserOrdinaryLifecycle.test.mjs',
@@ -18,12 +24,6 @@ const nativeGroups = [
   ], arguments: ['--test-concurrency=1']},
   {name: 'document HTTP evidence', files: ['tests/documentLiveHttpEvidence.test.mjs'], arguments: []},
   {name: 'chatgpt plan bridge', files: ['tests/chatgptPlanBridge.test.mjs'], arguments: []},
-  {name: 'release packaging and publication', files: [
-    'tests/releaseBundle.test.mjs',
-    'tests/releaseManifest.test.mjs',
-    'tests/releasePublish.test.mjs',
-    'tests/releaseEdge.test.mjs',
-  ], arguments: ['--test-concurrency=1']},
 ];
 const childTimeoutMs = 60_000, cleanupTimeoutMs = 5_000;
 type Exit = {code: number | null; signal: NodeJS.Signals | null};

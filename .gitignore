@@ -7,6 +7,9 @@ node_modules
 coverage
 temp
 
+# Release assembly and rehearsal artifacts
+reports/release/
+
 # Production
 build
 dist
@@ -96,6 +99,3 @@ web-ext.config.ts
 *.sln
 *.sw?
 .continue/
-
-# Release assembly and rehearsal artifacts
-reports/release/

@@ -1,5 +1,7 @@
 # 测试与回归
 
+版本标签触发的安装包发布、全部交付目标、完整测试门禁及手动演练见 [自动发布安装包](./maintainers/releases.md)。发布脚本的 Node 夹具由 `processRegression.test.ts` 登记，覆盖版本一致性、缺失/损坏产物、附件摘要、草稿恢复和公开 Release 禁止覆盖等行为。
+
 ## 运行时错误与告警
 
 功能断言与运行时诊断共同决定测试结果。日常测试、针对性回归和正式发版回归均须检查选定范围内 FluentRead 自身的错误与告警；发现后定位根因、修复并重跑相关用例。译文出现、界面可用或构建成功不能代替这项检查，也不因此扩大为无关功能的全量回归。
@@ -671,8 +673,6 @@ node scripts/verify-userscript-build.mjs  # userscript 元数据与产物边界
 ## 覆盖率定义
 
 ### PR 的扩展质量检查
-
-版本标签触发的安装包发布、全部交付目标、完整测试门禁及手动演练见 [自动发布安装包](./maintainers/releases.md)。发布脚本的 Node 夹具由 `processRegression.test.ts` 登记，覆盖版本一致性、缺失/损坏产物、附件摘要、草稿恢复和公开 Release 禁止覆盖等行为。
 
 `.github/workflows/extension-quality.yml` 在面向 `main` 的 PR、主线提交和手动运行时检查扩展。使用锁文件安装与 pnpm 缓存，单个 Vitest worker、一个资源槽和串行构建；同一 PR 的新提交取消旧检查。工作流先执行测试登记审计，再由 `scripts/testing/run-affected-tests.mjs` 将完整架构组与受影响行为测试合并去重，统一执行一次。架构组中已有真实 runtime 消费者；它们在同一覆盖率运行中贡献执行证据，不能按分类标签排除。涉及扩展、共享源码、测试、资源或构建脚本时，继续检查 TypeScript/Vue、Chrome 与 Firefox 构建、生成清单，以及标准和 standalone userscript 的构建、元数据与原有体积门禁。文档内容独立变化仍执行架构门禁，不触发这些扩展构建。
 
