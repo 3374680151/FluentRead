@@ -1,6 +1,6 @@
 <!-- 操作位置由 capture-docs-ui.cjs 从真实生产扩展的 DOM 提取；图片为同一版本的无损截图。 -->
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { withBase } from 'vitepress'
 import DemoSteps from './DemoSteps.vue'
 import captures from './guide-ui.json'
@@ -151,9 +151,18 @@ const capture = computed(
 )
 const point = computed(() => capture.value.points[step.value])
 const fullPage = ref(false)
+const frameWidth = ref(600)
+let resize: ResizeObserver | undefined
+onMounted(() => {
+  if (!root.value) return
+  frameWidth.value = root.value.clientWidth
+  resize = new ResizeObserver(([entry]) => { frameWidth.value = entry.contentRect.width })
+  resize.observe(root.value)
+})
+onBeforeUnmount(() => resize?.disconnect())
 const crop = computed(() => {
   const { width, height } = capture.value
-  const cropWidth = Math.min(width, 1080)
+  const cropWidth = Math.min(width, frameWidth.value < 430 ? 640 : 1080)
   const cropHeight = Math.min(height, cropWidth * 0.46)
   const x = Math.max(0, Math.min(width - cropWidth, point.value.x * width / 100 - cropWidth / 2))
   const y = Math.max(0, Math.min(height - cropHeight, point.value.y * height / 100 - cropHeight / 2))

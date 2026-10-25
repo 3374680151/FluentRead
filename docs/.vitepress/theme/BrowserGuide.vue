@@ -649,7 +649,7 @@ const translation = computed(() =>
   background: white;
 }
 .bg-first-translation .bg-viewport {
-  height: 500px;
+  height: 360px;
 }
 .bg-hover .bg-viewport,
 .bg-selection .bg-viewport {
@@ -1136,6 +1136,9 @@ const translation = computed(() =>
   outline-offset: 3px;
 }
 @container (max-width: 480px) {
+  .bg-first-translation .bg-viewport {
+    height: 340px;
+  }
   .bg-viewport {
     height: 420px;
   }
