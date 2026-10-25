@@ -1,5 +1,5 @@
 import {describe,expect,it,vi} from 'vitest';
-import {layoutMangaTranslationText} from '@/src/features/image-translation/services/mangaTypography';
+import {layoutMangaTranslationText,MANGA_TEXT_FONT} from '@/src/features/image-translation/services/mangaTypography';
 import {drawMangaTranslations,sampleMangaBackgrounds} from '@/src/features/image-translation/services/mangaRendering';
 const measure = (text: string,size: number) => Array.from(text).length * size;
 function context() {return {save:vi.fn(),restore:vi.fn(),fillRect:vi.fn(),font:'',fillStyle:'',strokeStyle:'',lineWidth:0,
@@ -25,6 +25,21 @@ describe('漫画专用完整排版',()=>{
         }
         const mixed=layoutMangaTranslationText('好\n坏',100,24,measure,10,text=>text==='好'?{ascent:8,descent:2}:undefined);
         expect(mixed.ink).toBeUndefined();expect(mixed.lines).toEqual(['好','坏']);
+    });
+    it('中途缺少指标时丢弃此前放大的行距，仍按顺序完成原有字形回调',()=>{
+        const calls:string[]=[];
+        const layout=layoutMangaTranslationText('A\nB\nC',100,36,measure,10,line=>{
+            calls.push(line);return line==='A'?{ascent:100,descent:100}:line==='B'?undefined:{ascent:8,descent:2};
+        });
+        expect(calls).toEqual(['A','B','C']);expect(layout).toEqual({lines:['A','B','C'],fontSize:10,lineHeight:12});
+    });
+    it('先完成所有字形回调再读取指标，复用或后续修改同一对象时保持既有布局',()=>{
+        const shared={ascent:0,descent:0},calls:string[]=[];
+        const layout=layoutMangaTranslationText('A\nB',100,24,measure,10,line=>{
+            calls.push(line);shared.ascent=line==='A'?100:8;shared.descent=line==='A'?100:2;return shared;
+        });
+        expect(calls).toEqual(['A','B']);
+        expect(layout).toEqual({lines:['A','B'],fontSize:10,lineHeight:12,ink:{height:22,baselines:[8,20]}});
     });
     it('完整译文按真实字形高度缩小，平衡换行也不得增加字形高度越界',()=>{
         const fitted=layoutMangaTranslationText('你好',100,15,measure,30,(_text,size)=>({ascent:size*.8,descent:size*.2}));
@@ -160,6 +175,37 @@ describe('原图背景与字体层次',()=>{
         const c=context();drawMangaTranslations(c as any,pixels,width,height,[region,region]);
         const count=c.measureText.mock.calls.length;expect(c.fillText).toHaveBeenCalledTimes(2);
         drawMangaTranslations(c as any,pixels,width,height,[region]);expect(c.measureText.mock.calls.length).toBe(count*2);
+    });
+    it('短键仍区分字重字号及全文，不把不同背景的描边度量混入缓存',()=>{
+        const items=[{text:'Aa|界',fontSize:20,bbox:{x0:30,y0:30,x1:230,y1:54}},
+            {text:'Aa|界',fontSize:70,bbox:{x0:30,y0:30,x1:330,y1:130}},
+            {text:'Aa|界',fontSize:20,bbox:{x0:30,y0:30,x1:230,y1:54}}];
+        const backgrounds=[{uniform:true,color:'#fff'},{uniform:false,color:'#777'},{uniform:false,color:'#777'}];
+        const make=()=>{const c=Object.assign(context(),{textBaseline:''});
+            c.measureText.mockImplementation(function(this:{font:string},text:string){const size=Number(this.font.match(/ ([\d.]+)px/)![1]);return {width:measure(text,size)*(this.font.startsWith('800')?1.2:1),actualBoundingBoxAscent:size*.8,actualBoundingBoxDescent:size*.2};});return c;};
+        const shared=make();drawMangaTranslations(shared as any,pixels,width,height,items,true,backgrounds);
+        expect(shared.fillText.mock.calls).toEqual(items.flatMap((item,index)=>{
+            const separate=make();drawMangaTranslations(separate as any,pixels,width,height,[item],true,[backgrounds[index]]);return separate.fillText.mock.calls;
+        }));
+    });
+    it('短键节约字符串也仍按原完整字体键计费，缓存容量不因缩键扩大',()=>{
+        const caches:Array<Map<string,{width:number;ascent:number;descent:number}>>=[];
+        class ObservedMap extends Map<string,any>{override set(key:string,value:any){
+            if(value&&typeof value==='object'&&'width'in value&&'ascent'in value&&'descent'in value&&!caches.includes(this))caches.push(this);
+            return super.set(key,value);
+        }}
+        const c=context(),text=Array.from({length:160},(_,index)=>`段${index}完整译文。`).join('');
+        vi.stubGlobal('Map',ObservedMap);
+        try{drawMangaTranslations(c as any,pixels,width,height,[{...region,text}]);}finally{vi.unstubAllGlobals();}
+        expect(caches).toHaveLength(1);const cache=caches[0];let logicalCharacters=0,storedCharacters=0;
+        for(const key of cache.keys()){
+            const match=/^(600|800)\|([^|]+)\|/u.exec(key)!;
+            logicalCharacters+=`${match[1]} ${match[2]}px ${MANGA_TEXT_FONT}|${key.slice(match[0].length)}`.length;storedCharacters+=key.length;
+        }
+        expect(logicalCharacters).toBeGreaterThan(130000);expect(logicalCharacters).toBeLessThanOrEqual(131072);
+        expect(cache.size).toBeLessThanOrEqual(8192);expect(storedCharacters).toBeLessThan(logicalCharacters/2);
+        expect(c.measureText.mock.calls.length).toBeGreaterThan(cache.size);
+        expect(c.fillText.mock.calls.map(call=>call[0]).join('')).toBe(text);
     });
     it('大段译文超出临时度量预算仍完整绘制',()=>{
         const c=context(),text='完整译文。'.repeat(120);

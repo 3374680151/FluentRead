@@ -2,7 +2,7 @@
 /**
  * @file scripts/testing/manga-quality-corpus.cjs
  * 文件职责：校验漫画回归场景的真实文字、重复次数和无字区域，汇总实际 OCR 的质量失败。
- * 主要内容：共享锚点规范化、source truth 一致性、全页多余字符库存、负区域与无字页误报检查。
+ * 主要内容：共享锚点规范化、source truth 一致性、全页多余字符库存、负区域与无字页误报检查；竖排读序沿用原契约，通用独立段落允许单张标签并要求各组匹配不同实际段落。
  * 模块边界：只处理夹具声明与生产返回值，不执行 OCR、不重写识别结果，也不访问模型或浏览器。
  */
 const assert = require('node:assert/strict');
@@ -63,25 +63,41 @@ function validateQualityFixtureExpectations(fixture) {
             for(const id of order){assert.ok(!ids.has(id),'Paragraph groups use distinct source region IDs across speakers');ids.add(id);}
         }
     }
+    if(fixture.paragraphGroups!==undefined) {
+        const groups=fixture.paragraphGroups,used=new Set();
+        assert.ok(fixture.readingOrder===undefined&&fixture.readingOrderGroups===undefined,'Choose one explicit paragraph declaration');
+        assert.ok(Array.isArray(groups)&&groups.length>=2&&groups.length<=24,'General paragraph groups form a bounded array of independent paragraphs');
+        const declared=new Set(fixture.expectedAnchors.map(normalizeOcrAnchor)),source=new Set(fixture.expectedSource.map(normalizeOcrAnchor));
+        for(const group of groups) {
+            assert.ok(Array.isArray(group)&&group.length>=1&&new Set(group).size===group.length,'Each general paragraph group contains distinct source region IDs');
+            for(const id of group) {
+                assert.ok(typeof id==='string'&&id.trim()&&!used.has(id),'General paragraph groups use distinct nonempty source IDs across paragraphs');used.add(id);
+                const matches=(fixture.regions||[]).filter(region=>region.id===id);
+                assert.ok(matches.length===1&&validBox(matches[0].bbox,fixture.width,fixture.height),'General paragraph groups reference unique actual source regions inside the image');
+                const region=matches[0],anchor=typeof region.anchor==='string'?normalizeOcrAnchor(region.anchor):'',text=typeof region.text==='string'?normalizeOcrAnchor(region.text):'';
+                assert.ok(anchor&&anchor===text&&declared.has(anchor)&&source.has(text),'General paragraph anchors belong to their complete declared source text and expected anchors');
+            }
+        }
+    }
 }
 
-/** 同一气泡的主列必须依次同段，不同气泡必须可匹配到不同段；注音不强行混入主列。 */
+/** 通用组完整匹配规范化原文并各占不同实际段落，防止借用别段子串；旧竖排按序锚点契约不变。 */
 function evaluateQualityReadingOrder(fixture,texts) {
-    const groups=fixture.readingOrderGroups;
+    const general=fixture.paragraphGroups!==undefined,groups=general?fixture.paragraphGroups:fixture.readingOrderGroups;
     const fallback=fixture.readingOrder??(fixture.regions||[]).filter(region=>region.vertical).sort((a,b)=>b.bbox.x0-a.bbox.x0).map(region=>region.id);
     const orders=groups??(fallback.length>=2?[fallback]:[]);
     if(!orders.length)return {qualityFailures:[]};
     const normalized=texts.map(normalizeOcrAnchor);
     const checks=orders.map(order=>{
-        const anchors=order.map(id=>fixture.regions.find(region=>region.id===id).anchor);
+        const anchors=order.map(id=>fixture.regions.find(region=>region.id===id).anchor),complete=general?anchors.map(normalizeOcrAnchor).join(''):'';
         const matches=[];
         for(const [index,paragraph] of normalized.entries()) {
             let cursor=0;
-            if(anchors.every(anchor=>{const needle=normalizeOcrAnchor(anchor),position=paragraph.indexOf(needle,cursor);if(position<0)return false;cursor=position+needle.length;return true;}))matches.push(index);
+            if(general?paragraph===complete:anchors.every(anchor=>{const needle=normalizeOcrAnchor(anchor),position=paragraph.indexOf(needle,cursor);if(position<0)return false;cursor=position+needle.length;return true;}))matches.push(index);
         }
         return {anchors,matches,paragraphIndex:matches[0]??-1,found:matches.length>0};
     });
-    const qualityFailures=checks.filter(check=>!check.found).map(({matches:_matches,...check})=>({type:'vertical-paragraph-order',...check,reason:'Each declared group of main columns must share one actual OCR paragraph in source order'}));
+    const qualityFailures=checks.filter(check=>!check.found).map(({matches:_matches,...check})=>({type:general?'paragraph-order':'vertical-paragraph-order',...check,reason:general?'Each general group must match a complete normalized actual source paragraph in order, without borrowing text from other groups':'Each declared group of main columns must share one actual OCR paragraph in source order'}));
     if(groups&&qualityFailures.length===0) {
         // 增广匹配允许不同位置的相同对白，不能把每组都绑定到首个匹配段落。
         const owners=new Map();
@@ -93,11 +109,11 @@ function evaluateQualityReadingOrder(fixture,texts) {
             return false;
         }
         const separate=checks.every((_,index)=>assign(index,new Set()));
-        if(!separate)qualityFailures.push({type:'vertical-paragraph-separation',reason:'Independent speakers must match distinct actual OCR paragraphs'});
+        if(!separate)qualityFailures.push({type:general?'paragraph-separation':'vertical-paragraph-separation',reason:general?'Independent source groups must match distinct actual OCR paragraphs':'Independent speakers must match distinct actual OCR paragraphs'});
         for(const [paragraph,group] of owners)checks[group].paragraphIndex=paragraph;
     }
     const values=checks.map(({matches:_matches,...check})=>check);
-    return {...(groups?{verticalParagraphGroups:values}:{verticalParagraphOrder:values[0]}),qualityFailures};
+    return {...(general?{paragraphGroups:values}:groups?{verticalParagraphGroups:values}:{verticalParagraphOrder:values[0]}),qualityFailures};
 }
 
 function evaluateQualityFixture(fixture,{texts,lines}) {

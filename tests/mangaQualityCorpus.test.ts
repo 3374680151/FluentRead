@@ -3,6 +3,8 @@ import {describe,expect,it} from 'vitest';
 import {createRequire} from 'node:module';
 import {readFileSync} from 'node:fs';
 import {createHash} from 'node:crypto';
+import {execFileSync} from 'node:child_process';
+import {fileURLToPath} from 'node:url';
 import {runInNewContext} from 'node:vm';
 import ts from 'typescript';
 const require=createRequire(import.meta.url);
@@ -12,6 +14,79 @@ const text=(sourceText:string,bbox=box(10,10,90,30),sourceBoxes?:ReturnType<type
 const fixture=(overrides:any={})=>({name:'actual-quality',width:400,height:300,expectedSource:['WAIT FOR ME','WAIT FOR ME','GO NOW'],expectedAnchors:['WAIT FOR ME','GO NOW'],anchorOccurrences:{'WAIT FOR ME':2,'GO NOW':1},regions:[{id:'line-1',bbox:box(10,10,90,30)}],forbiddenRegions:[{id:'robot',bbox:box(200,100,300,250)}],...overrides});
 const naturalRoot=new URL('./fixtures/manga-natural/',import.meta.url);
 const naturalManifest=JSON.parse(readFileSync(new URL('manifest.json',naturalRoot),'utf8'));
+const generalParagraphFixture=()=>{
+    const regions=[
+        {id:'main-right',text:'列の続き',anchor:'列の続き',bbox:box(125,20,145,140),vertical:true},
+        {id:'main-left',text:'本文の後半',anchor:'本文の後半',bbox:box(85,20,105,140),vertical:true},
+        {id:'card',text:'注釈カード',anchor:'注釈カード',bbox:box(165,40,185,120),vertical:true},
+        {id:'horizontal',text:'INDEX 2048',anchor:'INDEX 2048',bbox:box(15,170,165,195)}];
+    const source=regions.map(region=>region.text);
+    return fixture({regions,expectedSource:source,expectedAnchors:source,anchorOccurrences:Object.fromEntries(source.map(value=>[value,1])),paragraphGroups:[['main-right','main-left'],['card'],['horizontal']]});
+};
+
+describe('通用独立段落门禁',()=>{
+    it('单张竖排卡片与横排标签各占独立段落，原文与输入元数据保持不变',()=>{
+        const f=generalParagraphFixture(),before=JSON.stringify(f);
+        expect(()=>validateQualityFixtureExpectations(f)).not.toThrow();
+        const result=evaluateQualityReadingOrder(f,['INDEX 2048','列の続き 本文の後半','注釈カード']);
+        expect(result.qualityFailures).toEqual([]);
+        expect(result.paragraphGroups.map((group:any)=>group.paragraphIndex)).toEqual([1,2,0]);
+        expect(result).not.toHaveProperty('verticalParagraphGroups');
+        expect(JSON.stringify(f)).toBe(before);
+    });
+    it('锚点和字符库存齐全仍不能把独立卡片并入正文，也不能把同组主列拆散或颠倒',()=>{
+        const f=generalParagraphFixture();
+        const merged=['列の続き 本文の後半 注釈カード','INDEX 2048'];
+        expect(evaluateQualityFixture(f,{texts:merged,lines:merged.map(value=>text(value))}).qualityFailures).toEqual([]);
+        expect(evaluateQualityReadingOrder(f,merged).qualityFailures).toContainEqual(expect.objectContaining({type:'paragraph-order'}));
+        for(const values of [['列の続き','本文の後半','注釈カード','INDEX 2048'],['本文の後半 列の続き','注釈カード','INDEX 2048']])
+            expect(evaluateQualityReadingOrder(f,values).qualityFailures).toContainEqual(expect.objectContaining({type:'paragraph-order'}));
+    });
+    it('不同位置的相同单行对白须增广匹配到两个实际段落，一段重复两次不能替代',()=>{
+        const regions=[0,1].map(index=>({id:`card-${index}`,text:'READ THIS',anchor:'READ THIS',bbox:box(10+100*index,10,90+100*index,30)}));
+        const f=fixture({regions,expectedSource:['READ THIS','READ THIS'],expectedAnchors:['READ THIS'],anchorOccurrences:{'READ THIS':2},paragraphGroups:[['card-0'],['card-1']]});
+        expect(()=>validateQualityFixtureExpectations(f)).not.toThrow();
+        const result=evaluateQualityReadingOrder(f,['READ THIS','READ THIS']);
+        expect(result.qualityFailures).toEqual([]);
+        expect(new Set(result.paragraphGroups.map((group:any)=>group.paragraphIndex)).size).toBe(2);
+        expect(evaluateQualityReadingOrder(f,['READ THIS READ THIS']).qualityFailures).toContainEqual(expect.objectContaining({type:'paragraph-order'}));
+        expect(evaluateQualityReadingOrder(f,['READ THIS']).qualityFailures).toContainEqual(expect.objectContaining({type:'paragraph-separation'}));
+    });
+    it('拒绝假值、空组、单组、超过上限、重复或跨组复用ID，不放宽旧竖排格式',()=>{
+        const f=generalParagraphFixture();
+        for(const paragraphGroups of [false,0,'',null,{},[],[['card']],[['card'],[]],[null,['card']],[['card','card'],['horizontal']],[['card'],['card']],Array(25).fill(['card']),[['card'],['missing']],[[null],['card']],[[0],['card']],[[''],['card']]])
+            expect(()=>validateQualityFixtureExpectations({...f,paragraphGroups})).toThrow();
+        expect(()=>validateQualityFixtureExpectations({...f,readingOrder:['main-right','main-left']})).toThrow('one explicit paragraph declaration');
+        expect(()=>validateQualityFixtureExpectations({...f,paragraphGroups:undefined,readingOrderGroups:[['card'],['main-right','main-left']]})).toThrow('distinct text region IDs');
+    });
+    it('通用组必须引用图内唯一实际源区、已声明的锚点及该区真实文字，不能发明或借用锚点',()=>{
+        const f=generalParagraphFixture();
+        for(const overrides of [
+            {regions:undefined},{regions:[...f.regions,{...f.regions[2]}]},
+            {regions:f.regions.map((region:any)=>region.id==='card'?{...region,bbox:box(-1,0,10,30)}:region)},
+            {regions:f.regions.map((region:any)=>region.id==='card'?{...region,bbox:box(10,NaN,30,50)}:region)},
+            ...[undefined,'','…',12,'列の続き'].map(anchor=>({regions:f.regions.map((region:any)=>region.id==='card'?{...region,anchor}:region)})),
+            {regions:f.regions.map((region:any)=>region.id==='card'?{...region,text:undefined}:region)},
+            {expectedSource:f.expectedSource.filter((value:string)=>value!=='注釈カード'),anchorOccurrences:undefined},
+            {expectedAnchors:f.expectedAnchors.filter((value:string)=>value!=='注釈カード'),anchorOccurrences:undefined}
+        ])expect(()=>validateQualityFixtureExpectations({...f,...overrides})).toThrow();
+        // 即使另一区域是真实文字，也不能把卡片ID绑到不属于该卡片的锚点。
+        const borrowed={...f,regions:f.regions.map((region:any)=>region.id==='card'?{...region,anchor:'INDEX 2048'}:region)};
+        expect(()=>validateQualityFixtureExpectations(borrowed)).toThrow('complete declared source');
+    });
+    it('完整原文与库存都正确时也拒绝借用别段子串的虚构卡片区域，避免增广匹配掩盖误合段',()=>{
+        const source=['MAIN BODY','ALSO MAIN BODY','CARD NOTE'];
+        const regions=source.map((value,index)=>({id:`region-${index}`,text:value,anchor:value,bbox:box(10,10+40*index,180,40+40*index)}));
+        const f=fixture({regions,expectedSource:source,expectedAnchors:source,anchorOccurrences:{'MAIN BODY':2,'ALSO MAIN BODY':1,'CARD NOTE':1},paragraphGroups:[['region-0'],['region-2']]});
+        const merged=['MAIN BODY CARD NOTE','ALSO MAIN BODY'];
+        expect(()=>validateQualityFixtureExpectations(f)).not.toThrow();
+        expect(evaluateQualityFixture(f,{texts:merged,lines:merged.map(value=>text(value))}).qualityFailures).toEqual([]);
+        expect(evaluateQualityReadingOrder(f,merged).qualityFailures).toContainEqual(expect.objectContaining({type:'paragraph-order'}));
+        const forged={...f,regions:regions.map((region,index)=>index===2?{...region,text:'CARD NOTE MAIN BODY',anchor:'MAIN BODY'}:region)};
+        expect(()=>validateQualityFixtureExpectations(forged)).toThrow('complete declared source');
+        expect(()=>validateQualityFixtureExpectations({...forged,regions:forged.regions.map((region:any,index:number)=>index===2?{...region,anchor:region.text}:region),expectedAnchors:[...source,'CARD NOTE MAIN BODY'],anchorOccurrences:undefined})).toThrow('complete declared source');
+    });
+});
 
 describe('真实漫画runner多轮layout采集的有界容量',()=>{
     it('32景五轮保留全部160次响应及预留，承诺以外的记录仍有硬上限',async()=>{
@@ -253,5 +328,15 @@ describe('固定原创自然漫画的来源、PNG和独立source truth',()=>{
         expect(art.anchors.every((anchor:any)=>anchor.found)).toBe(true);
         expect(art.qualityFailures).toContainEqual(expect.objectContaining({type:'artwork-ocr-false-positive',sourceText:'X'}));
         expect(art.qualityFailures).toContainEqual(expect.objectContaining({type:'unexpected-ocr-characters'}));
+    });
+});
+
+describe('固定漫画结构场景进入常规质量回归',()=>{
+    it('无需模型校验五景全部冻结文字、像素散列与段落反例，运行不改写输入',()=>{
+        const manifest=new URL('./fixtures/manga-structures/manifest.json',import.meta.url),before=readFileSync(manifest);
+        const result=JSON.parse(execFileSync(process.execPath,[fileURLToPath(new URL('../scripts/testing/check-manga-structure-fixtures.cjs',import.meta.url))],{encoding:'utf8',stdio:'pipe'}));
+        expect(result).toMatchObject({scenes:5,fullSourceAnchors:29,negativeCases:51,allAssertionsPassed:true});
+        expect(result.results.map((row:any)=>row.scene)).toEqual(['narrow-inset-card-dialogue','midband-crossing-detached-cards','bound-spread-gutter-caption','multisize-margin-callouts','photographed-perspective-note']);
+        expect(readFileSync(manifest)).toEqual(before);
     });
 });

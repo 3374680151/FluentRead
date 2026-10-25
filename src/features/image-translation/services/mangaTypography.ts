@@ -1,7 +1,7 @@
 /**
  * @file src/features/image-translation/services/mangaTypography.ts
  * 文件职责：在漫画原有区域内排版完整译文，区分对白与大标题并保持东亚标点的阅读习惯。
- * 主要内容：保留词、字素与显式换行，闭标点跟随前字、开标点跟随后字；按真实 Canvas 字宽和可用字形上下界二分适配字号，单行不重复扣除行距，多行仍保留基线间距，缺少完整字形指标时沿用行框；仅在本次排版内复用长词分段，逐项求最大宽高以兼容大量段落与行；末行过短时平衡行宽而不增加行数或越过字形预算，不截字、不横向压缩。
+ * 主要内容：保留词、字素与显式换行，闭标点跟随前字、开标点跟随后字；按真实 Canvas 字宽和可用字形上下界二分适配字号，单行不重复扣除行距，多行仍保留基线间距，缺少完整字形指标时沿用行框；合并字形有效性与最大行距遍历，基线数组就地归一化，减少临时数组而不改变浮点运算顺序；仅在本次排版内复用长词分段，逐项求最大宽高以兼容大量段落与行；末行过短时平衡行宽而不增加行数或越过字形预算，不截字、不横向压缩。
  * 模块边界：纯文字和度量算法，不读取页面、配置或字体资源，不识别、翻译或修补图片；普通图片继续使用独立的通用排版。
  */
 import type {ImageTranslationTextLayout} from './rendering';
@@ -63,15 +63,20 @@ export function layoutMangaTranslationText(text: string, width: number, height: 
         if (!measureInk) return layout;
         // 空段仍占一个行距；任何非空行缺少完整指标时保守使用既有行框。
         const metrics = lines.map(line=>line ? measureInk(line,size) : {ascent:size*.6,descent:size*.6});
-        if (!metrics.every(metric=>metric && Number.isFinite(metric.ascent) && Number.isFinite(metric.descent) && Number.isFinite(metric.ascent+metric.descent) && metric.ascent+metric.descent>0)) return layout;
+        let lineHeight = layout.lineHeight;
+        for (const metric of metrics) {
+            if (!metric || !Number.isFinite(metric.ascent) || !Number.isFinite(metric.descent) || !Number.isFinite(metric.ascent+metric.descent) || metric.ascent+metric.descent<=0) return layout;
+            lineHeight = Math.max(lineHeight,metric.ascent+metric.descent);
+        }
+        layout.lineHeight = lineHeight;
         let top = Infinity, bottom = -Infinity;
-        for (const metric of metrics as MangaGlyphMetrics[]) layout.lineHeight = Math.max(layout.lineHeight,metric.ascent+metric.descent);
         const baselines = (metrics as MangaGlyphMetrics[]).map((metric,index)=>{
             const baseline = index*layout.lineHeight;
             top = Math.min(top,baseline-metric.ascent);bottom = Math.max(bottom,baseline+metric.descent);
             return baseline;
         });
-        layout.ink = {height:bottom-top,baselines:baselines.map(value=>value-top)};
+        for (let index=0;index<baselines.length;index++) baselines[index] -= top;
+        layout.ink = {height:bottom-top,baselines};
         return layout;
     };
     const fits = (layout: MangaTextLayout) => (layout.ink?.height ?? layout.lines.length * layout.lineHeight) <= height
