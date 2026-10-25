@@ -287,8 +287,19 @@ export function bundledLibraryNotices(moduleIds: readonly string[]): string {
         if (headings) headings.push(heading);
         else licenseGroups.set(licenseText, [heading]);
     }
-    return [...licenseGroups].map(([licenseText, headings]) =>
+    const notices = [...licenseGroups].map(([licenseText, headings]) =>
         `/*\n${headings.join('\n')}\n${licenseText}\n*/`).join('\n');
+    if (!bundleLibraries) return notices;
+    // 完整独立版还包含不同版权及内嵌子依赖的同一 MIT 正文。仅匹配现有许可文件的完整
+    // 授权与免责文字，允许换行/空白差异；每个版权、来源和前后附加条款保留在原位置。
+    const permissionStart = tinycolorLicense.indexOf('Permission is hereby granted');
+    if (permissionStart < 0) throw new Error('Canonical bundled MIT permission terms are missing');
+    const terms = tinycolorLicense.slice(permissionStart).trim();
+    const escapedWords = terms.split(/\s+/u).map(word => word.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&'));
+    const repeatedTerms = new RegExp(escapedWords.join('\\s+'), 'gu');
+    if ([...notices.matchAll(repeatedTerms)].length < 2) return notices;
+    return notices.replace(repeatedTerms, '[Shared MIT terms below]')
+        + `\n/*\nShared MIT permission and warranty terms for the references above:\n${terms}\n*/`;
 }
 
 // Via 等旧内核可能缺少共享核心使用的基础方法；在单文件入口最前方注入小型兼容层。
