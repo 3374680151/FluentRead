@@ -1,0 +1,321 @@
+{
+  "version": 1,
+  "generator": "built-in imagegen; original page visually transcribed and geometry annotated by reviewer",
+  "notes": [
+    "The PNG is fixed by SHA-256; this AI image is not deterministically regenerated.",
+    "Declared dialogue was checked against each rendered page. Artwork negatives exclude all dialogue regions: five in the ink page and four in the color page.",
+    "This PNG is a test fixture and is never imported by production or copied to public/."
+  ],
+  "fixtures": [
+    {
+      "name": "natural-station-journey-ink",
+      "file": "station-journey-ink.png",
+      "mime": "image/png",
+      "width": 1024,
+      "height": 1536,
+      "sourceLanguage": "en",
+      "scene": "original AI-generated adult travel comic with dense natural ink, screentone, diagonal panels, dialogue and dark reversed bubble",
+      "expectedSource": [
+        "A QUIET MORNING",
+        "DID YOU BRING THE MAP?",
+        "IT IS INSIDE MY BOOK.",
+        "WAIT FOR THE PAPER BIRD!",
+        "WE CAN READ ON THE TRAIN."
+      ],
+      "expectedAnchors": [
+        "A QUIET MORNING",
+        "DID YOU BRING THE MAP?",
+        "IT IS INSIDE MY BOOK.",
+        "WAIT FOR THE PAPER BIRD!",
+        "WE CAN READ ON THE TRAIN."
+      ],
+      "anchorOccurrences": {
+        "A QUIET MORNING": 1,
+        "DID YOU BRING THE MAP?": 1,
+        "IT IS INSIDE MY BOOK.": 1,
+        "WAIT FOR THE PAPER BIRD!": 1,
+        "WE CAN READ ON THE TRAIN.": 1
+      },
+      "regions": [
+        {
+          "id": "phrase-1",
+          "text": "A QUIET MORNING",
+          "anchor": "A QUIET MORNING",
+          "translation": "受控译文",
+          "bbox": {
+            "x0": 94,
+            "y0": 87,
+            "x1": 187,
+            "y1": 136
+          },
+          "vertical": false
+        },
+        {
+          "id": "phrase-2",
+          "text": "DID YOU BRING THE MAP?",
+          "anchor": "DID YOU BRING THE MAP?",
+          "translation": "受控译文",
+          "bbox": {
+            "x0": 423,
+            "y0": 500,
+            "x1": 531,
+            "y1": 574
+          },
+          "vertical": false
+        },
+        {
+          "id": "phrase-3",
+          "text": "IT IS INSIDE MY BOOK.",
+          "anchor": "IT IS INSIDE MY BOOK.",
+          "translation": "受控译文",
+          "bbox": {
+            "x0": 866,
+            "y0": 559,
+            "x1": 965,
+            "y1": 629
+          },
+          "vertical": false
+        },
+        {
+          "id": "phrase-4",
+          "text": "WAIT FOR THE PAPER BIRD!",
+          "anchor": "WAIT FOR THE PAPER BIRD!",
+          "translation": "受控译文",
+          "bbox": {
+            "x0": 638,
+            "y0": 875,
+            "x1": 742,
+            "y1": 943
+          },
+          "vertical": false
+        },
+        {
+          "id": "phrase-5",
+          "text": "WE CAN READ ON THE TRAIN.",
+          "anchor": "WE CAN READ ON THE TRAIN.",
+          "translation": "受控译文",
+          "bbox": {
+            "x0": 848,
+            "y0": 1260,
+            "x1": 953,
+            "y1": 1332
+          },
+          "vertical": false
+        }
+      ],
+      "forbiddenRegions": [
+        {
+          "id": "mountain-landscape",
+          "bbox": {
+            "x0": 250,
+            "y0": 10,
+            "x1": 560,
+            "y1": 320
+          }
+        },
+        {
+          "id": "traveler-face",
+          "bbox": {
+            "x0": 220,
+            "y0": 460,
+            "x1": 360,
+            "y1": 620
+          }
+        },
+        {
+          "id": "reaching-hand",
+          "bbox": {
+            "x0": 400,
+            "y0": 960,
+            "x1": 620,
+            "y1": 1130
+          }
+        }
+      ],
+      "protectedProbes": [
+        {
+          "x": 300,
+          "y": 200,
+          "rgb": [
+            90,
+            92,
+            89
+          ]
+        },
+        {
+          "x": 500,
+          "y": 1000,
+          "rgb": [
+            250,
+            249,
+            248
+          ]
+        },
+        {
+          "x": 750,
+          "y": 1440,
+          "rgb": [
+            74,
+            74,
+            70
+          ]
+        }
+      ],
+      "bytes": 4007392,
+      "sha256": "c7355110ec11e7948032ff52291b8a34cd9435d40a709f70914f4fa3d1c17bb3",
+      "provenance": {
+        "method": "built-in imagegen",
+        "original": true,
+        "exactTextVisuallyChecked": true,
+        "creationDate": "2026-10-25"
+      }
+    },
+    {
+      "name": "natural-rain-market-color",
+      "file": "rain-market-color.png",
+      "mime": "image/png",
+      "width": 1024,
+      "height": 1536,
+      "sourceLanguage": "en",
+      "scene": "original painted night webcomic with rain, neon gradients, casual lettering, dark balloon and intricate wordless shop goods",
+      "expectedSource": [
+        "THE LAST BUS IS LATE.",
+        "WE CAN WALK THROUGH THE MARKET.",
+        "FOLLOW THE BLUE LANTERNS.",
+        "I SAVED YOU A SEAT."
+      ],
+      "expectedAnchors": [
+        "THE LAST BUS IS LATE.",
+        "WE CAN WALK THROUGH THE MARKET.",
+        "FOLLOW THE BLUE LANTERNS.",
+        "I SAVED YOU A SEAT."
+      ],
+      "anchorOccurrences": {
+        "THE LAST BUS IS LATE.": 1,
+        "WE CAN WALK THROUGH THE MARKET.": 1,
+        "FOLLOW THE BLUE LANTERNS.": 1,
+        "I SAVED YOU A SEAT.": 1
+      },
+      "regions": [
+        {
+          "id": "phrase-1",
+          "text": "THE LAST BUS IS LATE.",
+          "anchor": "THE LAST BUS IS LATE.",
+          "translation": "受控译文",
+          "bbox": {
+            "x0": 57,
+            "y0": 78,
+            "x1": 209,
+            "y1": 131
+          },
+          "vertical": false
+        },
+        {
+          "id": "phrase-2",
+          "text": "WE CAN WALK THROUGH THE MARKET.",
+          "anchor": "WE CAN WALK THROUGH THE MARKET.",
+          "translation": "受控译文",
+          "bbox": {
+            "x0": 173,
+            "y0": 460,
+            "x1": 323,
+            "y1": 529
+          },
+          "vertical": false
+        },
+        {
+          "id": "phrase-3",
+          "text": "FOLLOW THE BLUE LANTERNS.",
+          "anchor": "FOLLOW THE BLUE LANTERNS.",
+          "translation": "受控译文",
+          "bbox": {
+            "x0": 822,
+            "y0": 529,
+            "x1": 941,
+            "y1": 601
+          },
+          "vertical": false
+        },
+        {
+          "id": "phrase-4",
+          "text": "I SAVED YOU A SEAT.",
+          "anchor": "I SAVED YOU A SEAT.",
+          "translation": "受控译文",
+          "bbox": {
+            "x0": 817,
+            "y0": 1108,
+            "x1": 953,
+            "y1": 1159
+          },
+          "vertical": false
+        }
+      ],
+      "forbiddenRegions": [
+        {
+          "id": "blank-bus-and-reflections",
+          "bbox": {
+            "x0": 750,
+            "y0": 100,
+            "x1": 1010,
+            "y1": 320
+          }
+        },
+        {
+          "id": "lanterns-and-trees",
+          "bbox": {
+            "x0": 480,
+            "y0": 390,
+            "x1": 755,
+            "y1": 495
+          }
+        },
+        {
+          "id": "cafe-table-still-life",
+          "bbox": {
+            "x0": 650,
+            "y0": 1320,
+            "x1": 1010,
+            "y1": 1520
+          }
+        }
+      ],
+      "protectedProbes": [
+        {
+          "x": 850,
+          "y": 250,
+          "rgb": [
+            254,
+            236,
+            178
+          ]
+        },
+        {
+          "x": 600,
+          "y": 800,
+          "rgb": [
+            58,
+            57,
+            68
+          ]
+        },
+        {
+          "x": 850,
+          "y": 1420,
+          "rgb": [
+            25,
+            15,
+            9
+          ]
+        }
+      ],
+      "bytes": 2964278,
+      "sha256": "c50a4cb34c25787ce22164f45340dd1e078e776b9aa4827cc77e40026db4e003",
+      "provenance": {
+        "method": "built-in imagegen with targeted removal of unintended bus pseudo-lettering before OCR baseline",
+        "original": true,
+        "exactTextVisuallyChecked": true,
+        "creationDate": "2026-10-25"
+      }
+    }
+  ]
+}

@@ -1,11 +1,15 @@
 /** 漫画场景质量门禁：实际识别值与独立 source truth 对照，漏字、重复和艺术误报不能互相抵消。 */
 import {describe,expect,it} from 'vitest';
 import {createRequire} from 'node:module';
+import {readFileSync} from 'node:fs';
+import {createHash} from 'node:crypto';
 const require=createRequire(import.meta.url);
 const {normalizeOcrAnchor,countAnchorOccurrences,validateQualityFixtureExpectations,evaluateQualityFixture}=require('../scripts/testing/manga-quality-corpus.cjs');
 const box=(x0:number,y0:number,x1:number,y1:number)=>({x0,y0,x1,y1});
 const text=(sourceText:string,bbox=box(10,10,90,30),sourceBoxes?:ReturnType<typeof box>[])=>({text:'受控译文',sourceText,bbox,...(sourceBoxes?{sourceBoxes}:{})});
 const fixture=(overrides:any={})=>({name:'actual-quality',width:400,height:300,expectedSource:['WAIT FOR ME','WAIT FOR ME','GO NOW'],expectedAnchors:['WAIT FOR ME','GO NOW'],anchorOccurrences:{'WAIT FOR ME':2,'GO NOW':1},regions:[{id:'line-1',bbox:box(10,10,90,30)}],forbiddenRegions:[{id:'robot',bbox:box(200,100,300,250)}],...overrides});
+const naturalRoot=new URL('./fixtures/manga-natural/',import.meta.url);
+const naturalManifest=JSON.parse(readFileSync(new URL('manifest.json',naturalRoot),'utf8'));
 
 describe('漫画 source truth、重复锚点与负场景质量门禁',()=>{
     it('Unicode全角及空白规范化不改变真实重复次数，并保留重叠子串计数',()=>{
@@ -74,5 +78,78 @@ describe('漫画 source truth、重复锚点与负场景质量门禁',()=>{
         expect(()=>validateQualityFixtureExpectations(f)).not.toThrow();
         expect(()=>validateQualityFixtureExpectations({...f,readingOrder:['main-right','missing']})).toThrow('references actual vertical source regions');
         expect(()=>validateQualityFixtureExpectations({...f,readingOrder:['main-right','main-right']})).toThrow('distinct text region IDs');
+    });
+    it('日英混排与全角价格保留精确文字，数字0误认成拉丁O必须失败',()=>{
+        const f=fixture({expectedSource:['桃の紅茶 380円','PEACH TEA'],expectedAnchors:['桃の紅茶 380円','PEACH TEA'],anchorOccurrences:{'桃の紅茶 380円':1,'PEACH TEA':1}});
+        const actual=['桃の紅茶 ３８０円','PEACH TEA'];
+        expect(()=>validateQualityFixtureExpectations(f)).not.toThrow();
+        expect(evaluateQualityFixture(f,{texts:actual,lines:actual.map(value=>text(value))}).qualityFailures).toEqual([]);
+        const confused=['桃の紅茶 38O円','PEACH TEA'];
+        const result=evaluateQualityFixture(f,{texts:confused,lines:confused.map(value=>text(value))});
+        expect(result.qualityFailures).toContainEqual(expect.objectContaining({type:'ocr-anchor',anchor:'桃の紅茶 380円',occurrences:0}));
+        expect(result.sourceCharacterInventory.excess).toEqual([{character:'O',expected:0,actual:1,excess:1}]);
+    });
+    it('极小字中的独立数字即使未送翻译仍参与验收，字高不能成为忽略门禁的理由',()=>{
+        const f=fixture({expectedSource:['KEEP YOUR TICKET','2048'],expectedAnchors:['KEEP YOUR TICKET'],anchorOccurrences:{'KEEP YOUR TICKET':1}});
+        const original=[text('KEEP YOUR TICKET'),text('2048',box(10,60,34,66))];
+        expect(evaluateQualityFixture(f,{texts:['KEEP YOUR TICKET'],lines:original}).qualityFailures).toEqual([]);
+        const result=evaluateQualityFixture(f,{texts:['KEEP YOUR TICKET'],lines:[...original,text('2048',box(110,60,134,66))]});
+        expect(result.anchors.every((anchor:any)=>anchor.found)).toBe(true);
+        expect(result.sourceCharacterInventory.excess).toHaveLength(4);
+        expect(result.sourceCharacterInventory.excess.every((entry:any)=>entry.expected===1&&entry.actual===2&&entry.excess===1)).toBe(true);
+        expect(result.qualityFailures).toEqual([expect.objectContaining({type:'unexpected-ocr-characters'})]);
+    });
+    it('所有对白正确仍拒绝尾部或头像负区内的标点噪声，不因字符库存规范化为空而漏报',()=>{
+        const f=fixture();const recognized='WAIT FOR ME WAIT FOR ME GO NOW';
+        const result=evaluateQualityFixture(f,{texts:[recognized],lines:[text(recognized),text('…',box(230,120,234,126))]});
+        expect(result.anchors.every((anchor:any)=>anchor.found)).toBe(true);
+        expect(result.sourceCharacterInventory.excess).toEqual([]);
+        expect(result.qualityFailures).toEqual([expect.objectContaining({type:'artwork-ocr-false-positive',sourceText:'…',regionId:'robot'})]);
+    });
+});
+
+describe('固定原创自然漫画的来源、PNG和独立source truth',()=>{
+    it('两张PNG的长度、SHA与IHDR尺寸均匹配；九条真值、无字区域和保护点坐标自洽',()=>{
+        expect(naturalManifest.fixtures.map((f:any)=>f.name)).toEqual(['natural-station-journey-ink','natural-rain-market-color']);
+        expect(naturalManifest.fixtures.reduce((count:number,f:any)=>count+f.expectedSource.length,0)).toBe(9);
+        const provenance=JSON.parse(readFileSync(new URL('provenance.json',naturalRoot),'utf8'));
+        expect(provenance).toMatchObject({mode:'built-in image_gen',regenerable:false});
+        expect(provenance.inkPrompt).toContain('A QUIET MORNING');expect(provenance.colorPrompt).toContain('THE LAST BUS IS LATE.');
+        for(const f of naturalManifest.fixtures) {
+            const png=readFileSync(new URL(f.file,naturalRoot));
+            expect(png.subarray(0,8)).toEqual(Buffer.from([137,80,78,71,13,10,26,10]));
+            expect(png.readUInt32BE(8)).toBe(13);expect(png.toString('ascii',12,16)).toBe('IHDR');
+            expect(png.readUInt32BE(16)).toBe(f.width);expect(png.readUInt32BE(20)).toBe(f.height);
+            expect(png.length).toBe(f.bytes);expect(createHash('sha256').update(png).digest('hex')).toBe(f.sha256);
+            expect(f.provenance).toMatchObject({original:true,exactTextVisuallyChecked:true,creationDate:'2026-10-25'});
+            expect(f.expectedSource).toEqual(f.regions.map((r:any)=>r.text));expect(f.expectedAnchors).toEqual(f.expectedSource);
+            expect(()=>validateQualityFixtureExpectations(f)).not.toThrow();
+            expect(new Set(f.regions.map((r:any)=>r.id)).size).toBe(f.regions.length);
+            for(const r of f.regions) {
+                expect(r.bbox.x0).toBeGreaterThanOrEqual(0);expect(r.bbox.y0).toBeGreaterThanOrEqual(0);
+                expect(r.bbox.x1).toBeGreaterThan(r.bbox.x0);expect(r.bbox.y1).toBeGreaterThan(r.bbox.y0);
+                expect(r.bbox.x1).toBeLessThanOrEqual(f.width);expect(r.bbox.y1).toBeLessThanOrEqual(f.height);
+            }
+            expect(f.protectedProbes.length).toBe(3);
+            for(const probe of f.protectedProbes) {
+                expect(Number.isInteger(probe.x)&&probe.x>=0&&probe.x<f.width).toBe(true);
+                expect(Number.isInteger(probe.y)&&probe.y>=0&&probe.y<f.height).toBe(true);
+                expect(probe.rgb).toHaveLength(3);expect(probe.rgb.every((v:number)=>Number.isInteger(v)&&v>=0&&v<=255)).toBe(true);
+                expect(f.regions.some((r:any)=>probe.x>=r.bbox.x0&&probe.x<r.bbox.x1&&probe.y>=r.bbox.y0&&probe.y<r.bbox.y1)).toBe(false);
+            }
+        }
+        // 单测不引入PNG解码依赖；原图像素与RGB的核对由固定SHA对应的Pillow证据承担。
+    });
+    for(const f of naturalManifest.fixtures)it(`${f.name}：完美真值通过，单字误认或正确锚点旁的艺术误识别均失败`,()=>{
+        const lines=f.regions.map((r:any)=>text(r.text,r.bbox));
+        expect(evaluateQualityFixture(f,{texts:f.expectedSource,lines}).qualityFailures).toEqual([]);
+        const wrong=[...f.expectedSource];wrong[0]='Z'+wrong[0].slice(1);
+        const confused=evaluateQualityFixture(f,{texts:wrong,lines:lines.map((line:any,index:number)=>index===0?{...line,sourceText:wrong[0]}:line)});
+        expect(confused.qualityFailures).toContainEqual(expect.objectContaining({type:'ocr-anchor',anchor:f.expectedAnchors[0]}));
+        expect(confused.qualityFailures).toContainEqual(expect.objectContaining({type:'unexpected-ocr-characters'}));
+        const art=evaluateQualityFixture(f,{texts:f.expectedSource,lines:[...lines,text('X',f.forbiddenRegions[0].bbox)]});
+        expect(art.anchors.every((anchor:any)=>anchor.found)).toBe(true);
+        expect(art.qualityFailures).toContainEqual(expect.objectContaining({type:'artwork-ocr-false-positive',sourceText:'X'}));
+        expect(art.qualityFailures).toContainEqual(expect.objectContaining({type:'unexpected-ocr-characters'}));
     });
 });

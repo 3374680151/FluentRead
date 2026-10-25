@@ -70,12 +70,42 @@ describe('漫画整段识别与噪声边界', () => {
         expect(result[0]).toMatchObject({text: '右列続き左列', vertical: true});
         expect(result[1].text).toBe('啊');
     });
-    it('过滤低置信度、符号、数字和英文漫画里的错误汉字，不丢掉合法 I/A 短句', () => {
+    it('过滤低置信度、符号、数字艺术碎片和英文漫画里的错误汉字，不丢掉合法 I/A 短句', () => {
         const bad = [item('noise', 20, 20, 80, 20, 0.64), item('nan', 20, 20, 80, 20, NaN),
             item(''), item('=='), item('3 3'), item('才', 200, 200, 100, 200), item('noise才'), item('j')];
         expect(groupMangaText(bad, 'en', 500, 500)).toEqual([]);
         expect(groupMangaText([item('I'), item('A', 200, 200)], 'en', 500, 500).map(line => line.text)).toEqual(['I', 'A']);
         expect(groupMangaText([item('才', 20, 20, 150, 200), item('啊', 20, 20, 20, 20, 0.85)], 'auto', 500, 500)).toEqual([]);
+    });
+    it.each(['en','ja','jpn','auto','zh','ko','ru'])('高置信数字信息不受源语言限制，判定可用 NFKC 但原文与框不变：%s', language => {
+        for(const text of ['42','123456','23:59','7:05','00:00:59','2024-02-29','2026/10/25','2026.1.3',
+            '$8','-£9.50','¥1,280.50','12.99€','１２３４','０９：１７','￥１２８０','２０２４／０２／２９']) {
+            const source=item(text,20,30,90,18,.9),original=structuredClone(source);
+            const result=groupMangaText([source],language,500,500);
+            expect(result).toEqual([{text,bbox:{x0:20,y0:30,x1:110,y1:48},fontSize:18,sourceBoxes:[{x0:20,y0:30,x1:110,y1:48}]}]);
+            expect(source).toEqual(original);
+        }
+    });
+    it('数字支路不放开低置信、孤立数字、无效日期时间与金额及空格艺术碎片', () => {
+        const noise=['1','７','3 3','123 456','①②','²³','..',':','$','09::17','24:00','12:60','9:5','99:99',
+            '2023-02-29','2024-02-30','2026-13-01','2026-00-01','2026-01-00','0000-01-01','2026-1-32','2026/01-02',
+            '$1,23','$1.234','$1,2345','12 34€','123--'];
+        for(const language of ['en','ja','auto']) {
+            expect(groupMangaText(noise.map(text=>item(text)),language,500,500,'bubble')).toEqual([]);
+            for(const text of ['42','23:59','2024-02-29','$8','￥１２８０']) {
+                expect(groupMangaText([item(text,20,20,80,20,.899999)],language,500,500,'bubble')).toEqual([]);
+            }
+        }
+        expect(groupMangaText([item('hello',20,20,80,20,.65)],'en',500,500)[0].text).toBe('hello');
+        for(const bad of [item('12:34',NaN),item('12:34',20,20,0),item('12:34',600),item('12:34',20,600)]) {
+            expect(groupMangaText([bad],'en',500,500)).toEqual([]);
+        }
+    });
+    it('实际聊天截图 SDK 的高置信时间框进入结果，不改变识别原文或几何', () => {
+        const actual=item('08:45',878,42,76,24,.998395),original=structuredClone(actual);
+        expect(groupMangaText([actual],'en',1024,1536)).toEqual([{text:'08:45',bbox:{x0:878,y0:42,x1:954,y1:66},
+            fontSize:24,sourceBoxes:[{x0:878,y0:42,x1:954,y1:66}]}]);
+        expect(actual).toEqual(original);
     });
     it('拒绝坏坐标、无效尺寸、图外框，夹紧可用区域且规范化空白', () => {
         for (const [width, height] of [[0, 20], [20, Infinity], [10.5, 20]]) expect(groupMangaText([item('text')], 'en', width, height)).toEqual([]);

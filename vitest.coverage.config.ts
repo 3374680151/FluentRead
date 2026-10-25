@@ -299,6 +299,7 @@ export default defineConfig({
                 'src/features/image-translation/services/mangaRegions.ts',
                 'src/features/image-translation/services/mangaRendering.ts',
                 'src/features/image-translation/services/mangaOcr.ts',
+                'src/features/image-translation/services/mangaOcrDeskew.ts',
                 'src/features/image-translation/services/mangaOcrTiles.ts',
                 'src/features/image-translation/services/ocrPixels.ts',
                 'src/features/image-translation/services/mangaInferenceClient.ts',

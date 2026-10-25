@@ -51,6 +51,11 @@ const errorRecoveryTest=process.argv.includes('--error-recovery');
 const errorRecoverySurface=arg('error-recovery-surface','image');
 assert.ok(['image','canvas','background','segments'].includes(errorRecoverySurface),'Recovery surface must be image, canvas, background or segments');
 if(process.argv.includes('--error-recovery-surface'))assert.ok(errorRecoveryTest,'--error-recovery-surface requires --error-recovery');
+const recoveryViewportValue=arg('recovery-viewport',null),recoveryViewportParts=recoveryViewportValue?.match(/^(\d{3,4})x(\d{3,4})$/);
+const recoveryViewport=recoveryViewportParts?{width:Number(recoveryViewportParts[1]),height:Number(recoveryViewportParts[2])}:null;
+const recoveryLongDetails=process.argv.includes('--recovery-long-details'),recoveryRtl=process.argv.includes('--recovery-rtl');
+if(recoveryViewportValue)assert.ok(errorRecoveryTest&&recoveryViewport&&recoveryViewport.width>=320&&recoveryViewport.width<=1600&&recoveryViewport.height>=240&&recoveryViewport.height<=1200,'Recovery CSS viewport must be 320–1600 x 240–1200 and requires --error-recovery');
+if(recoveryLongDetails||recoveryRtl)assert.ok(errorRecoveryTest,'Recovery long-details and RTL flags require --error-recovery');
 const prefetchPages=Number(arg('prefetch-pages','0'));
 const explicitPipelineInputs=arg('pipeline-inputs',null)?.split(',').map(file=>path.resolve(file));
 const qualityManifestPath=arg('quality-manifest',null);
@@ -59,7 +64,7 @@ const qualityManifest=qualityManifestPath?JSON.parse(fs.readFileSync(path.resolv
 const qualityFixtures=qualityManifest?.fixtures;
 if(qualityManifest){
     assert.equal(qualityManifest.version,1,'Use a supported quality manifest version');
-    assert.ok(Array.isArray(qualityFixtures)&&qualityFixtures.length>=1&&qualityFixtures.length<=20,'Quality corpus contains 1–20 bounded scenes');
+    assert.ok(Array.isArray(qualityFixtures)&&qualityFixtures.length>=1&&qualityFixtures.length<=32,'Quality corpus contains 1–32 bounded scenes');
     const names=new Set();
     for(const fixture of qualityFixtures){
         assert.ok(typeof fixture.name==='string'&&/^[a-z0-9][a-z0-9-]*$/.test(fixture.name)&&!names.has(fixture.name),'Quality scene names are unique safe artifact stems');names.add(fixture.name);
@@ -587,7 +592,16 @@ async function activateVisible(target) {
     (report.tabVisibility??=[]).push({url,...state});
 }
 async function gotoVisible(target,url,options) {const response=await target.goto(url,options);await activateVisible(target);return response;}
-async function screenshot(name,beforeCapture) {await activateVisible(page);await page.mouse.move(30,30);await page.waitForTimeout(300);if(beforeCapture)await beforeCapture();const file=path.join(artifacts,`${name}.png`);await page.screenshot({path:file});report.screenshots.push(file);}
+async function screenshot(name,beforeCapture) {
+    await activateVisible(page);await page.mouse.move(30,30);await page.waitForTimeout(300);if(beforeCapture)await beforeCapture();
+    const file=path.join(artifacts,`${name}.png`);
+    if(errorRecoveryTest&&recoveryViewport){
+        // 手动 CDP CSS 视口不属于 Playwright 的 viewport 状态；直接捕获，避免其截图端口恢复外层尺寸。
+        const result=await cdp.send('Page.captureScreenshot',{format:'png',captureBeyondViewport:false,fromSurface:true});fs.writeFileSync(file,Buffer.from(result.data,'base64'));
+        assert.deepEqual(await page.evaluate(()=>({width:innerWidth,height:innerHeight})),recoveryViewport,'Recovery screenshot preserves the emulated CSS viewport');
+    }else await page.screenshot({path:file});
+    report.screenshots.push(file);
+}
 async function toolScreenshot(name){
     await page.mouse.move(30,30);
     const box=await ball(`const r=this.querySelector('.floating-ball-manga').getBoundingClientRect();return {x:r.x-8,y:r.y-8,width:r.width+16,height:r.height+16}`);
@@ -629,6 +643,15 @@ async function verifyErrorRecovery() {
     const kind=errorRecoverySurface, sources=page.locator(readerSelector);
     const recoveryUi=code=>ui(kind==='image'?'fluent-read-image-translation-root':surfaceHost,code);
     const sourceFor=index=>sources.nth(kind==='segments'?0:index-1);
+    if(recoveryViewport){
+        // 只模拟页面 CSS 视口；第二屏外层浏览器仍为正常尺寸且不激活。
+        await cdp.send('Emulation.setDeviceMetricsOverride',{...recoveryViewport,deviceScaleFactor:1,mobile:false});
+        await page.addStyleTag({content:'.zao-image-container{max-width:100%;margin-bottom:calc(100vh + 50px);}.zao-image,.manga-recovery-source{width:100%;height:auto;max-width:100%;}.manga-recovery-source:not(img):not(canvas){aspect-ratio:760/1100;}#decoy{display:none;}.heading{font-size:14px;padding:12px;}'});
+        const actual=await page.evaluate(()=>({width:innerWidth,height:innerHeight}));
+        assert.deepEqual(actual,recoveryViewport,'Requested recovery CSS viewport is actually rendered');
+    }
+    if(recoveryRtl)await page.evaluate(()=>{document.documentElement.dir='rtl';});
+    report.recoveryEnvironment={viewport:await page.evaluate(()=>({width:innerWidth,height:innerHeight})),rtl:recoveryRtl,longDetails:recoveryLongDetails};
     await sources.first().waitFor();
     if(kind==='image'||kind==='segments')await page.waitForFunction(selector=>[...document.querySelectorAll(selector)].every(image=>image.complete&&image.naturalWidth>=80),readerSelector);
     const snapshot=source=>source.evaluate(async(element,kind)=>{
@@ -659,13 +682,14 @@ async function verifyErrorRecovery() {
             assert.deepEqual(withoutStyle(actual),withoutStyle(original),'Recovery preserves original pixels and source attributes');
         }else assert.deepEqual(actual,original,'Recovery leaves original pixels, dimensions and all source attributes unchanged');
     };
+    const recoveryError=recoveryLongDetails?Array.from({length:80},(_,index)=>`Controlled text transport failure, diagnostic line ${index+1}: retry keeps the original manga artwork visible.`).join('\n'):'Controlled text transport failure for manga recovery';
     await modelObserver.command('Runtime.evaluate',{expression:`(()=>{
         const send=chrome.runtime.sendMessage.bind(chrome.runtime);
         const fixture=globalThis.__recoveryFixture={fail:true,failures:[]};
         chrome.runtime.sendMessage=(message,...args)=>{
             if(message?.type!=='fluentReadImageTranslateTexts'||!fixture.fail)return send(message,...args);
             fixture.failures.push({requestId:message.requestId,texts:message.texts});
-            const response={success:false,error:'Controlled text transport failure for manga recovery',errorCode:'failed'};
+            const response={success:false,error:${JSON.stringify(recoveryError)},errorCode:'failed'};
             const callback=args.at(-1);
             if(typeof callback==='function'){queueMicrotask(()=>callback(response));return;}
             return Promise.resolve(response);
@@ -706,7 +730,29 @@ async function verifyErrorRecovery() {
     await page.keyboard.press('Enter');
     assert.equal(await recoveryUi(`return this.querySelector('.fr-image-feedback[data-phase="error"] details').open`),true);
     assert.equal(await page.evaluate(()=>globalThis.__recoveryHostKeys),0);
-    await screenshot('recovery-keyboard-details');await page.keyboard.press('Enter');report.cases.push(report.currentCase);
+    if(recoveryLongDetails){
+        const layout=()=>recoveryUi(`const f=this.querySelector('.fr-image-feedback[data-phase="error"]'),d=f.querySelector('details'),a=f.querySelector('.fr-image-actions');const rect=e=>{const r=e.getBoundingClientRect();return {x:r.x,y:r.y,width:r.width,height:r.height,right:r.right,bottom:r.bottom};};return {feedback:rect(f),actions:rect(a),details:rect(d),errorText:d.querySelector('p').textContent,direction:getComputedStyle(f).direction,documentDirection:document.documentElement.dir,viewport:{width:innerWidth,height:innerHeight},scrollTop:d.scrollTop,scrollHeight:d.scrollHeight,clientHeight:d.clientHeight,pageScroll:scrollY,actionsBeforeDetails:!!(a.compareDocumentPosition(d)&Node.DOCUMENT_POSITION_FOLLOWING),buttons:[...a.querySelectorAll('button')].map(e=>({className:e.className,hidden:e.hidden,visible:e.checkVisibility({checkOpacity:true,checkVisibilityCSS:true}),centerHit:this.elementFromPoint(...(()=>{const r=e.getBoundingClientRect();return [r.x+r.width/2,r.y+r.height/2];})())===e,...rect(e)}))};`);
+        const before=await layout();report.recoveryLongDetails={before};
+        assert.equal(before.actionsBeforeDetails,true,'Recovery actions precede diagnostic details in DOM and tab order');
+        assert.equal(before.errorText,recoveryError,'All 80 diagnostic lines remain available without truncation');
+        assert.deepEqual(before.viewport,report.recoveryEnvironment.viewport,'Recovery CSS viewport remains stable through trusted keyboard input');
+        if(recoveryRtl){assert.equal(before.documentDirection,'rtl');assert.equal(before.direction,'rtl','Feedback actually renders the RTL host direction');}
+        assert.ok(before.scrollHeight>before.clientHeight,'Long diagnostics have their own scrollable area');
+        const viewport=report.recoveryEnvironment.viewport;
+        for(const className of ['fluent-read-image-translation-button','fr-image-dismiss'])assert.ok(before.buttons.some(button=>button.className===className&&button.visible&&button.centerHit),'Required retry and dismiss actions are visible and hit-testable');
+        for(const button of before.buttons.filter(button=>!button.hidden))assert.ok(button.visible&&button.centerHit&&button.x>=before.feedback.x&&button.right<=before.feedback.right+1&&button.y>=before.feedback.y&&button.bottom<=before.feedback.bottom+1&&button.x>=0&&button.right<=viewport.width+1&&button.y>=0&&button.bottom<=viewport.height+1,'Every recovery action stays fully visible and hit-testable with diagnostics open');
+        await page.mouse.move(before.details.x+before.details.width/2,before.details.y+before.details.height/2);await page.mouse.wheel(0,400);
+        await wait(async()=>(await layout()).scrollTop>0,10000,true);
+        const after=await layout();report.recoveryLongDetails.after=after;
+        assert.deepEqual(after.actions,before.actions,'Scrolling diagnostics does not move recovery actions');assert.equal(after.pageScroll,before.pageScroll,'Diagnostic scrolling does not scroll the reader');
+        await recoveryUi(`this.querySelector('.fr-image-feedback[data-phase="error"] summary').focus({preventScroll:true})`);
+        await page.keyboard.press('Shift+Tab');
+        assert.equal(await recoveryUi(`return !!this.activeElement?.closest('.fr-image-actions')`),true,'Backward tab reaches a recovery action before details');
+        await page.keyboard.press('Tab');
+        assert.equal(await recoveryUi(`return this.activeElement?.tagName`),'SUMMARY');
+        assert.equal(await page.evaluate(()=>globalThis.__recoveryHostKeys),0,'Diagnostic keyboard input remains isolated from reader shortcuts');
+    }
+    await screenshot('recovery-keyboard-details');if(!recoveryLongDetails)await page.keyboard.press('Enter');report.cases.push(report.currentCase);
     report.currentCase='trusted retry recovers only this page and removes error actions while loading';
     await modelObserver.command('Runtime.evaluate',{expression:'globalThis.__recoveryFixture.fail=false'});
     await click('.fluent-read-image-translation-button');
@@ -1863,7 +1909,15 @@ await import('./mangaInferenceWorker.real.js');self.removeEventListener('message
     if(blockedOfficial){assert.ok(report.modelRequests.some(r=>r.source==='huggingface.co'));assert.ok(report.modelRequests.some(r=>['hf-mirror.com','hf-mirror.net'].includes(r.source)));report.cases.push('actual Offscreen official-source block falls back to verified mirror files');}
     auditPageErrors();assert.deepEqual(report.errors,[]);assert.deepEqual(report.consoleErrors,[]);report.status='passed';
     focusGuard();
-})().catch(async error=>{report.status='failed';report.failure=error.stack;process.exitCode=1;console.error(error);if(cdp){report.lastImageUi=await imageUi('return [...this.querySelectorAll(".fr-image-feedback .fr-image-status")].map(s=>s.textContent)').catch(()=>null);report.lastCanvasUi=await canvasUi('return [...this.querySelectorAll("canvas")].map(c=>({width:c.width,height:c.height,style:c.style.cssText}))').catch(()=>null);report.lastProgress=await worker.evaluate(()=>globalThis.__mangaTest.progress).catch(()=>null);}if(page)await page.screenshot({path:path.join(artifacts,'failed-reader.png')}).catch(()=>{});})
+})().catch(async error=>{
+    report.status='failed';report.failure=error.stack;process.exitCode=1;console.error(error);
+    if(cdp){report.lastImageUi=await imageUi('return [...this.querySelectorAll(".fr-image-feedback .fr-image-status")].map(s=>s.textContent)').catch(()=>null);report.lastCanvasUi=await canvasUi('return [...this.querySelectorAll("canvas")].map(c=>({width:c.width,height:c.height,style:c.style.cssText}))').catch(()=>null);report.lastProgress=await worker.evaluate(()=>globalThis.__mangaTest.progress).catch(()=>null);}
+    if(page){
+        report.failureViewport=await page.evaluate(()=>({width:innerWidth,height:innerHeight,devicePixelRatio})).catch(()=>null);
+        if(errorRecoveryTest&&recoveryViewport&&cdp)await cdp.send('Page.captureScreenshot',{format:'png',captureBeyondViewport:false,fromSurface:true}).then(result=>fs.writeFileSync(path.join(artifacts,'failed-reader.png'),Buffer.from(result.data,'base64'))).catch(()=>{});
+        else await page.screenshot({path:path.join(artifacts,'failed-reader.png')}).catch(()=>{});
+    }
+})
 .finally(async()=>{
     report.cleanupErrors = [];
     try {

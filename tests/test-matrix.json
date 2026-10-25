@@ -618,6 +618,7 @@
       "tests/mangaInferenceWorker.test.ts",
       "tests/mangaInpainting.test.ts",
       "tests/mangaOcr.test.ts",
+      "tests/mangaOcrDeskew.test.ts",
       "tests/mangaOcrAssets.test.ts",
       "tests/mangaOnnxBuild.test.ts",
       "tests/mangaPatchResult.test.ts",

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""生成十四种安全、文字可核对的漫画/图片翻译夹具；只需现有 Pillow 和显式本机字体。"""
+"""生成二十种安全、文字可核对的漫画/图片翻译夹具；只需现有 Pillow 和显式本机字体。"""
 
 from __future__ import annotations
 
@@ -11,11 +11,15 @@ import unicodedata
 from pathlib import Path
 
 import PIL
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageDraw, ImageFont, ImageOps
 
 
 ENGLISH_FONT = Path("/System/Library/Fonts/Supplemental/Arial Bold.ttf")
 JAPANESE_FONT_NAME = "ヒラギノ角ゴシック W4.ttc"
+HANDWRITING_FONT = Path("/System/Library/Fonts/Supplemental/Bradley Hand Bold.ttf")
+REGULAR_FONT = Path("/System/Library/Fonts/Supplemental/Arial.ttf")
+MONOSPACE_FONT = Path("/System/Library/Fonts/Supplemental/Courier New.ttf")
+SERIF_FONT = Path("/System/Library/Fonts/Supplemental/Times New Roman Italic.ttf")
 
 
 def normalize_anchor(text: str) -> str:
@@ -96,10 +100,15 @@ class Page:
             "vertical":False,"rotationDegrees":angle})
 
 
-def generate(output: Path, english: Path, japanese: Path) -> dict:
+def generate(output: Path, english: Path, japanese: Path, handwriting: Path = HANDWRITING_FONT,
+             regular: Path = REGULAR_FONT, monospace: Path = MONOSPACE_FONT, serif: Path = SERIF_FONT) -> dict:
     output.mkdir(parents=True,exist_ok=True)
     en=lambda size:ImageFont.truetype(str(english),size=size)
     ja=lambda size:ImageFont.truetype(str(japanese),size=size)
+    hand=lambda size:ImageFont.truetype(str(handwriting),size=size)
+    sans=lambda size:ImageFont.truetype(str(regular),size=size)
+    mono=lambda size:ImageFont.truetype(str(monospace),size=size)
+    italic=lambda size:ImageFont.truetype(str(serif),size=size)
     pages=[]
 
     p=Page("english-bubbles-caption",(1000,1400),"en","three separated speech balloons and one outside single-line caption")
@@ -240,6 +249,121 @@ def generate(output: Path, english: Path, japanese: Path) -> dict:
     p.record["expectedNoText"]=True;p.negative((24,24,1076,1176),"entire-wordless-panel")
     p.protect(350,460);p.protect(790,780);p.protect(625,160);pages.append(p)
 
+    # 第三轮六张采用新字体和新拓扑；前十四张的像素、文字与预期保持不变。
+    p=Page("handwritten-field-notes",(1200,1400),"en","handwriting-style field notes on ruled paper with original plant and sailboat illustrations",color=(225,215,194))
+    p.record["stressors"]=["handwriting-style-font","ruled-paper","non-robot-illustration"]
+    p.draw.polygon([(80,60),(1110,95),(1140,1320),(55,1350)],fill=(255,249,221),outline=(98,86,67),width=5)
+    for y in range(180,1280,55):p.draw.line((90,y,1100,y),fill=(198,210,207),width=2)
+    p.draw.line((160,100,160,1310),fill=(213,156,146),width=2)
+    p.line("A little rain will not stop us.",205,155,hand(54),translation="一点小雨不会让我们停下。")
+    p.line("Keep the paper boat dry.",205,285,hand(54),translation="别让纸船淋湿。")
+    p.line("Meet me after the last bell.",205,415,hand(54),translation="最后一声铃响后见。")
+    p.line("Bring a warm scarf.",205,545,hand(54),translation="带上一条暖和的围巾。")
+    p.draw.line((340,1090,345,790),fill=(74,105,66),width=9)
+    for x,y,side in [(340,850,-1),(342,940,1),(340,1020,-1)]:
+        p.draw.ellipse((x-120 if side<0 else x,y-45,x if side<0 else x+120,y+20),fill=(109,143,87),outline=(63,91,59),width=3)
+    p.draw.polygon([(700,1080),(1030,1080),(960,1180),(770,1180)],fill=(131,161,177),outline=(58,75,91),width=5)
+    p.draw.line((865,810,865,1080),fill=(93,79,63),width=6)
+    p.draw.polygon([(850,820),(710,1050),(850,1050)],fill=(242,232,202),outline=(93,79,63),width=4)
+    p.draw.polygon([(880,860),(1005,1050),(880,1050)],fill=(230,218,182),outline=(93,79,63),width=4)
+    p.negative((205,760,485,1140),"pressed-leaf-drawing");p.negative((680,790,1050,1200),"paper-sailboat-drawing")
+    p.protect(340,900);p.protect(830,1130);pages.append(p)
+
+    p=Page("bilingual-cafe-menu",(1100,1500),"ja","Japanese and Latin menu lettering with serif, regular, bold and Japanese fonts beside a wordless pastry drawing",color=(224,201,170))
+    p.record["stressors"]=["japanese-latin-mixed","four-font-families","menu-layout"]
+    p.draw.rounded_rectangle((70,60,1030,1435),radius=28,fill=(255,249,232),outline=(103,72,45),width=6)
+    p.line("Cafe by the River",215,120,italic(64),translation="河畔咖啡馆")
+    p.line("本日のおすすめ",255,255,ja(51),translation="今日推荐")
+    p.draw.line((155,355,945,355),fill=(146,117,82),width=3)
+    p.line("PEACH TEA",180,410,en(45),translation="蜜桃茶")
+    p.line("桃の紅茶 380円",180,500,ja(43),translation="蜜桃红茶380日元")
+    p.line("Please enjoy your tea.",180,660,sans(38),translation="请慢慢享用。")
+    p.line("また来てください。",180,755,ja(43),translation="欢迎再来。")
+    p.draw.ellipse((260,1110,840,1300),fill=(242,235,217),outline=(155,135,106),width=5)
+    p.draw.pieslice((355,975,745,1240),180,355,fill=(201,139,70),outline=(118,77,39),width=5)
+    for x in [430,510,590,670]:p.draw.arc((x-40,1010,x+45,1195),-90,85,fill=(244,188,108),width=13)
+    p.negative((240,955,860,1320),"pastry-and-plate");p.protect(545,1150);p.protect(310,1220);pages.append(p)
+
+    p=Page("low-contrast-fog-gradient",(1500,1100),"en","low-contrast lettering directly over a two-axis fog gradient and fine rain texture; no white speech balloon")
+    p.record["stressors"]=["low-contrast","two-axis-gradient","fine-background-lines"]
+    gradient=Image.linear_gradient("L")
+    fog=Image.blend(gradient.resize(p.image.size),gradient.rotate(90).resize(p.image.size),0.5)
+    p.image=ImageOps.colorize(fog,(166,183,177),(221,225,210));p.draw=ImageDraw.Draw(p.image)
+    for x in range(-500,1500,41):p.draw.line((x,0,x+420,1100),fill=(186,198,187),width=1)
+    p.line("THE FOG IS LIFTING",240,130,en(52),fill=(124,143,133),translation="雾正在散去。")
+    p.line("Meet beside the old oak tree.",190,320,sans(48),fill=(139,153,139),translation="到老橡树旁边见。")
+    p.line("KEEP THE PATH IN VIEW",200,515,en(48),fill=(128,143,133),translation="别让小路离开视线。")
+    p.draw.polygon([(80,1040),(405,720),(650,1040)],fill=(149,169,156))
+    p.draw.polygon([(470,1040),(845,780),(1230,1040)],fill=(164,180,165))
+    p.draw.line((1250,1020,1250,770),fill=(116,140,122),width=14)
+    for box in [(1160,710,1270,850),(1230,700,1360,845),(1190,780,1330,910)]:p.draw.ellipse(box,fill=(146,166,145))
+    p.negative((75,700,665,1050),"foggy-mountain-art");p.negative((1150,690,1370,1030),"oak-silhouette")
+    p.protect(380,960);p.protect(1250,960);pages.append(p)
+
+    p=Page("microprint-station-screenshot",(1800,900),"en","a station screenshot with exact 8px, 12px and 18px source fonts, thin rules and a wordless route diagram",color=(241,244,245))
+    p.record["stressors"]=["8px-font","12px-font","numeric-identifiers","wide-screenshot"]
+    p.record["minimumFontSize"]=8
+    p.draw.rectangle((0,0,1800,95),fill=(38,65,82))
+    p.line("STATION CHECK-IN",65,31,en(32),fill=(250,252,253),translation="车站值乘登记")
+    p.draw.rounded_rectangle((65,150,1735,395),radius=14,fill="white",outline=(186,199,205),width=2)
+    p.line("KEEP YOUR TICKET",100,185,en(18),translation="请保留车票。")
+    p.line("SEAT 18 GATE 06",100,245,mono(12),translation="18号座位，06号入口。")
+    p.line("SMALL PRINT STILL COUNTS",100,305,sans(8),translation="小字也很重要。")
+    p.line("REFERENCE 2048",1110,245,mono(12),translation="参考编号2048")
+    p.line("LAST SERVICE AT 23:08",1110,305,sans(8),translation="末班车23点08分。")
+    p.draw.line((100,600,500,600,780,760,1260,760,1600,520),fill=(55,116,139),width=9)
+    for x,y in [(100,600),(500,600),(780,760),(1260,760),(1600,520)]:p.draw.ellipse((x-13,y-13,x+13,y+13),fill=(241,244,245),outline=(55,116,139),width=5)
+    p.negative((75,485,1635,795),"unlabelled-route-diagram");p.protect(500,600);p.protect(1030,760);pages.append(p)
+
+    p=Page("tailed-balloons-long-dialogue",(1200,1600),"en","long multiline dialogue in a tailed balloon, a jagged shout panel and overlapping thought-cloud lobes",color=(210,222,225))
+    p.record["stressors"]=["speech-tail","jagged-balloon","thought-cloud","long-multiline-dialogue"]
+    p.panel((24,24,1176,520),fill=(230,236,235));p.panel((24,545,1176,970),fill=(218,228,229));p.panel((24,995,1176,1576),fill=(228,232,221))
+    p.draw.polygon([(900,340),(1100,500),(990,330)],fill="white",outline=(35,42,49),width=5)
+    p.balloon((65,65,1130,425))
+    p.line("THE WIND IS GETTING STRONGER",155,150,en(39),translation="风越来越大了。")
+    p.line("HOLD THE PAPER SAIL",265,240,en(40),translation="扶住纸帆。")
+    points=[]
+    for x in range(65,1141,45):points.append((x,580 if (x//45)%2 else 600))
+    points.extend([(1140,900),(1080,880)])
+    for x in range(1080,64,-45):points.append((x,915 if (x//45)%2 else 895))
+    points.extend([(55,620),(65,580)])
+    p.draw.polygon(points,fill=(255,250,221),outline=(70,64,49),width=5)
+    p.line("WE CAN WAIT BY THE LIGHTHOUSE",90,680,en(38),translation="我们可以到灯塔旁等候。")
+    p.line("UNTIL THE RAIN HAS PASSED",175,770,en(38),translation="等到雨停。")
+    for box in [(280,1090,610,1435),(525,1060,880,1440),(765,1100,1120,1440)]:p.balloon(box)
+    p.draw.rounded_rectangle((350,1160,1040,1380),radius=70,fill="white")
+    p.line("ONE STEP AT A TIME",365,1240,en(44),translation="一步一步慢慢来。")
+    p.draw.polygon([(90,1490),(115,1140),(205,1140),(230,1490)],fill=(240,229,198),outline=(74,83,82),width=5)
+    p.draw.rectangle((100,1090,220,1150),fill=(87,125,136),outline=(74,83,82),width=4)
+    p.draw.polygon([(80,1090),(160,1040),(240,1090)],fill=(140,99,80),outline=(74,83,82),width=4)
+    p.negative((75,1030,245,1510),"lighthouse-drawing");p.negative((1030,450,1105,505),"speech-tail-only")
+    p.protect(160,1400);p.protect(1060,470);pages.append(p)
+
+    p=Page("chat-screenshot-dialogue",(1080,1600),"en","chat screenshot with regular-font dialogue, a monospace time, asymmetric bubbles, avatar icons and a wordless landscape attachment",color=(233,240,237))
+    p.record["stressors"]=["chat-screenshot","asymmetric-message-bubbles","ui-small-text","wordless-photo-card"]
+    p.draw.rectangle((0,0,1080,130),fill=(43,83,78))
+    p.draw.ellipse((32,26,104,98),fill=(173,202,186));p.draw.arc((48,39,90,86),20,340,fill=(48,85,73),width=5)
+    p.line("MIRA",145,40,en(37),fill="white",translation="米拉")
+    p.line("08:45",880,47,mono(23),fill=(233,246,238),translation="08:45")
+    p.draw.rounded_rectangle((105,205,900,365),radius=30,fill="white")
+    p.draw.polygon([(110,245),(68,285),(125,285)],fill="white")
+    p.line("Did you save the last page?",145,267,sans(38),translation="你保存最后一页了吗？")
+    p.draw.rounded_rectangle((170,440,995,610),radius=30,fill=(191,224,191))
+    p.draw.polygon([(980,475),(1035,520),(970,520)],fill=(191,224,191))
+    p.line("Yes. The map is on my phone.",205,505,sans(38),translation="保存了，地图在我的手机上。")
+    p.draw.rounded_rectangle((105,685,900,845),radius=30,fill="white")
+    p.line("See you at platform 12.",145,747,sans(38),translation="12号站台见。")
+    p.draw.rounded_rectangle((105,900,900,1230),radius=20,fill=(205,223,224),outline="white",width=8)
+    p.draw.ellipse((700,945,790,1035),fill=(249,223,143))
+    p.draw.polygon([(125,1205),(360,1000),(555,1205)],fill=(95,142,136))
+    p.draw.polygon([(400,1205),(660,1035),(880,1205)],fill=(123,161,141))
+    p.draw.rounded_rectangle((170,1300,995,1450),radius=30,fill=(191,224,191))
+    p.line("Bring the blue notebook.",210,1358,sans(38),translation="带上蓝色笔记本。")
+    p.draw.rounded_rectangle((35,1500,1045,1570),radius=28,fill="white",outline=(183,199,192),width=2)
+    p.line("Message",78,1522,sans(25),fill=(102,122,113),translation="消息")
+    p.negative((20,15,115,110),"header-avatar-icon");p.negative((120,920,885,1215),"wordless-landscape-attachment")
+    p.protect(745,990);p.protect(360,1140);pages.append(p)
+
     records=[]
     for p in pages:
         for region in p.record["regions"]:
@@ -262,7 +386,8 @@ def generate(output: Path, english: Path, japanese: Path) -> dict:
         p.record["anchorOccurrences"]=occurrences
         records.append(p.record)
 
-    fonts=[{"purpose":purpose,"path":str(path),"sha256":hashlib.sha256(path.read_bytes()).hexdigest()} for purpose,path in [("English",english),("Japanese",japanese)]]
+    fonts=[{"purpose":purpose,"path":str(path),"sha256":hashlib.sha256(path.read_bytes()).hexdigest()} for purpose,path in [
+        ("English",english),("Japanese",japanese),("Handwriting style",handwriting),("Regular Latin",regular),("Monospace",monospace),("Italic serif",serif)]]
     manifest={"version":1,"generator":"scripts/testing/generate-manga-quality-fixtures.py","seed":1068,"pillowVersion":PIL.__version__,
               "anchorNormalization":{"unicode":"NFKC","case":"upper","keepCategories":["Letter","Number"],"countOverlaps":True},
               "fonts":fonts,"notes":["All panels, geometry and words are original deterministic test material.",
@@ -290,6 +415,11 @@ if __name__=="__main__":
     parser.add_argument("--output-dir",type=Path,required=True)
     parser.add_argument("--english-font",type=Path,default=ENGLISH_FONT)
     parser.add_argument("--japanese-font",type=Path)
+    parser.add_argument("--handwriting-font",type=Path,default=HANDWRITING_FONT)
+    parser.add_argument("--regular-font",type=Path,default=REGULAR_FONT)
+    parser.add_argument("--monospace-font",type=Path,default=MONOSPACE_FONT)
+    parser.add_argument("--serif-font",type=Path,default=SERIF_FONT)
     args=parser.parse_args()
-    result=generate(args.output_dir,args.english_font,args.japanese_font or japanese_font())
+    result=generate(args.output_dir,args.english_font,args.japanese_font or japanese_font(),
+                    args.handwriting_font,args.regular_font,args.monospace_font,args.serif_font)
     print(json.dumps({"fixtures":len(result["fixtures"]),"outputDir":str(args.output_dir.resolve())},ensure_ascii=False))

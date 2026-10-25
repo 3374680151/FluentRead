@@ -8,6 +8,8 @@ vi.mock('onnxruntime-web/webgpu',()=>({env:{wasm:mocks.wasm},InferenceSession:{c
 vi.mock('@/src/features/image-translation/services/mangaInferenceClient',async original=>({...await original<any>(),mangaInferenceClient:{prepare:mocks.workerPrepare,request:mocks.workerRequest,release:mocks.workerRelease}}));
 import {applyMangaPatch,createBrowserMangaInpainter,createMangaInpaintingRuntime,createMangaPatch,mangaInpaintingRuntime} from '@/src/features/image-translation/services/mangaInpainting';
 import {mangaMaskBoxes} from '@/src/features/image-translation/mangaPatchResult';
+import {createOffscreenMessageListener} from '@/src/app/offscreen/messageRouter';
+import {withMangaModelRemoval} from '@/src/features/image-translation/services/mangaOcrAssets';
 const region={text:'Hello world',fontSize:20,bbox:{x0:30,y0:30,x1:90,y1:70}};
 const pixels=()=>new Uint8ClampedArray(128*128*4).fill(255);
 const zero=(patch:{width:number;height:number})=>new Float32Array(patch.width*patch.height*3);
@@ -183,6 +185,59 @@ describe('漫画局部神经修补',()=>{
         const port={run:vi.fn(async patch=>zero(patch)),release:vi.fn()},create=vi.fn(async()=>port),runtime=createMangaInpaintingRuntime(create);
         await runtime.repair(pixels(),128,128,[region],undefined,undefined,undefined,[{color:'rgb(255,255,255)',uniform:true}]);
         expect(mocks.background).not.toHaveBeenCalled();expect(create).not.toHaveBeenCalled();await runtime.dispose();
+    });
+    it('两个真实 Offscreen 漫画请求重叠时，确认均匀页不等待另一页的模型，复杂页仍串行',async()=>{
+        const gate=deferred<void>(),entered:string[]=[],completed:string[]=[];
+        const port={run:vi.fn(async patch=>{await gate.promise;return zero(patch);}),release:vi.fn()};
+        const runtime=createMangaInpaintingRuntime(async()=>port);
+        const listener=createOffscreenMessageListener({
+            translate:async()=>'',ttsPlayer:{play:async()=>undefined,stop:()=>true,seek:()=>true},
+            fetchImage:async()=>'',translateArea:async()=>({image:'',lines:[]}),cropArea:async()=>({image:'',lines:[]}),downloadOcrLanguages:async()=>undefined,
+            translateImage:async(_image,_language,title,signal)=>{
+                entered.push(title);
+                const input=pixels(),result=await runtime.repair(input,128,128,[region],signal,undefined,undefined,[{color:'#fff',uniform:title==='uniform'}]);
+                if(title==='uniform'){expect(result).toEqual(input);expect(result).not.toBe(input);}
+                completed.push(title);return {image:'translated',lines:[]};
+            },
+        });
+        const dispatch=(title:string)=>new Promise<unknown>(resolve=>{
+            expect(listener({type:'FLUENT_READ_IMAGE_TRANSLATE_OFFSCREEN',target:'offscreen',requestId:title,
+                image:'data:image/png;base64,AA==',sourceLanguage:'en',title,manga:true},{},resolve)).toBe(true);
+        });
+        const first=dispatch('complex-first');await tick();expect(port.run).toHaveBeenCalledOnce();
+        const uniform=dispatch('uniform'),last=dispatch('complex-last');
+        try {
+            await tick();await expect(uniform).resolves.toEqual({success:true,image:'translated',lines:[]});
+            expect(entered).toEqual(['complex-first','uniform','complex-last']);
+            expect(completed).toEqual(['uniform']);expect(port.run).toHaveBeenCalledOnce();
+        } finally {gate.resolve();await Promise.all([first,last]);await runtime.dispose();}
+        expect(completed).toEqual(['uniform','complex-first','complex-last']);expect(port.run).toHaveBeenCalledTimes(2);
+    });
+    it('完整均匀分类的异步返回检查取消，不碰模型或改变空闲释放时间',async()=>{
+        const port={run:vi.fn(async patch=>zero(patch)),release:vi.fn()},create=vi.fn(async()=>port),runtime=createMangaInpaintingRuntime(create);
+        await runtime.repair(pixels(),128,128,[region]);await vi.advanceTimersByTimeAsync(120000);
+        const uniform=[{color:'#fff',uniform:true}],controller=new AbortController();
+        const canceled=runtime.repair(pixels(),128,128,[region],controller.signal,undefined,undefined,uniform);controller.abort();
+        await expect(canceled).rejects.toMatchObject({name:'AbortError'});
+        const input=pixels();expect(await runtime.repair(input,128,128,[region],undefined,undefined,undefined,uniform)).toEqual(input);
+        expect(await runtime.repair(input,128,128,[])).toEqual(input);expect(port.run).toHaveBeenCalledOnce();
+        await vi.advanceTimersByTimeAsync(60000);expect(port.release).toHaveBeenCalledOnce();await runtime.dispose();
+    });
+    it('均匀分类缺失、数组空洞或任一复杂区域都不能绕过模型队列',async()=>{
+        const port={run:vi.fn(async patch=>zero(patch)),release:vi.fn()},runtime=createMangaInpaintingRuntime(async()=>port);
+        const uniform={color:'#fff',uniform:true},sparse=Array<{color:string;uniform:boolean}>(2);sparse[0]=uniform;
+        for(const backgrounds of [[uniform],sparse,[uniform,{color:'#fff',uniform:false}]]) {
+            await runtime.repair(pixels(),128,128,[region,region],undefined,undefined,undefined,backgrounds);
+        }
+        expect(port.run).toHaveBeenCalledTimes(3);expect(mocks.background).toHaveBeenCalledTimes(2);await runtime.dispose();
+    });
+    it('均匀页仍尊重现有模型删除 admission，不越过共享删除边界',async()=>{
+        const gate=deferred<void>(),removing=withMangaModelRemoval(()=>gate.promise),create=vi.fn(),runtime=createMangaInpaintingRuntime(create);
+        let completed=false;const input=pixels();
+        const repair=runtime.repair(input,128,128,[region],undefined,undefined,undefined,[{color:'#fff',uniform:true}]).then(result=>{completed=true;return result;});
+        try {await tick();expect(completed).toBe(false);expect(create).not.toHaveBeenCalled();}
+        finally {gate.resolve();await removing;}
+        expect(await repair).toEqual(input);expect(create).not.toHaveBeenCalled();await runtime.dispose();
     });
     it('预取消、初始化取消和推理取消均不回写迟到结果',async()=>{
         const abort=new AbortController();abort.abort();const port={run:vi.fn(async patch=>zero(patch)),release:vi.fn()},create=vi.fn(async()=>port),runtime=createMangaInpaintingRuntime(create);

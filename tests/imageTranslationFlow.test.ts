@@ -209,6 +209,24 @@ describe('图片翻译流程优化',()=>{
         expect(hostInput).toHaveBeenCalledOnce();
     });
 
+    it.each([true,false])('展开长错误详情时恢复动作先进入键盘顺序，详情与本地化更新不挤走恢复入口：quiet=%s', quiet => {
+        const {document}=parseHTML('<html><body></body></html>');vi.stubGlobal('document',document);
+        const action=vi.fn(),ui=createImageControls({onAction:action,onPrepare(){}});
+        const longDetail=Array.from({length:80},(_,index)=>`Failure ${index}: the source request could not be completed.`).join('\n');
+        ui.update('error','翻译服务暂时不可用',{quiet,serviceSettings:true,errorDetails:longDetail});
+        const details=ui.feedback.querySelector<HTMLDetailsElement>('details')!,row=ui.button.parentElement!;
+        const recoveryBeforeDetails=()=>expect(Array.from(ui.feedback.children).indexOf(row))
+            .toBeLessThan(Array.from(ui.feedback.children).indexOf(details));
+        recoveryBeforeDetails();details.open=true;ui.refreshLanguage();
+        expect(details.open).toBe(true);expect(details.querySelector('p')!.textContent).toBe(longDetail);
+        expect(ui.button.parentElement).toBe(row);expect(ui.dismiss.parentElement).toBe(row);expect(row.parentElement).toBe(ui.feedback);
+        recoveryBeforeDetails();
+        ui.update('loading','正在翻译文字…',{quiet});expect(details.hidden).toBe(true);expect(details.open).toBe(false);
+        expect(row.parentElement).toBe(ui.element);
+        ui.update('error','仍未完成',{quiet,errorDetails:'new exact error'});recoveryBeforeDetails();
+        expect(details.querySelector('p')!.textContent).toBe('new exact error');ui.dispose();
+    });
+
     it('紧凑漫画错误保留完整可访问正文和悬浮全文，切换语言后同步且重新处理时撤下全文提示', () => {
         const {document}=parseHTML('<html><body></body></html>');vi.stubGlobal('document',document);
         let language:UiLanguage='zh-CN';

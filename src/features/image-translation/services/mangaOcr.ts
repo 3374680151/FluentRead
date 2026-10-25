@@ -1,7 +1,7 @@
 /**
  * @file src/features/image-translation/services/mangaOcr.ts
  * 文件职责：在扩展独立 Worker 中按需运行 PaddleOCR 漫画识别，并隔离排队、取消、失败和空闲释放。
- * 主要内容：延迟导入浏览器 OCR 和本地 ONNX WASM，用频繁读取的画布完成 OCR 预处理，透明像素仅在识别画布上按前景亮度合成对比底色，读取已校验模型并融合 ONNX 执行图，硬件可用时加速识别，GPU 故障有界切换 CPU；SVG 复用已解码原图异步转为无损 PNG 后进入 Worker，取消或失败释放自有画布且保留借用原图；大图以有重叠的原像素瓦片识别并按物理行去重，整页原文与放大的独立气泡共同参与可靠性回退，每页共享至多四个低置信竖列的单项复识别预算，只有置信度提升且原框完全吻合才替换原文，普通图片保留物理行供严格段落策略使用；滚动取消保留轻量模型端口，Worker owner 有界收尾，GPU 挂起重建一次 CPU 后端，空闲三分钟释放会话，统一清理 OCR 与修补会话。
+ * 主要内容：延迟导入浏览器 OCR 和本地 ONNX WASM，用频繁读取的画布完成 OCR 预处理，透明像素仅在识别画布上按前景亮度合成对比底色，读取已校验模型并融合 ONNX 执行图，硬件可用时加速识别，GPU 故障有界切换 CPU；SVG 复用已解码原图异步转为无损 PNG 后进入 Worker，取消或失败释放自有画布且保留借用原图；大图以有重叠的原像素瓦片识别并按物理行去重，整页原文与放大的独立气泡共同参与可靠性回退，竖列与纯像素估角的浅底斜行共用每页四框复识别预算，斜行只以高置信且有增益的原框结果替换，预处理另有像素预算，普通图片保留物理行供严格段落策略使用；滚动取消保留轻量模型端口，Worker owner 有界收尾，GPU 挂起重建一次 CPU 后端，空闲三分钟释放会话，统一清理 OCR 与修补会话。
  * 模块边界：不访问宿主 DOM、不翻译文本、不处理译图；仅漫画及显式选择 PaddleOCR 的单张图片使用本模型；通用识别与圈选继续由 Tesseract 负责。
  */
 import {localWasmThreads, paceLocalInference} from '@/src/shared/onnx/resources';
@@ -16,6 +16,7 @@ import {mangaInpaintingRuntime} from './mangaInpainting';
 import {encodeImageCanvas} from './imageEncoding';
 import {flattenOcrAlpha} from './ocrPixels';
 import {mergeMangaOcrTiles, planMangaOcrTiles, type MangaOcrTileResult} from './mangaOcrTiles';
+import {MANGA_DESKEW_PIXEL_BUDGET,planMangaOcrDeskew,trimMangaOcrDeskew} from './mangaOcrDeskew';
 
 interface MangaOcrPort {
     recognize(image: string, options: {flatten: true; noCache: true; strategy: 'per-box';signal?:AbortSignal; decodedImage?: HTMLImageElement; progress?: MangaInferenceProgress}): Promise<MangaOcrPage>;
@@ -94,7 +95,8 @@ export async function createBrowserMangaOcr(signal?: AbortSignal, progress?: Pro
         private checks:Array<()=>void>=[];
         private inferenceFailure: {error: unknown} | undefined;
         private remainingRetries=4;
-        beginMangaPage(): void {this.remainingRetries=4;}
+        private remainingDeskewPixels=MANGA_DESKEW_PIXEL_BUDGET;
+        beginMangaPage(): void {this.remainingRetries=4;this.remainingDeskewPixels=MANGA_DESKEW_PIXEL_BUDGET;}
         private checkInferenceFailure(): void {
             if(this.inferenceFailure)throw this.inferenceFailure.error;
         }
@@ -105,15 +107,56 @@ export async function createBrowserMangaOcr(signal?: AbortSignal, progress?: Pro
                 // 批量裁切会把不同宽度补齐；只对已有低置信竖列有界复识别，不再运行检测或新增框。
                 const weak=page.results.filter(item=>item.confidence<.9&&item.box.height>item.box.width*1.8)
                     .sort((a,b)=>a.confidence-b.confidence).slice(0,this.remainingRetries);
-                if(!weak.length)return page;
-                assertMangaOcrActive(activeSignal);
-                this.remainingRetries-=weak.length;
-                const retried=await this.recognitor!.run(canvas,weak.map(item=>item.box),
-                    this.options.recognition!.charactersDictionary,'per-box',{...options,recBatchSize:1});
-                assertMangaOcrActive(activeSignal);
-                const replacements=new Map(weak.map(item=>[item, retried.find(candidate=>
-                    candidate.box.x===item.box.x&&candidate.box.y===item.box.y&&candidate.box.width===item.box.width
-                    &&candidate.box.height===item.box.height&&candidate.confidence>=item.confidence+.05)]));
+                const replacements=new Map<(typeof page.results)[number],(typeof page.results)[number]|undefined>();
+                if(weak.length){
+                    assertMangaOcrActive(activeSignal);
+                    this.remainingRetries-=weak.length;
+                    const retried=await this.recognitor!.run(canvas,weak.map(item=>item.box),
+                        this.options.recognition!.charactersDictionary,'per-box',{...options,recBatchSize:1});
+                    assertMangaOcrActive(activeSignal);
+                    this.checkInferenceFailure();
+                    for(const item of weak)replacements.set(item,retried.find(candidate=>
+                        candidate.box.x===item.box.x&&candidate.box.y===item.box.y&&candidate.box.width===item.box.width
+                        &&candidate.box.height===item.box.height&&candidate.confidence>=item.confidence+.05));
+                }
+                // 浅底长行的倾斜会把真实字高压到48px输入的一小部分；只按像素估角，不猜字或重跑检测。
+                for(const item of page.results.filter(item=>item.confidence<.99).sort((a,b)=>a.confidence-b.confidence)){
+                    if(!this.remainingRetries)break;
+                    const box=item.box,width=Math.round(box.width),height=Math.round(box.height),pixels=width*height;
+                    if(![box.x,box.y,box.width,box.height].every(Number.isFinite)||box.x<0||box.y<0
+                        ||box.x+box.width>canvas.width||box.y+box.height>canvas.height||width<120||height<20||width/height<2.5
+                        ||pixels>this.remainingDeskewPixels)continue;
+                    this.remainingDeskewPixels-=pixels;
+                    assertMangaOcrActive(activeSignal);
+                    const crop=createOcrCanvas(),rotated=createOcrCanvas(),trimmed=createOcrCanvas();
+                    try {
+                        crop.width=width;crop.height=height;
+                        const ctx=crop.getContext('2d',{willReadFrequently:true});if(!ctx)throw new Error('浏览器不支持图片处理');
+                        ctx.fillStyle='white';ctx.fillRect(0,0,width,height);ctx.drawImage(canvas,box.x,box.y,box.width,box.height,0,0,width,height);
+                        const plan=planMangaOcrDeskew(ctx.getImageData(0,0,width,height).data,width,height);if(!plan)continue;
+                        const rotatedPixels=plan.width*plan.height;if(rotatedPixels>this.remainingDeskewPixels)continue;
+                        this.remainingDeskewPixels-=rotatedPixels;
+                        rotated.width=plan.width;rotated.height=plan.height;
+                        const rc=rotated.getContext('2d',{willReadFrequently:true});if(!rc)throw new Error('浏览器不支持图片处理');
+                        rc.fillStyle='white';rc.fillRect(0,0,rotated.width,rotated.height);
+                        rc.translate(rotated.width/2,rotated.height/2);rc.rotate(-plan.radians);rc.drawImage(crop,-width/2,-height/2);
+                        const trim=trimMangaOcrDeskew(rc.getImageData(0,0,rotated.width,rotated.height).data,rotated.width,rotated.height,height);
+                        if(!trim)continue;
+                        trimmed.width=trim.width;trimmed.height=trim.height;
+                        const tc=trimmed.getContext('2d');if(!tc)throw new Error('浏览器不支持图片处理');
+                        tc.fillStyle='white';tc.fillRect(0,0,trim.width,trim.height);
+                        tc.drawImage(rotated,trim.x,trim.y,trim.width,trim.height,0,0,trim.width,trim.height);
+                        assertMangaOcrActive(activeSignal);this.remainingRetries--;
+                        const [candidate]=await this.recognitor!.run(trimmed,[{x:0,y:0,width:trim.width,height:trim.height}],
+                            this.options.recognition!.charactersDictionary,'per-box',{...options,recBatchSize:1});
+                        assertMangaOcrActive(activeSignal);
+                        this.checkInferenceFailure();
+                        if(candidate&&candidate.box.x===0&&candidate.box.y===0&&candidate.box.width===trim.width&&candidate.box.height===trim.height
+                            &&candidate.confidence>=.99&&candidate.confidence>=item.confidence+.01){
+                            replacements.set(item,{...candidate,box:item.box});
+                        }
+                    }finally{crop.width=0;crop.height=0;rotated.width=0;rotated.height=0;trimmed.width=0;trimmed.height=0;}
+                }
                 return {...page,results:page.results.map(item=>replacements.get(item)??item)};
             }
             finally {
