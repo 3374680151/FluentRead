@@ -1,10 +1,10 @@
 /**
  * @file src/features/selection-translation/core.ts
  * 文件职责：集中划词翻译的纯交互与内容算法，包括请求代次、词典回退、触发展示状态、选区过滤、上下文摘要、弹窗锚点和语音语言规范化。
- * 主要内容：定义 SelectionRequestTokenGate、Presentation 状态机、选区/视口类型，处理中英划词反向目标、同语种判断、文本清理、公式单份文本提取、正文中的行内代码片段保护、主动代码选区提取、按实际 Range 边界遍历的敏感区域排除及单遍祖先保护检查（不扫描未选中的共同祖先子树）、多矩形选择、按页面缩放补偿的弹窗定位及仅用于朗读的普通话语言别名。
+ * 主要内容：定义 SelectionRequestTokenGate、Presentation 状态机、选区/视口类型，处理中英划词反向目标、同语种判断、文本清理、公式单份文本提取、正文中的行内代码片段保护、主动代码选区提取、文档根禁译外壳放行、按实际 Range 边界遍历的敏感区域排除及单遍祖先保护检查（不扫描未选中的共同祖先子树）、多矩形选择、按页面缩放补偿的弹窗定位及仅用于朗读的普通话语言别名。
  * 模块边界：本模块不监听 document selection、不发消息、不渲染 Vue 或播放音频；组件负责连接 DOM，词典和 TTS 由 services/background 提供，函数保持确定性以供单元测试。DOM 安全判断直接复用 translation/dom 的同一实现，不初始化翻译候选或站点规则 registry。
  */
-import {getElementTagName, isTopLevelApplicationShell} from '@/src/core/translation/dom';
+import {getElementTagName, isDocumentSurfaceNoTranslateShell, isTopLevelApplicationShell} from '@/src/core/translation/dom';
 import {getChineseScript, normalizeChineseLanguageCode} from '@/src/core/language/chinese';
 import {isLanguageCodeMatch, normalizeDetectedLanguageCode} from '@/src/core/language/codes';
 import {isTextInLanguage, shouldSkipChineseSelection} from '@/src/core/language/detect';
@@ -292,14 +292,12 @@ const selectionExcludedRoles = new Set([
     'switch', 'tab', 'textbox',
 ]);
 
-const selectionExcludedSelector = [
+const selectionNonMarkerExcludedSelector = [
     '.fluent-read-bilingual-content',
     '.fluent-read-loading',
     '.fluent-read-retry-wrapper',
-    '.notranslate',
     '[aria-hidden="true"]',
     '[data-fluent-read-ui]',
-    '[data-notranslate="true"]',
     '[role="button"]',
     '[role="checkbox"]',
     '[role="combobox"]',
@@ -315,12 +313,12 @@ const selectionExcludedSelector = [
     '[role="switch"]',
     '[role="tab"]',
     '[role="textbox"]',
-    '[translate="no"]',
     '[contenteditable=""]',
     '[contenteditable="true"]',
     '[contenteditable="plaintext-only"]',
     ...Array.from(selectionExcludedTagNames),
 ].join(',');
+const selectionExcludedSelector = `${selectionNonMarkerExcludedSelector},.notranslate,[translate="no"],[data-notranslate="true"]`;
 const selectionExcludedDescendantSelector = `${selectionExcludedSelector},[role]`;
 export function isSelectionExcludedTagName(tagName: string): boolean {
     return selectionExcludedTagNames.has(tagName.trim().toLowerCase());
@@ -359,11 +357,16 @@ function isSelectionExcludedElement(element: Element | null): boolean {
         current = current.parentElement;
     }
 
-    const excluded = element.closest(selectionExcludedSelector);
-    if (!excluded) return false;
-    // A broad marker on a body-level SPA shell should not suppress a direct user
-    // selection, while the boundary element itself and nested protected regions remain excluded.
-    return excluded === element || !isTopLevelApplicationShell(excluded);
+    let excluded = element.closest(selectionExcludedSelector);
+    while (excluded) {
+        // DeepSeek 等页面在 html/body 上禁止浏览器整页翻译；显式划词仍可读取正文。
+        // 只放行禁译标记，同一外壳的 UI/隐藏/编辑保护及更外层保护必须继续检查。
+        const shell = isDocumentSurfaceNoTranslateShell(excluded) ||
+            excluded !== element && isTopLevelApplicationShell(excluded);
+        if (!shell || excluded.matches(selectionNonMarkerExcludedSelector)) return true;
+        excluded = excluded.parentElement?.closest(selectionExcludedSelector) ?? null;
+    }
+    return false;
 }
 
 function elementFromSelectionNode(node: Node | null): Element | null {
@@ -441,7 +444,8 @@ export function shouldIgnoreSelection(range: Range): boolean {
         for (const element of selectionExcludedDescendants(range)) {
             try {
                 if (!isIntrinsicallyExcludedSelectionElement(element) &&
-                    isTopLevelApplicationShell(element)) continue;
+                    (isDocumentSurfaceNoTranslateShell(element) || isTopLevelApplicationShell(element)) &&
+                    !element.matches(selectionNonMarkerExcludedSelector)) continue;
                 if (!isSelectionExcludedElement(element)) continue;
                 if (isInlineSelectionFormulaPart(element)) continue;
                 if (range.intersectsNode(element) && hasNonZeroClientRect(element)) return true;

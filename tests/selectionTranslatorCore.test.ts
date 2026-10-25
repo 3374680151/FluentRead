@@ -302,6 +302,65 @@ describe('issue #704 inline code in prose selections', () => {
     });
 });
 
+describe('document no-translate shells in explicit selections', () => {
+    function fixture(htmlAttributes = '', bodyAttributes = '', content = '<p id="content">Readable response text.</p>') {
+        const {document} = parseHTML(`<html ${htmlAttributes}><head></head><body ${bodyAttributes}><div id="root">${content}</div></body></html>`);
+        const text = document.querySelector('#content')!.firstChild!;
+        return {document, text, range: mockRange(text, text, {commonAncestor: text})};
+    }
+
+    it.each(['class="notranslate"', 'translate="no"', 'data-notranslate="true"'])('allows html/body shell marker %s', attributes => {
+        for (const surface of ['html', 'body']) {
+            const {document, range} = fixture(surface === 'html' ? attributes : '', surface === 'body' ? attributes : '');
+            const before = document.documentElement.outerHTML;
+            expect(shouldIgnoreSelection(range)).toBe(false);
+            expect(document.documentElement.outerHTML).toBe(before);
+        }
+    });
+
+    it('allows combined DeepSeek root markers, repeated checks and replacement response nodes', () => {
+        const {document, range} = fixture('class="notranslate" translate="no"', 'class="notranslate"');
+        const root = document.querySelector('#root')!;
+        root.classList.add('notranslate');
+        expect(shouldIgnoreSelection(range)).toBe(false);
+        expect(shouldIgnoreSelection(range)).toBe(false);
+        root.innerHTML = '<p id="content">A newly generated response.</p>';
+        const text = root.firstChild!.firstChild!;
+        expect(shouldIgnoreSelection(mockRange(text, text, {commonAncestor: text}))).toBe(false);
+    });
+
+    it.each(['class="notranslate"', 'translate="no"', 'data-notranslate="true"'])('keeps nested local marker %s protected', attributes => {
+        const {range} = fixture('class="notranslate" translate="no"', '', `<section ${attributes}><p id="content">Protected local response.</p></section>`);
+        expect(shouldIgnoreSelection(range)).toBe(true);
+    });
+
+    it.each(['role="button"', 'contenteditable="true"', 'aria-hidden="true"', 'data-fluent-read-ui="true"', 'class="fluent-read-loading"'])('keeps root protection %s alongside no-translate shells', attributes => {
+        for (const surface of ['html', 'body']) {
+            const {document, range} = fixture('translate="no"', 'translate="no"');
+            const target = surface === 'html' ? document.documentElement : document.body;
+            const attribute = parseHTML(`<html><body><div ${attributes}></div></body></html>`).document.querySelector('div')!.attributes[0]!;
+            target.setAttribute(attribute.name, attribute.value);
+            // 直接子级应用外壳不能掩盖根级保护。
+            document.querySelector('#root')!.classList.add('notranslate');
+            expect(shouldIgnoreSelection(range)).toBe(true);
+        }
+    });
+
+    it('allows body range boundaries while still rejecting a visible local protected descendant', () => {
+        const {document} = fixture('class="notranslate" translate="no"', 'translate="no"');
+        const range = mockRange(document.body, document.body, {commonAncestor: document.body});
+        expect(shouldIgnoreSelection(range)).toBe(false);
+        const local = document.createElement('span');
+        local.className = 'notranslate';
+        local.textContent = 'Protected local source.';
+        local.getClientRects = () => [{width: 100, height: 20}] as unknown as DOMRectList;
+        document.querySelector('#root')!.append(local);
+        expect(shouldIgnoreSelection(mockRange(document.body, document.body, {
+            commonAncestor: document.body, intersectingNodes: [local],
+        }))).toBe(true);
+    });
+});
+
 describe('selection range traversal scope and cost', () => {
     function rangeIn(_document: Document, start: Node, startOffset: number, end: Node, endOffset: number, root?: Node): Range {
         let common: Node | null = start;

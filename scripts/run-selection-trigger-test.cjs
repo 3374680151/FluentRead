@@ -2,6 +2,7 @@
 
 // 使用临时 Edge profile 验证划词翻译的触发矩阵；--context-menu-only 只运行右键入口专项，
 // --lifecycle-only 仅检查宿主节点恢复、启停、路由、失败重试与键盘/窄屏界面。
+// --document-shell-only 只验证 DeepSeek 类文档根禁译外壳下的划词入口与局部保护。
 // --click-selection-only 只验证按需两点选取；通过 --runtime-diagnostics 传入 CDP 诊断收集器。
 // --click-selection-stress-only 只诊断滚动后立即确认终点的重复手势与事件时序。
 // Popup 快捷抽屉提供独立启用开关与双语/仅译文选择；触发方式、显示延迟和自定义快捷键在完整设置页修改，
@@ -41,6 +42,7 @@ function parseArgs(argv) {
     chineseOnly: argv.includes('--chinese-only'),
     contextMenuOnly: argv.includes('--context-menu-only'),
     lifecycleOnly: argv.includes('--lifecycle-only'),
+    documentShellOnly: argv.includes('--document-shell-only'),
     directionOnly: argv.includes('--direction-only'),
     geometryOnly: argv.includes('--geometry-only'),
     zoomOnly: argv.includes('--zoom-only'),
@@ -50,8 +52,8 @@ function parseArgs(argv) {
     clickSelectionStressOnly: argv.includes('--click-selection-stress-only'),
     runtimeDiagnostics: readArg(argv, 'runtime-diagnostics', ''),
   };
-  if (args.clickSelectionOnly && (!args.runtimeDiagnostics || !fs.existsSync(args.runtimeDiagnostics))) {
-    throw new Error('两点选取专项需要 --runtime-diagnostics <runtime-diagnostics.cjs> 以采集扩展隔离世界及后台诊断');
+  if ((args.clickSelectionOnly || args.documentShellOnly) && (!args.runtimeDiagnostics || !fs.existsSync(args.runtimeDiagnostics))) {
+    throw new Error('划词专项需要 --runtime-diagnostics <runtime-diagnostics.cjs> 以采集扩展隔离世界及后台诊断');
   }
   if (!args.playwrightRoot) throw new Error('必须传入 --playwright-root，或设置 PLAYWRIGHT_ROOT');
   args.extensionDir = path.resolve(args.extensionDir);
@@ -1836,6 +1838,150 @@ async function runClickSelectionCases({page, popup, context, extensionId, result
   process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
 }
 
+
+function documentShellFixture() {
+  // 只保留问题需要的根标记与响应结构，不含用户提供的会话内容、资源或页面脚本。
+  return `<!doctype html><html lang="zh-CN" class="notranslate" translate="no"><head><meta charset="utf-8">
+    <title>DeepSeek document shell regression fixture</title></head><body>
+    <div id="root"><main id="selection-test-fixture" style="padding:48px;font:22px/1.5 Arial,sans-serif">
+      <div class="ds-markdown ds-assistant-message-main-content">
+        <p id="target">This readable answer needs a selection translation.</p>
+        <p id="neighbor">This neighboring answer must remain untouched.</p>
+        <p class="notranslate" id="protected-class">Protected local answer text.</p>
+        <p translate="no" id="protected-translate">Protected local translation marker.</p>
+        <p data-notranslate="true" id="protected-data">Protected local data marker.</p>
+        <p contenteditable="true" id="editor">Editable draft content remains private.</p>
+        <p role="button" id="control">Interactive action remains unchanged.</p>
+      </div>
+    </main></div></body></html>`;
+}
+
+async function runDocumentShellCases({page, popup, result, args, runtimeDiagnostics, requestCount}) {
+  const saved = await readStoredConfig(popup);
+  await patchStoredConfig(popup, {
+    on: true, disableSelectionTranslator: false, selectionTranslatorMode: 'bilingual',
+    selectionTranslatorTrigger: 'icon', selectionTranslatorDelay: 0, selectionTranslatorAutoDismiss: false,
+    to: 'zh-Hans', from: 'auto', service: 'microsoft', useCache: false,
+    hotkey: 'none', floatingBallHotkey: 'none', theme: 'light',
+    harness: {...saved.harness, enabled: false},
+  });
+  await page.waitForTimeout(500);
+  const hostMarkup = () => page.locator('#root').evaluate(element => element.outerHTML);
+  const initialMarkup = await hostMarkup();
+  fs.writeFileSync(path.join(args.artifactsDir, 'document-shell-initial.html'), initialMarkup);
+  const markerState = () => page.evaluate(() => [document.documentElement, document.body].map(element => ({
+    class: element.getAttribute('class'), translate: element.getAttribute('translate'), data: element.getAttribute('data-notranslate'),
+  })));
+  const selectNative = async () => {
+    await closeSelectionUi(page);
+    await page.evaluate(() => window.getSelection()?.removeAllRanges());
+    const selection = await tripleClickTarget(page);
+    assert(selection.mouseDown?.isTrusted && selection.text.includes('readable answer'),
+      `文档外壳测试没有建立可信原生选区：${JSON.stringify(selection)}`);
+    return selection;
+  };
+  const translateNative = async (id, trigger) => {
+    runtimeDiagnostics.setPhase(id);
+    await patchStoredConfig(popup, {selectionTranslatorTrigger: trigger});
+    await page.waitForTimeout(300);
+    const before = await hostMarkup();
+    const markers = await markerState();
+    const selection = await selectNative();
+    if (trigger === 'icon') {
+      await waitForSelectionUi(page, {indicator: true, tooltip: false}, `${id} 图标出现`);
+      await clickSelectionIndicator(page);
+    } else if (trigger === 'Control') {
+      const beforeKey = await readSelectionUi(page);
+      assert(!beforeKey.indicator && !beforeKey.tooltip, `${id} 在快捷键按下前已经出现划词 UI`);
+      await page.keyboard.down('Control'); await page.keyboard.up('Control');
+    }
+    await waitForSelectionUi(page, {tooltip: true, translation: true, resultPrefix: '测试译文：'}, `${id} 译文出现`);
+    const ui = await readSelectionUi(page);
+    assert(ui.resultText.includes(selection.text), `${id} 翻译请求没有保留选区正文`);
+    assert(await hostMarkup() === before && JSON.stringify(await markerState()) === JSON.stringify(markers), `${id} 改写了宿主 DOM 或禁译标记`);
+    const ownership = await page.evaluate(() => {
+      const hosts = document.querySelectorAll('#fluent-read-selection-translator-container');
+      return {count: hosts.length, closed: hosts[0]?.shadowRoot === null};
+    });
+    assert(ownership.count === 1 && ownership.closed, `${id} 划词 Shadow UI 所有权错误`);
+    result.cases.push({id, status: 'passed', selection, markers, ownership, ui});
+    return ui;
+  };
+
+  for (const surface of ['html', 'body', 'both']) {
+    runtimeDiagnostics.setPhase(`markers.${surface}`);
+    await closeSelectionUi(page);
+    await page.evaluate(surface => {
+      for (const element of [document.documentElement, document.body]) {
+        element.classList.remove('notranslate'); element.removeAttribute('translate'); element.removeAttribute('data-notranslate');
+      }
+      for (const element of surface === 'html' ? [document.documentElement] : surface === 'body' ? [document.body]
+        : [document.documentElement, document.body]) {
+        element.classList.add('notranslate'); element.setAttribute('translate', 'no');
+      }
+    }, surface);
+    for (const trigger of ['icon', 'direct', 'Control']) await translateNative(`${surface}.${trigger}`, trigger);
+  }
+  const screenshot = path.join(args.artifactsDir, 'deepseek-document-shell-selection.png');
+  await assertBackgroundFocus('document shell screenshot');
+  // Playwright 默认隐藏 caret 会给 contenteditable 留下空 style 属性；保持光标以免截图改变宿主。
+  await page.screenshot({path: screenshot, caret: 'initial'}); result.screenshots.push(screenshot);
+
+  // 负向用例使用精确 Range，避免控件自身不允许原生拖选令测试虚假通过。
+  await patchStoredConfig(popup, {selectionTranslatorTrigger: 'icon'});
+  await page.waitForTimeout(300);
+  for (const selector of ['#protected-class', '#protected-translate', '#protected-data', '#editor', '#control']) {
+    runtimeDiagnostics.setPhase(`protected.${selector.slice(1)}`);
+    await closeSelectionUi(page);
+    await page.mouse.click(10, 10);
+    const beforeRequests = requestCount();
+    const selection = await selectTextWithDomRange(page, selector);
+    await page.waitForTimeout(500);
+    const ui = await readSelectionUi(page);
+    assert(selection.text && !ui.indicator && !ui.tooltip && requestCount() === beforeRequests,
+      `${selector} 被文档根例外错误放行：${JSON.stringify({selection, ui})}`);
+    result.cases.push({id: `protected.${selector.slice(1)}`, status: 'passed', selection, requests: requestCount() - beforeRequests});
+  }
+  runtimeDiagnostics.setPhase('protected.document-role');
+  await closeSelectionUi(page);
+  await page.evaluate(() => document.documentElement.setAttribute('role', 'textbox'));
+  const beforeRoleRequests = requestCount();
+  await selectNative();
+  await page.waitForTimeout(500);
+  const roleUi = await readSelectionUi(page);
+  assert(!roleUi.indicator && !roleUi.tooltip && requestCount() === beforeRoleRequests, '根标记例外错误绕过根节点 textbox 角色');
+  result.cases.push({id: 'protected.document-role', status: 'passed', requests: requestCount() - beforeRoleRequests});
+  await page.evaluate(() => document.documentElement.removeAttribute('role'));
+  await translateNative('dismiss-reselect-after-protection', 'icon');
+  const finalMarkup = await hostMarkup();
+  fs.writeFileSync(path.join(args.artifactsDir, 'document-shell-final.html'), finalMarkup);
+  assert(finalMarkup === initialMarkup, '划词或保护区测试改写了 DeepSeek 正文结构；参见 document-shell-initial/final.html 差异');
+
+  runtimeDiagnostics.setPhase('dynamic-response-replacement');
+  await closeSelectionUi(page);
+  await page.locator('#target').evaluate(element => {
+    const replacement = element.cloneNode(true);
+    replacement.textContent = 'This new readable answer supports another selection translation.';
+    element.replaceWith(replacement);
+  });
+  await translateNative('dynamic-response-replacement', 'icon');
+  runtimeDiagnostics.setPhase('page-reload');
+  await page.reload({waitUntil: 'domcontentloaded'}); await waitForContentScript(page);
+  await translateNative('page-reload', 'icon');
+  runtimeDiagnostics.setPhase('page-unload');
+  await page.goto('about:blank', {waitUntil: 'load'});
+  await page.waitForTimeout(300);
+  result.cases.push({id: 'page-unload', status: 'passed'});
+  await assertBackgroundFocus('document shell final');
+  await runtimeDiagnostics.flush(); runtimeDiagnostics.assertClean();
+  result.runtimeDiagnostics = runtimeDiagnostics.snapshot();
+  result.providerEvidence = 'Production extension in temporary isolated Edge, native trusted triple-click selections and closed Shadow UI; sanitized DeepSeek-shaped DOM at chat.deepseek.com with local Microsoft HTTP translation responses. Protected-region probes use explicit DOM Ranges. This does not establish live DeepSeek login/streaming behavior, online-provider quality, Firefox or Safari runtime acceptance.';
+  result.ok = result.cases.every(item => item.status === 'passed') && result.consoleErrors.length === 0;
+  assert(result.ok, `文档根划词专项诊断未通过：${JSON.stringify(result.consoleErrors)}`);
+  fs.writeFileSync(path.join(args.artifactsDir, 'report.json'), `${JSON.stringify(result, null, 2)}\n`);
+  process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+}
+
 async function main() {
   const args = parseArgs(process.argv.slice(2));
   fs.mkdirSync(args.artifactsDir, { recursive: true });
@@ -1852,7 +1998,7 @@ async function main() {
     extensionDir: args.extensionDir,
     artifactsDir: args.artifactsDir,
     browser: 'Microsoft Edge',
-    testScope: args.clickSelectionStressOnly ? 'click-selection-scroll-race-only' : args.clickSelectionOnly ? 'click-selection-only' : args.lifecycleOnly ? 'selection-host-lifecycle-only'
+    testScope: args.documentShellOnly ? 'document-shell-only' : args.clickSelectionStressOnly ? 'click-selection-scroll-race-only' : args.clickSelectionOnly ? 'click-selection-only' : args.lifecycleOnly ? 'selection-host-lifecycle-only'
       : args.contextMenuOnly ? 'context-menu-only' : 'selection-trigger-filter-or-matrix',
     profileMode: 'temporary-isolated',
     windowMode: args.headed ? 'headed-dedicated-profile' : 'background-visible-no-focus',
@@ -1942,7 +2088,7 @@ async function main() {
       context = browserSession.context;
       createIsolatedPage = () => focusSafe.newPageWithoutForeground(context);
       activateInputPage = page => focusSafe.activateExtensionTabWithoutForeground(context, page);
-      if (args.contextMenuOnly || args.lifecycleOnly || args.clickSelectionOnly) {
+      if (args.contextMenuOnly || args.lifecycleOnly || args.clickSelectionOnly || args.documentShellOnly) {
         const browserPid = await getGuardedBrowserPid(browserSession);
         result.ownedBrowserPid = browserPid;
         assertBackgroundFocus = async label => {
@@ -1969,7 +2115,7 @@ async function main() {
       result.focusPolicy = 'foreground-authorized';
       result.windowPlacement = { mode: 'headed-explicit-foreground', windowState: 'normal', viewport: { width: 1280, height: 900 } };
     }
-    if (args.clickSelectionOnly) {
+    if (args.clickSelectionOnly || args.documentShellOnly) {
       runtimeDiagnostics = require(path.resolve(args.runtimeDiagnostics)).createRuntimeDiagnostics();
       await runtimeDiagnostics.start(context);
     }
@@ -1977,7 +2123,7 @@ async function main() {
     runtimeDiagnostics?.setExtensionId(extensionId);
     const attachWorkerDiagnostics = (target) => {
       target.on('console', (message) => {
-        if (!args.clickSelectionOnly || ['error', 'warning', 'warn'].includes(message.type())) {
+        if (!(args.clickSelectionOnly || args.documentShellOnly) || ['error', 'warning', 'warn'].includes(message.type())) {
           recordConsoleIssue(`worker ${message.type()}: ${message.text()}`);
         }
       });
@@ -2005,11 +2151,12 @@ async function main() {
     });
     result.extensionId = extensionId;
 
-    await context.route('https://example.com/**', async (route) => {
+    await context.route(args.documentShellOnly ? 'https://chat.deepseek.com/**' : 'https://example.com/**', async (route) => {
       await route.fulfill({
         status: 200,
         contentType: 'text/html',
-        body: '<!doctype html><html lang="en"><head><meta charset="utf-8"><title>FluentRead selection fixture</title></head><body><main></main></body></html>',
+        body: args.documentShellOnly ? documentShellFixture()
+          : '<!doctype html><html lang="en"><head><meta charset="utf-8"><title>FluentRead selection fixture</title></head><body><main></main></body></html>',
       });
     });
     const popup = await createIsolatedPage(context);
@@ -2031,8 +2178,13 @@ async function main() {
     const page = await createIsolatedPage(context);
     page.on('pageerror', (error) => result.consoleErrors.push(`pageerror: ${error.message}`));
     page.on('console', (message) => { if (message.type() === 'error') recordConsoleIssue(`console: ${message.text()}`); });
-    await page.goto('https://example.com/', { waitUntil: 'domcontentloaded', timeout: 60000 });
+    await page.goto(args.documentShellOnly ? 'https://chat.deepseek.com/' : 'https://example.com/', { waitUntil: 'domcontentloaded', timeout: 60000 });
     await waitForContentScript(page);
+
+    if (args.documentShellOnly) {
+      await runDocumentShellCases({page, popup, result, args, runtimeDiagnostics, requestCount: () => translationRequestCount});
+      return;
+    }
 
     if (args.clickSelectionOnly) {
       await runClickSelectionCases({page, popup, context, extensionId, result, args, runtimeDiagnostics});
@@ -3821,11 +3973,11 @@ async function main() {
     primaryError = error;
     result.ok = false;
     result.error = error.stack || error.message || String(error);
-    if (args.clickSelectionOnly && context) {
+    if ((args.clickSelectionOnly || args.documentShellOnly) && context) {
       for (const [index, failedPage] of context.pages().entries()) {
         try {
-          const screenshot = path.join(args.artifactsDir, `click-selection-failure-${index}.png`);
-          await failedPage.screenshot({path: screenshot, timeout: 5000});
+          const screenshot = path.join(args.artifactsDir, `${args.documentShellOnly ? 'document-shell' : 'click-selection'}-failure-${index}.png`);
+          await failedPage.screenshot({path: screenshot, timeout: 5000, ...(args.documentShellOnly ? {caret: 'initial'} : {})});
           result.screenshots.push(screenshot);
         } catch (captureError) {
           (result.captureGaps ||= []).push({surface: `page-${index}`, error: String(captureError.message || captureError)});
