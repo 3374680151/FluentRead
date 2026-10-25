@@ -376,7 +376,7 @@
   {
     "id": "amazon-shopping",
     "url": "https://www.amazon.com/dp/EXAMPLE123",
-    "html": "<nav id=\"navigation\"><a href=\"/settings\">Navigation remains unchanged</a></nav><div id=\"productDescription\"><p id=\"body1\">This readable paragraph describes the behavior and provides enough context for translation. <code id=\"protected\">KEEP_ORIGINAL_TOKEN</code></p></div><div data-hook=\"review-body\" id=\"body2\">A second independent paragraph explains the example and should remain stable during repeated translation.</div><div class=\"a-price\" id=\"price\">99.00 USD</div>",
+    "html": "<nav id=\"navigation\"><a href=\"/settings\">Navigation remains unchanged</a></nav><div id=\"productDescription\"><p id=\"body1\">This readable paragraph describes the behavior and provides enough context for translation. <code id=\"protected\">KEEP_ORIGINAL_TOKEN</code></p></div><div data-hook=\"review-body\" id=\"body2\">A second independent paragraph explains the example and should remain stable during repeated translation.</div><span id=\"acrPopover\" title=\"4.7 out of 5 stars\"><span class=\"a-declarative\" data-action=\"a-popover\"><a id=\"rating-trigger\" href=\"javascript:void(0)\" role=\"button\"><span aria-hidden=\"true\">4.7</span><i class=\"a-icon a-icon-star-mini\"><span class=\"a-icon-alt\" id=\"rating-label\">4.7 out of 5 stars</span></i></a></span></span><div class=\"a-price\" id=\"price\">99.00 USD</div>",
     "required": [
       "#body1",
       "#body2"
@@ -384,13 +384,14 @@
     "forbidden": [
       "#navigation",
       "#protected",
-      "#price"
+      "#price",
+      "#acrPopover"
     ]
   },
   {
     "id": "steam-store",
     "url": "https://store.steampowered.com/app/12345/example/",
-    "html": "<nav id=\"navigation\"><a href=\"/settings\">Navigation remains unchanged</a></nav><div id=\"game_area_description\"><p id=\"body1\">This readable paragraph describes the behavior and provides enough context for translation. <code id=\"protected\">KEEP_ORIGINAL_TOKEN</code></p><p id=\"body2\">A second independent paragraph explains the example and should remain stable during repeated translation.</p></div><div class=\"game_purchase_price\" id=\"price\">99.00 USD</div>",
+    "html": "<nav id=\"navigation\"><a href=\"/settings\">Navigation remains unchanged</a></nav><div id=\"game_area_description\"><p id=\"body1\">This readable paragraph describes the behavior and provides enough context for translation. <code id=\"protected\">KEEP_ORIGINAL_TOKEN</code></p><p id=\"body2\">A second independent paragraph explains the example and should remain stable during repeated translation.</p></div><div class=\"game_purchase_price\" id=\"price\">99.00 USD</div><a id=\"freeGameBtn\" href=\"javascript:fixtureOnly()\" role=\"button\">Play Game</a><section id=\"app_reviews_hash\"><a data-miniprofile=\"12345\" id=\"review-author\" href=\"https://steamcommunity.com/profiles/fixture\">A Fixture Reviewer Name</a><div data-hook=\"review-body\" id=\"review-body\">This review explains why the game works well with a group of friends.</div></section>",
     "required": [
       "#body1",
       "#body2"
@@ -398,7 +399,9 @@
     "forbidden": [
       "#navigation",
       "#protected",
-      "#price"
+      "#price",
+      "#freeGameBtn",
+      "#review-author"
     ]
   },
   {
@@ -985,10 +988,11 @@
   {
     "id": "google-news-home-headlines",
     "url": "https://news.google.com/home?hl=en-US&gl=US&ceid=US:en",
-    "html": "<style>.mock-story{position:relative;margin:16px 0;padding:12px;border:1px solid #ccc}.mock-stretch,.mock-overlay{position:absolute;inset:0;z-index:1}</style><header><nav id=\"navigation\"><a href=\"./home\">Home</a><a href=\"./read/navigation\" id=\"nav-read\">Navigation read-link lookalike</a></nav><form role=\"search\"><input id=\"query\" value=\"Fixture news\"><button>Search</button></form></header><main><h2 id=\"section-title\">Section heading is outside headline scope</h2><section id=\"stories\"><div class=\"mock-story\"><div class=\"mock-stretch\"><a aria-hidden=\"true\" class=\"mock-overlay\" id=\"overlay1\" href=\"./read/mock-one\" style=\"position:absolute;inset:0\"></a></div><div id=\"source1\">Publisher Identity Alpha</div><a id=\"body1\" class=\"mock-new-title-class\" href=\"./read/mock-one\" aria-label=\"Headline with Publisher Identity Alpha and time metadata\">Researchers explain a reliable browser behavior</a><time id=\"date1\">2 hours ago</time><button id=\"menu1\">More actions</button></div><div class=\"mock-story\"><div class=\"mock-stretch\"><a aria-hidden=\"true\" class=\"mock-overlay\" id=\"overlay2\" href=\"./read/mock-two\" style=\"position:absolute;inset:0\"></a></div><div id=\"source2\">Publisher Identity Beta</div><a id=\"body2\" class=\"mock-other-title-class\" href=\"./read/mock-two\">A second independent headline provides useful context</a><time id=\"date2\">1 hour ago</time><button id=\"menu2\">More actions</button></div><div id=\"non-story\"><a href=\"./topics/mock\">Topic navigation stays unchanged</a></div></section><aside id=\"sidebar\"><a href=\"./read/aside\" id=\"sidebar-read\">Sidebar read-link lookalike remains unchanged</a></aside></main><footer id=\"footer\"><a href=\"./read/footer\" id=\"footer-read\">Footer read-link lookalike remains unchanged</a></footer><pre id=\"fixture-code\"><code id=\"protected\">KEEP_ORIGINAL_TOKEN</code></pre>",
+    "html": "<style>.mock-story{position:relative;margin:16px 0;padding:12px;border:1px solid #ccc}.mock-stretch,.mock-overlay{position:absolute;inset:0;z-index:1}</style><header><nav id=\"navigation\"><a href=\"./home\">Home</a><a href=\"./read/navigation\" id=\"nav-read\">Navigation read-link lookalike</a></nav><form role=\"search\"><input id=\"query\" value=\"Fixture news\"><button>Search</button></form></header><main><h1 id=\"page-heading\">A useful daily news briefing</h1><h2 id=\"section-title\">Section heading is outside headline scope</h2><section id=\"stories\"><div class=\"mock-story\"><div class=\"mock-stretch\"><a aria-hidden=\"true\" class=\"mock-overlay\" id=\"overlay1\" href=\"./read/mock-one\" style=\"position:absolute;inset:0\"></a></div><div id=\"source1\">Publisher Identity Alpha</div><a id=\"body1\" class=\"mock-new-title-class\" href=\"./read/mock-one\" aria-label=\"Headline with Publisher Identity Alpha and time metadata\">Researchers explain a reliable browser behavior</a><time id=\"date1\">2 hours ago</time><button id=\"menu1\">More actions</button></div><div class=\"mock-story\"><div class=\"mock-stretch\"><a aria-hidden=\"true\" class=\"mock-overlay\" id=\"overlay2\" href=\"./read/mock-two\" style=\"position:absolute;inset:0\"></a></div><div id=\"source2\">Publisher Identity Beta</div><a id=\"body2\" class=\"mock-other-title-class\" href=\"./read/mock-two\">A second independent headline provides useful context</a><time id=\"date2\">1 hour ago</time><button id=\"menu2\">More actions</button></div><div id=\"non-story\"><a href=\"./topics/mock\">Topic navigation stays unchanged</a></div></section><aside id=\"sidebar\"><a href=\"./read/aside\" id=\"sidebar-read\">Sidebar read-link lookalike remains unchanged</a></aside></main><footer id=\"footer\"><a href=\"./read/footer\" id=\"footer-read\">Footer read-link lookalike remains unchanged</a></footer><pre id=\"fixture-code\"><code id=\"protected\">KEEP_ORIGINAL_TOKEN</code></pre>",
     "required": [
       "#body1",
-      "#body2"
+      "#body2",
+      "#page-heading"
     ],
     "forbidden": [
       "#navigation",
@@ -1015,12 +1019,14 @@
       "#section-title",
       "#sidebar",
       "#footer",
-      "#fixture-code"
+      "#fixture-code",
+      "#page-heading"
     ],
     "sourceAssertions": {
       "required": [
         "Researchers explain a reliable browser behavior",
-        "A second independent headline provides useful context"
+        "A second independent headline provides useful context",
+        "A useful daily news briefing"
       ],
       "forbidden": [
         "Publisher Identity Alpha",
@@ -1498,6 +1504,46 @@
         },
         "name": "reviews"
       }
+    ]
+  },
+  {
+    "id": "cnn-news",
+    "url": "https://www.cnn.com/2026/10/25/science/original-authored-fixture",
+    "kind": "independently authored structural fixture; never fetched as a real URL",
+    "html": "<header><h1 id=\"maincontent\">A new telescope maps a quiet stellar nursery.</h1>\n<div class=\"byline\"><span class=\"byline__name\" id=\"author\">Author Alpha</span></div>\n<span class=\"timestamp__time-since\" id=\"relative-date\">Oct 25, 2026</span><time id=\"full-date\" datetime=\"2026-10-25T05:00:00Z\">Oct 25, 2026, 1:00 AM ET</time></header>\n<article><p id=\"body-one\" class=\"paragraph-elevate\">Researchers compared the new images with <a href=\"/science/original-reference\">an earlier observation</a> to locate the cloud boundary. <code id=\"protected\">KEEP_ORIGINAL_TOKEN</code></p>\n<h2 class=\"subheader\" id=\"body-heading\">A clearer view of the nearby stars</h2>\n<div class=\"image_large-elevate__metadata\" id=\"main-caption-owner\"><div itemprop=\"caption\" class=\"image_large-elevate__caption\" id=\"main-caption\"><span>The blue cloud surrounds a small group of bright stars.</span></div><figcaption class=\"image_large-elevate__credit\" id=\"main-credit\">Nova Image Archive</figcaption></div>\n<div class=\"image-elevate__metadata\" id=\"related-caption-owner\"><div itemprop=\"caption\" class=\"image-elevate__caption\" id=\"related-caption\"><span>A related image shows a wider field around the same cloud.</span></div><figcaption class=\"image-elevate__credit\" id=\"related-credit\">Survey Team Collection</figcaption></div>\n<p id=\"body-two\" class=\"paragraph-elevate\">The team will compare more observations next year. <span id=\"ordinary-prose\">The observer notes explain the remaining uncertainty.</span></p></article>",
+    "required": [
+      "#body-one",
+      "#body-heading",
+      "#body-two"
+    ],
+    "forbidden": [
+      "#author",
+      "#relative-date",
+      "#full-date",
+      "#main-credit",
+      "#related-credit",
+      "#protected"
+    ],
+    "sourceAssertions": {
+      "required": [
+        "Researchers compared",
+        "The blue cloud surrounds",
+        "A related image shows",
+        "The observer notes explain"
+      ],
+      "forbidden": [
+        "Author Alpha",
+        "Oct 25, 2026",
+        "Nova Image Archive",
+        "Survey Team Collection"
+      ]
+    },
+    "literalSkeleton": [
+      "#author",
+      "#relative-date",
+      "#full-date",
+      "#main-credit",
+      "#related-credit"
     ]
   }
 ]

@@ -677,8 +677,8 @@
     {
       "id": "cnn-news",
       "category": "news",
-      "verification": "semantic-fixture",
-      "fixture": "article",
+      "verification": "site-fixture",
+      "fixture": "cnn-news",
       "liveVerification": "not-performed"
     },
     {
@@ -1317,6 +1317,13 @@
       "category": "documentation",
       "verification": "site-fixture",
       "fixture": "firefox-addons",
+      "liveVerification": "not-performed"
+    },
+    {
+      "id": "bluesky-profile-metadata",
+      "category": "community",
+      "verification": "site-fixture",
+      "fixture": "bluesky-profile-metadata",
       "liveVerification": "not-performed"
     }
   ],

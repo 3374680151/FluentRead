@@ -6,6 +6,9 @@ import rawRules from '@/src/core/site-adaptation/catalog/websites.json';
 import coverage from '@/src/core/site-adaptation/catalog/coverage.json';
 import fixtures from '@/scripts/site-translation/site-adaptation-fixtures.json';
 import liveCases from '@/scripts/site-translation/site-adaptation-live-cases.json';
+import blueskyMetadataFixture from './fixtures/translation-pages/bluesky-profile-metadata.json';
+import blueskyQuoteFixture from './fixtures/translation-pages/bluesky-quote-metadata.json';
+import steamReviewFixture from './fixtures/translation-pages/steam-review-content.json';
 import {compileSiteRulePack, resolveSiteRule} from '@/src/core/site-adaptation/compiler';
 import {parseSiteRulePack, validateSelectors} from '@/src/core/site-adaptation/schema';
 import {TranslationCandidateCore} from '@/src/core/translation/engine';
@@ -24,6 +27,237 @@ function documentFor(html: string): Document {
 }
 
 describe('网站正文规则目录', () => {
+    it('Steam 按钮卡片中的长短评论在发现与悬浮时都由独立正文拥有，元数据和相似结构不获得正文权限', () => {
+        const fixture = steamReviewFixture;
+        const url = new URL(fixture.url);
+        const document = documentFor(fixture.html);
+        const core = new TranslationCandidateCore({url, adapters});
+        const reviewRule = rulesById.get('steam-store')!.content!.find(content =>
+            content.css.some(selector => selector.includes('/recommended/')))!;
+        expect(reviewRule).toMatchObject({resolve: 'self', atomic: true});
+        const oldPack = structuredClone(pack);
+        oldPack.rules.find(rule => rule.id === 'steam-store')!.content =
+            oldPack.rules.find(rule => rule.id === 'steam-store')!.content!
+                .filter(content => !content.css.some(selector => selector.includes('/recommended/')));
+        const oldCore = new TranslationCandidateCore({url, adapters: compileSiteRulePack(oldPack)});
+        const verify = () => {
+            const candidates = core.discover(document);
+            for (const selector of fixture.required) {
+                const owner = document.querySelector(selector)!;
+                expect(oldCore.discover(document).find(candidate => candidate.element === owner)?.kind, `baseline ${selector}`).toBe('control');
+                expect(candidates.filter(candidate => candidate.element === owner), selector).toHaveLength(1);
+                expect(candidates.find(candidate => candidate.element === owner)).toMatchObject({kind: 'content', adapterId: 'steam-store'});
+                expect(candidates.some(candidate => candidate.element !== owner && owner.contains(candidate.element)), `atomic ${selector}`).toBe(false);
+                expect(core.resolve(owner.firstChild)).toMatchObject({element: owner, kind: 'content', adapterId: 'steam-store'});
+            }
+            expect(core.resolve(document.querySelector('#dirty')!.firstChild)).toMatchObject({
+                element: document.querySelector('#long-body'), kind: 'content', adapterId: 'steam-store',
+            });
+            expect(core.resolve(document.querySelector('#reading-link')!.firstChild)).toMatchObject({
+                element: document.querySelector('#long-body'), kind: 'content', adapterId: 'steam-store',
+            });
+            for (const selector of fixture.controls) {
+                const control = document.querySelector(selector)!;
+                expect(core.shouldStayOriginal(control), selector).toBe(true);
+                expect(core.resolve(control.firstChild), selector).toBeNull();
+                expect(candidates.some(candidate => candidate.element === control || control.contains(candidate.element)), selector).toBe(false);
+            }
+            for (const selector of fixture.negative) {
+                const owner = document.querySelector(selector)!;
+                const baseline = oldCore.resolve(owner.firstChild)!;
+                expect(baseline, selector).not.toBeNull();
+                expect(core.resolve(owner.firstChild), selector).toMatchObject({
+                    element: baseline.element, kind: baseline.kind, reason: baseline.reason,
+                });
+                expect(core.resolve(owner.firstChild)?.adapterId, selector).toBeUndefined();
+                expect(candidates.some(candidate => candidate.element === owner && candidate.adapterId === 'steam-store'), selector).toBe(false);
+            }
+            for (const selector of fixture.guarded) {
+                const guarded = document.querySelector(selector)!;
+                expect(core.shouldStayOriginal(guarded), selector).toBe(true);
+                expect(candidates.some(candidate => candidate.element === guarded || guarded.contains(candidate.element)), selector).toBe(false);
+            }
+        };
+        verify();
+        document.body.innerHTML = fixture.html;
+        verify();
+        for (const otherUrl of ['https://example.test/app/570/', 'https://steamcommunity.com/app/570/',
+            'https://store.steampowered.com/account/settings']) {
+            const otherCore = new TranslationCandidateCore({url: new URL(otherUrl), adapters});
+            const owner = document.querySelector('#long-body')!;
+            expect(otherCore.discover(document).find(candidate => candidate.element === owner)).toMatchObject({kind: 'control'});
+            expect(otherCore.resolve(owner.firstChild)?.adapterId, otherUrl).toBeUndefined();
+        }
+    });
+
+    it('Steam 评论正文快照保留完整换行与内联文本，动态重挂仍有同一正文边界且不修改源 DOM', () => {
+        const fixture = steamReviewFixture;
+        const url = new URL(fixture.url);
+        const document = documentFor(fixture.html);
+        const core = new TranslationCandidateCore({url, adapters});
+        const adapter = adapterById.get('steam-store')!;
+        const original = document.body.innerHTML;
+        const owner = document.querySelector('#long-body')!;
+        const snapshot = createTranslationSourceSnapshot(owner, core.shouldStayOriginal);
+        const source = snapshot.slots.map(slot => slot.source).join('\n');
+        for (const text of ['This long review explains', 'how careful teamwork helps', 'Another line keeps',
+            'an ordinary reading reference', 'The final line adds']) expect(source).toContain(text);
+        expect(source).not.toContain('ORIGINAL_CODE_TOKEN');
+        const translated = applyTranslationsToSnapshot(snapshot, snapshot.slots.map(() => '测试评论译文'));
+        expect(translated).toContain('测试评论译文');
+        expect(translated).toContain('ORIGINAL_CODE_TOKEN');
+        expect(translated.match(/<br\b/gu)).toHaveLength(3);
+        expect(translated).toContain('href="https://example.test/guide"');
+        const cardSnapshot = createTranslationSourceSnapshot(document.querySelector('#long-card')!, core.shouldStayOriginal);
+        expect(cardSnapshot.slots.map(slot => slot.source).join('\n')).not.toContain('Example Player With A Long Display Name');
+        expect(applyTranslationsToSnapshot(cardSnapshot, cardSnapshot.slots.map(() => '测试卡片译文')))
+            .toContain('Example Player With A Long Display Name');
+        expect(document.body.innerHTML).toBe(original);
+        expect(adapter.shouldIgnoreMutation?.(owner, {url})).toBe(false);
+        document.querySelector(fixture.dynamic.selector)!.textContent = fixture.dynamic.to;
+        expect(core.resolve(document.querySelector(fixture.dynamic.selector)!.firstChild)).toMatchObject({element: owner, kind: 'content'});
+        expect(extractTranslationText(owner, core.shouldStayOriginal)).toContain(fixture.dynamic.to);
+        document.querySelector('#long-card')!.remove();
+        document.querySelector('#app_reviews_hash')!.insertAdjacentHTML('beforeend', fixture.dynamic.appendHtml);
+        const newOwner = document.querySelector('#new-body')!;
+        expect(core.discover(document).filter(candidate => candidate.element === newOwner)).toHaveLength(1);
+        expect(core.resolve(newOwner.firstChild)).toMatchObject({element: newOwner, kind: 'content', adapterId: 'steam-store'});
+        expect(core.shouldStayOriginal(document.querySelector('#new-author')!)).toBe(true);
+        expect(adapter.shouldIgnoreMutation?.(newOwner, {url})).toBe(false);
+        // 原 DOM 的恢复/重新挂载不会借用上一次的节点身份或吞并整张按钮卡片。
+        document.body.innerHTML = fixture.html;
+        expect(document.body.innerHTML).toBe(original);
+        expect(core.resolve(document.querySelector('#long-body')!.firstChild)).toMatchObject({
+            element: document.querySelector('#long-body'), kind: 'content', adapterId: 'steam-store',
+        });
+    });
+
+    it('Bluesky 资料页只排除作者、时间和计数，正文及其中的提及继续由通用引擎发现', () => {
+        const fixture = blueskyMetadataFixture;
+        const url = new URL(fixture.url);
+        const document = documentFor(fixture.html);
+        const core = new TranslationCandidateCore({url, adapters});
+        const verify = () => {
+            const candidates = core.discover(document);
+            for (const selector of fixture.required) {
+                const element = document.querySelector(selector)!;
+                expect(candidates.some(candidate => candidate.element === element), selector).toBe(true);
+                expect(core.resolve(element.firstChild)?.element, `hover ${selector}`).toBe(element);
+            }
+            for (const selector of fixture.forbidden) {
+                const element = document.querySelector(selector)!;
+                expect(candidates.some(candidate => candidate.element === element || element.contains(candidate.element)), selector).toBe(false);
+            }
+            const source = candidates.map(candidate => extractTranslationTextFromNodes(
+                candidate.nodes ?? [candidate.element], core.shouldStayOriginal)).join('\n');
+            for (const text of fixture.sourceAssertions.required) expect(source).toContain(text);
+            for (const text of fixture.sourceAssertions.forbidden) expect(source).not.toContain(text);
+            const snapshot = createTranslationSourceSnapshot(document.body, core.shouldStayOriginal);
+            const snapshotSource = snapshot.slots.map(slot => slot.source).join('\n');
+            for (const text of fixture.sourceAssertions.forbidden) expect(snapshotSource).not.toContain(text);
+            expect(snapshotSource).toContain('@reader.example');
+        };
+        verify();
+        document.body.innerHTML = fixture.html;
+        verify();
+        const adapter = adapterById.get(fixture.id)!;
+        expect(adapter.genericCandidatePolicy).toBe('allow');
+        // :has() 依赖反向结构，编译器按既有约定保守观察全部属性。
+        expect(adapter.observedAttributes).toBeNull();
+        for (const selector of ['#profile-name', '#author', '#handle', '#post-time', '#count-actions', '#reposts',
+            '#profile-header-handle', '#profile-counts', '#profile-post-count']) {
+            expect(core.shouldStayOriginal(document.querySelector(selector)!), selector).toBe(true);
+            expect(adapter.shouldIgnoreMutation?.(document.querySelector(selector)!, {url}), selector).toBe(true);
+        }
+        for (const selector of ['#body1', '#body2', '#mention', '#profile-bio']) {
+            expect(adapter.shouldIgnoreMutation?.(document.querySelector(selector)!, {url}), selector).toBe(false);
+            expect(core.shouldStayOriginal(document.querySelector(selector)!), selector).toBe(false);
+        }
+        const change = fixture.dynamic.inlineText[0]!;
+        document.querySelector(change.selector)!.textContent = change.to;
+        expect(core.discover(document).some(candidate => candidate.element === document.querySelector(change.owner))).toBe(true);
+        expect(extractTranslationText(document.querySelector(change.owner)!, core.shouldStayOriginal)).toContain(change.to);
+        const appended = fixture.dynamic.appendHtml[0]!;
+        document.querySelector(appended.selector)!.insertAdjacentHTML('beforeend', appended.html);
+        const updatedCandidates = core.discover(document);
+        for (const selector of appended.required) {
+            expect(updatedCandidates.some(candidate => candidate.element === document.querySelector(selector)), selector).toBe(true);
+        }
+        for (const selector of appended.forbidden) {
+            const element = document.querySelector(selector)!;
+            expect(core.shouldStayOriginal(element), selector).toBe(true);
+            expect(updatedCandidates.some(candidate => candidate.element === element || element.contains(candidate.element)), selector).toBe(false);
+        }
+        document.querySelector('#profile-bio')!.remove();
+        for (const selector of ['#profile-header-handle', '#profile-counts']) {
+            expect(core.shouldStayOriginal(document.querySelector(selector)!), `no bio ${selector}`).toBe(true);
+        }
+        const headerHandle = document.querySelector('#profile-header-handle')!;
+        headerHandle.setAttribute('data-testid', 'profileHeaderDescription');
+        expect(core.shouldStayOriginal(headerHandle), 'description must not become an account handle').toBe(false);
+        expect(adapter.matches(new URL('https://bsky.app/'))).toBe(false);
+        expect(adapter.matches(new URL('https://other.bsky.app/profile/example.test'))).toBe(false);
+    });
+
+    it('Bluesky 引用卡片只保护直接身份栏，引用正文、嵌套引用及提及链接仍由通用引擎翻译', () => {
+        const fixture = blueskyQuoteFixture;
+        const url = new URL(fixture.url);
+        const document = documentFor(fixture.html);
+        const core = new TranslationCandidateCore({url, adapters});
+        const adapter = adapterById.get('bluesky-profile-metadata')!;
+        const verify = () => {
+            const candidates = core.discover(document);
+            for (const selector of fixture.required) {
+                const node = document.querySelector(selector)!;
+                expect(core.shouldStayOriginal(node), selector).toBe(false);
+                expect(candidates.some(candidate => candidate.element === node || node.contains(candidate.element)), selector).toBe(true);
+            }
+            for (const selector of fixture.forbidden) {
+                const node = document.querySelector(selector)!;
+                expect(core.shouldStayOriginal(node), selector).toBe(true);
+                expect(adapter.shouldIgnoreMutation?.(node, {url}), selector).toBe(true);
+                expect(candidates.some(candidate => candidate.element === node || node.contains(candidate.element)), selector).toBe(false);
+            }
+            for (const selector of fixture.mentions) {
+                const node = document.querySelector(selector)!;
+                expect(core.shouldStayOriginal(node), selector).toBe(false);
+                expect(adapter.shouldIgnoreMutation?.(node, {url}), selector).toBe(false);
+            }
+            const source = candidates.map(candidate => extractTranslationTextFromNodes(candidate.nodes ?? [candidate.element], core.shouldStayOriginal)).join('\n');
+            for (const text of fixture.sourceAssertions.required) expect(source).toContain(text);
+            for (const text of fixture.sourceAssertions.forbidden) expect(source).not.toContain(text);
+            for (const selector of ['#quote-body', '#nested-body']) {
+                const node = document.querySelector(selector)!;
+                const html = node.innerHTML;
+                const snapshot = createTranslationSourceSnapshot(node, core.shouldStayOriginal);
+                expect(snapshot.slots.map(slot => slot.source).join(' ')).toContain(node.querySelector('a')!.textContent);
+                const rendered = applyTranslationsToSnapshot(snapshot, snapshot.slots.map(() => '引用正文译文'));
+                expect(rendered).toContain('引用正文译文');
+                for (const link of node.querySelectorAll('a')) expect(rendered).toContain(link.getAttribute('href'));
+                expect(node.innerHTML).toBe(html);
+            }
+            const snapshotSource = createTranslationSourceSnapshot(document.body, core.shouldStayOriginal).slots.map(slot => slot.source).join('\n');
+            for (const text of fixture.sourceAssertions.forbidden) expect(snapshotSource).not.toContain(text);
+            expect(snapshotSource).toContain('@quoted-reader.example');
+            expect(snapshotSource).toContain('@nested-reader.example');
+        };
+        verify();
+        document.querySelector('#quote-author')!.textContent = 'Another Quoted Identity';
+        document.querySelector('#quote-dirty')!.textContent = 'an updated independently authored explanation';
+        expect(extractTranslationText(document.querySelector('#quote-body')!, core.shouldStayOriginal)).toContain('an updated independently authored explanation');
+        const card = document.querySelector('#quote-card')!;
+        const parent = card.parentElement!;
+        card.remove(); parent.append(card);
+        expect(core.shouldStayOriginal(document.querySelector('#quote-header')!)).toBe(true);
+        expect(core.resolve(document.querySelector('#quote-body')!.firstChild)?.element).toBe(document.querySelector('#quote-body'));
+        document.body.innerHTML = fixture.html;
+        verify();
+        for (const url of [new URL('https://bsky.app/'), new URL('https://elsewhere.example/profile/example.test')]) {
+            const otherCore = new TranslationCandidateCore({url, adapters});
+            expect(otherCore.shouldStayOriginal(document.querySelector('#quote-header')!)).toBe(false);
+        }
+    });
+
     it('Product Hunt 首页逐卡翻译介绍，保留产品名称、分类和订阅控件，重挂后仍命中介绍', () => {
         const adapter = adapterById.get('product-hunt')!;
         const url = new URL('https://www.producthunt.com/');
@@ -76,6 +310,111 @@ describe('网站正文规则目录', () => {
         verify();
         for (const path of ['/posts/first', '/products/first']) expect(adapter.matches(new URL(path, url))).toBe(true);
         expect(adapter.matches(new URL('https://help.producthunt.com/en/articles/481909'))).toBe(false);
+    });
+
+    it('Amazon 星级弹层文字不进入候选或祖先快照，商品与评论正文仍可翻译', () => {
+        const fixture = fixtures.find(item => item.id === 'amazon-shopping')!;
+        const url = new URL(fixture.url);
+        const document = documentFor(fixture.html);
+        const core = new TranslationCandidateCore({url, adapters});
+        const verify = () => {
+            const rating = document.querySelector('#acrPopover')!;
+            const candidates = core.discover(document);
+            expect(core.shouldStayOriginal(rating)).toBe(true);
+            expect(candidates.some(candidate => rating === candidate.element || rating.contains(candidate.element))).toBe(false);
+            for (const selector of fixture.required) {
+                const element = document.querySelector(selector)!;
+                expect(candidates.some(candidate => candidate.element === element), selector).toBe(true);
+                expect(core.resolve(element.firstChild)?.element, selector).toBe(element);
+            }
+            const source = candidates.map(candidate => extractTranslationTextFromNodes(
+                candidate.nodes ?? [candidate.element], core.shouldStayOriginal)).join('\n');
+            expect(source).not.toContain('out of 5 stars');
+            const before = document.body.innerHTML;
+            const snapshot = createTranslationSourceSnapshot(document.body, core.shouldStayOriginal);
+            expect(snapshot.slots.some(slot => slot.source.includes('out of 5 stars'))).toBe(false);
+            const rendered = applyTranslationsToSnapshot(snapshot, snapshot.slots.map(() => '商品正文译文'));
+            expect(rendered).toContain(document.querySelector('#rating-label')!.textContent);
+            expect(rendered).toContain('商品正文译文');
+            expect(document.body.innerHTML).toBe(before);
+        };
+        verify();
+        document.querySelector('#rating-label')!.textContent = '4.8 out of 5 stars';
+        verify();
+        document.body.innerHTML = fixture.html;
+        verify();
+    });
+
+    it('CNN 图注叙述保持可译，作者、日期和相邻图片署名不进入请求源', () => {
+        const fixture = fixtures.find(item => item.id === 'cnn-news')!;
+        const url = new URL(fixture.url);
+        const document = documentFor(fixture.html);
+        const core = new TranslationCandidateCore({url, adapters});
+        const verify = () => {
+            const candidates = core.discover(document);
+            const textFor = (candidate: typeof candidates[number]) => extractTranslationTextFromNodes(
+                candidate.nodes ?? [candidate.element], core.shouldStayOriginal);
+            const source = candidates.map(textFor).join('\n');
+            for (const text of fixture.sourceAssertions!.required) expect(source).toContain(text);
+            for (const text of fixture.sourceAssertions!.forbidden) expect(source).not.toContain(text);
+            for (const selector of fixture.forbidden) {
+                const node = document.querySelector(selector)!;
+                expect(core.shouldStayOriginal(node), selector).toBe(true);
+                expect(candidates.some(candidate => node === candidate.element || node.contains(candidate.element)), selector).toBe(false);
+            }
+            for (const selector of ['#main-caption', '#related-caption']) {
+                const caption = document.querySelector(selector)!;
+                const text = caption.textContent!;
+                const matches = candidates.filter(candidate => textFor(candidate).includes(text));
+                expect(matches, selector).toHaveLength(1);
+                // 独立 DOM 中的块级说明和实站内联说明可有不同 owner；只允许说明或它的 metadata 父级。
+                expect([caption, caption.parentElement], selector).toContain(matches[0]!.element);
+                const owner = caption.parentElement!;
+                const before = owner.innerHTML;
+                const credit = owner.querySelector('figcaption')!;
+                const snapshot = createTranslationSourceSnapshot(owner, core.shouldStayOriginal);
+                expect(snapshot.slots.map(slot => slot.source).join(' ')).toContain(text);
+                expect(snapshot.slots.map(slot => slot.source).join(' ')).not.toContain(credit.textContent);
+                const rendered = applyTranslationsToSnapshot(snapshot, snapshot.slots.map(() => '图片说明译文'));
+                expect(rendered).toContain(credit.textContent);
+                expect(rendered).toContain('图片说明译文');
+                expect(owner.innerHTML).toBe(before);
+            }
+            expect(core.shouldStayOriginal(document.querySelector('#ordinary-prose')!)).toBe(false);
+        };
+        verify();
+        document.body.innerHTML = fixture.html;
+        verify();
+    });
+
+    it('Steam 保护开始游戏入口和评论用户名，普通评论与游戏正文继续翻译', () => {
+        const fixture = fixtures.find(item => item.id === 'steam-store')!;
+        const url = new URL(fixture.url);
+        const document = documentFor(fixture.html);
+        const core = new TranslationCandidateCore({url, adapters});
+        const verify = () => {
+            const candidates = core.discover(document);
+            for (const selector of ['#body1', '#body2', '#review-body']) {
+                const node = document.querySelector(selector)!;
+                expect(candidates.some(candidate => candidate.element === node), selector).toBe(true);
+                expect(core.resolve(node.firstChild)?.element, selector).toBe(node);
+            }
+            for (const selector of ['#freeGameBtn', '#review-author']) {
+                const node = document.querySelector(selector)!;
+                expect(core.shouldStayOriginal(node), selector).toBe(true);
+                expect(candidates.some(candidate => candidate.element === node || node.contains(candidate.element)), selector).toBe(false);
+            }
+            const source = candidates.map(candidate => extractTranslationTextFromNodes(
+                candidate.nodes ?? [candidate.element], core.shouldStayOriginal)).join('\n');
+            expect(source).toContain('This review explains why the game works well');
+            expect(source).not.toContain('Play Game');
+            expect(source).not.toContain(document.querySelector('#review-author')!.textContent);
+        };
+        verify();
+        document.querySelector('#review-author')!.textContent = 'Another Independent Reviewer';
+        verify();
+        document.body.innerHTML = fixture.html;
+        verify();
     });
 
     it('ar5iv 定理中的可读叙述可形成候选，内联 MathML 保持受保护', () => {
@@ -157,9 +496,17 @@ describe('网站正文规则目录', () => {
         for (const rule of pack.rules) {
             const standalone = resolveSiteRule(pack, rule);
             expect(parseSiteRulePack({version: 1, rules: [standalone]}), rule.id).toMatchObject({ok: true});
-            expect(standalone.content?.length, rule.id).toBeGreaterThan(0);
-            expect(standalone.protect, rule.id).toEqual(expect.arrayContaining(['code', 'pre', 'input', 'textarea']));
-            expect(standalone.exclude, rule.id).toContain('nav');
+            if (standalone.content?.length) {
+                expect(standalone.protect, rule.id).toEqual(expect.arrayContaining(['code', 'pre', 'input', 'textarea']));
+                expect(standalone.exclude, rule.id).toContain('nav');
+            } else {
+                // 只补元数据边界的规则保留通用发现，独立夹具必须证明正文没有被白名单收窄。
+                expect(rule.id).toBe(blueskyMetadataFixture.id);
+                expect(rule.profile).toBeUndefined();
+                expect(standalone.mode).toBe('augment');
+                expect(standalone.exclude?.length, rule.id).toBeGreaterThan(0);
+                expect(standalone.watchIgnore, rule.id).toEqual(expect.arrayContaining(standalone.exclude!));
+            }
         }
     });
 
