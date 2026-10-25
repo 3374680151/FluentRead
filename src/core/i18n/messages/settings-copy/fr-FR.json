@@ -171,6 +171,15 @@
     "learning.collection.speechFailedDetail": "Échec de la lecture vocale : {details}"
   },
   "legacy": {
+    "编辑两点选取快捷键": "Modifier le raccourci de sélection en deux clics",
+    "两点选取": "Sélection en deux clics",
+    "开启后按快捷键，再依次点击文字起点和终点，无需按住鼠标；完成自动退出，Esc 取消": "Après activation, utilisez le raccourci, puis cliquez sur le début et la fin du texte sans maintenir le bouton de la souris. Le mode se ferme automatiquement une fois la sélection terminée ; Échap annule.",
+    "请选择带 Ctrl、Alt 或 Shift 的组合键": "Choisissez une combinaison avec Ctrl, Alt ou Maj",
+    "点击文字起点": "Cliquez sur le début du texte",
+    "点击文字终点": "Cliquez sur la fin du texte",
+    "选区过长，请点击较近的终点": "La sélection est trop longue. Cliquez sur un point de fin plus proche.",
+    "此范围不支持，请换一个终点": "Cette plage n’est pas prise en charge. Choisissez un autre point de fin.",
+    "Esc 取消": "Échap pour annuler",
     "同步连接已变化，请重新生成预览。": "La connexion a changé. Générez un nouvel aperçu.",
     "云端备份缺少安全覆盖所需的版本信息；仍可恢复，请重新读取后重试。": "La sauvegarde ne fournit pas de version permettant un remplacement sûr. Vous pouvez la restaurer ; relisez-la avant de réessayer.",
     "云端保存后校验未通过，请重新读取备份后重试；本机配置未修改。": "La vérification de la sauvegarde a échoué. Relisez-la avant de réessayer ; la configuration de cet appareil n’a pas changé.",

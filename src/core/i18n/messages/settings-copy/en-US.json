@@ -171,6 +171,15 @@
     "learning.collection.speechFailedDetail": "Speech failed: {details}"
   },
   "legacy": {
+    "编辑两点选取快捷键": "Edit two-click selection shortcut",
+    "两点选取": "Two-click selection",
+    "开启后按快捷键，再依次点击文字起点和终点，无需按住鼠标；完成自动退出，Esc 取消": "Once enabled, press the shortcut, then click the start and end of the text without holding the mouse button. The mode exits when finished; press Esc to cancel.",
+    "请选择带 Ctrl、Alt 或 Shift 的组合键": "Choose a key combination with Ctrl, Alt or Shift",
+    "点击文字起点": "Click the text start",
+    "点击文字终点": "Click the text end",
+    "选区过长，请点击较近的终点": "The selection is too long. Click a closer end point.",
+    "此范围不支持，请换一个终点": "This range is not supported. Choose another end point.",
+    "Esc 取消": "Esc to cancel",
     "同步连接已变化，请重新生成预览。": "The sync connection changed. Generate a new preview.",
     "云端备份缺少安全覆盖所需的版本信息；仍可恢复，请重新读取后重试。": "The backup lacks a version identifier for safe replacement. You can still restore it; read it again before retrying.",
     "云端保存后校验未通过，请重新读取备份后重试；本机配置未修改。": "Cloud backup verification failed. Read the backup again before retrying; this device’s configuration was not changed.",
