@@ -70,6 +70,15 @@ describe('漫画整段识别与噪声边界', () => {
         expect(result[0]).toMatchObject({text: '右列続き左列', vertical: true});
         expect(result[1].text).toBe('啊');
     });
+    it('宽竖列仅在同一已定位气泡内合段，仍限制列距、纵向覆盖与字号，横排行距不扩大',()=>{
+        const right=item('右の列',200,20,40,240),left=item('左の列',20,20,40,240);
+        expect(groupMangaText([left,right],'ja',500,500,'bubble')[0].text).toBe('右の列左の列');
+        expect(groupMangaText([left,right],'ja',500,500)).toHaveLength(2);
+        for(const separate of [item('遠い列',201,20,40,240),item('低い列',200,150,40,240),item('小さな注音',200,20,20,100)]){
+            expect(groupMangaText([left,separate],'ja',500,500,'bubble')).toHaveLength(2);
+        }
+        expect(groupMangaText([item('First',20,20,100,20),item('Second',20,71,100,20)],'en',500,500,'bubble')).toHaveLength(2);
+    });
     it('过滤低置信度、符号、数字艺术碎片和英文漫画里的错误汉字，不丢掉合法 I/A 短句', () => {
         const bad = [item('noise', 20, 20, 80, 20, 0.64), item('nan', 20, 20, 80, 20, NaN),
             item(''), item('=='), item('3 3'), item('才', 200, 200, 100, 200), item('noise才'), item('j')];

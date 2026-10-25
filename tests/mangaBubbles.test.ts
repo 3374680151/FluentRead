@@ -1,5 +1,5 @@
 import {describe,expect,it} from 'vitest';
-import {findMangaBubbles,collectMangaRegions} from '@/src/features/image-translation/services/mangaBubbles';
+import {findMangaBubbles,findMangaBubbleLayout,assignMangaLayoutBubbles,collectMangaRegions} from '@/src/features/image-translation/services/mangaBubbles';
 const image=(w:number,h:number)=>new Uint8ClampedArray(w*h*4);
 function rect(p:Uint8ClampedArray,w:number,x:number,y:number,width:number,height:number,color=[255,255,255,255]){for(let yy=y;yy<y+height;yy++)for(let xx=x;xx<x+width;xx++)p.set(color,(yy*w+xx)*4);}
 const text=(value:string,x:number,y:number,width=40,height=12)=>({text:value,confidence:.99,box:{x,y,width,height}});
@@ -26,6 +26,156 @@ function referenceBubbles(pixels:Uint8ClampedArray,width:number,height:number){
     return found.sort((a,b)=>b.area-a.area).slice(0,24).map(entry=>entry.bbox);
 }
 describe('漫画局部气泡识别边界',()=>{
+    it('大型曲边气泡只提供归属，原有小裁图和二十四候选预算不变',()=>{
+        const width=500,height=500,p=image(width,height);
+        for(let y=40;y<370;y++)for(let x=50;x<300;x++)if(((x-175)/125)**2+((y-205)/165)**2<1)p.set([255,255,255,255],(y*width+x)*4);
+        rect(p,width,360,390,40,40);
+        const layout=findMangaBubbleLayout(p,width,height);
+        expect(layout.recognition).toEqual([box(360,390,40,40)]);
+        expect(layout.ownership).toHaveLength(1);
+        expect(layout.ownership[0]).toMatchObject({y0:124,y1:287});
+        expect(layout.ownership[0].x0).toBeGreaterThan(51);expect(layout.ownership[0].x1).toBeLessThan(300);
+        expect(findMangaBubbles(p,width,height)).toEqual(layout.recognition);
+        expect(findMangaBubbleLayout(image(1,1),0,1)).toEqual({recognition:[],ownership:[]});
+        expect(findMangaBubbleLayout(image(1,1),8193,1)).toEqual({recognition:[],ownership:[]});
+    });
+    it('大型矩形、多洞面板、过大椭圆和单侧平边组件均不能提供宽列归属',()=>{
+        const width=500,height=500;
+        for(const shape of ['rectangle','holes','too-large','flat-top','flat-bottom','curved-holes','empty-intersection']){
+            const p=image(width,height);
+            if(shape==='rectangle'||shape==='holes'){
+                rect(p,width,50,50,300,300);
+                if(shape==='holes')rect(p,width,90,90,180,160,[0,0,0,255]);
+            }else if(shape==='empty-intersection'){
+                for(let row=0;row<300;row++){
+                    const span=Math.max(1,row<150?row*2:(299-row)*2);
+                    rect(p,width,row<150?50:350-span,100+row,span,1);
+                }
+            }else{
+                const radius=shape==='too-large'?210:145;
+                for(let y=20;y<480;y++)for(let x=20;x<480;x++)if(((x-250)/radius)**2+((y-250)/radius)**2<1)p.set([255,255,255,255],(y*width+x)*4);
+                if(shape==='flat-top')rect(p,width,106,105,289,80);
+                if(shape==='flat-bottom')rect(p,width,106,315,289,81);
+                if(shape==='curved-holes')rect(p,width,220,190,60,100,[0,0,0,255]);
+            }
+            expect(findMangaBubbleLayout(p,width,height).ownership,shape).toEqual([]);
+        }
+    });
+    it('仅漫画使用大型气泡归属，宽竖列保留右到左顺序及原框，不吞较小气泡或外部旁白',()=>{
+        const right=text('右側の本文',430,90,40,300),left=text('左側の本文',270,90,40,300);
+        const small=text('別の声',110,120,30,150),caption=text('外の説明',540,90,100,20);
+        const page={results:[left,right,small,caption],bubbles:[{bbox:box(90,100,90,210),results:[]}],layoutBubbles:[{bbox:box(50,40,450,400),members:[0,0,1,2,-1,.5]}]};
+        const result=collectMangaRegions(page,'ja',700,700);
+        expect(result.map(line=>line.text)).toEqual(['外の説明','右側の本文左側の本文','別の声']);
+        expect(result[1].sourceBoxes).toEqual([{x0:430,y0:90,x1:470,y1:390},{x0:270,y0:90,x1:310,y1:390}]);
+        expect(collectMangaRegions(page,'ja',700,700,'image').map(line=>line.text)).toEqual(['左側の本文','右側の本文','外の説明','別の声']);
+        expect(collectMangaRegions({results:[left,right]},'ja',700,700)).toHaveLength(2);
+    });
+    it('曲边角落和气泡内黑色旁白卡片均不成为大气泡成员，原结果索引与独立文字保留',()=>{
+        for(const card of [false,true]){
+            const width=500,height=500,p=image(width,height);
+            for(let y=40;y<370;y++)for(let x=50;x<300;x++)if(((x-175)/125)**2+((y-205)/165)**2<1)p.set([255,255,255,255],(y*width+x)*4);
+            if(card)rect(p,width,195,160,30,80,[0,0,0,255]);
+            const caption=card?text('外の注釈',200,170,20,60):text('外の注釈',52,42,20,60);
+            const body=text('本文の列',130,150,20,80),items=[caption,body],snapshot=structuredClone(items);
+            const layout=findMangaBubbleLayout(p,width,height),assigned=assignMangaLayoutBubbles(p,width,height,layout.ownership,items);
+            expect(layout.ownership).toHaveLength(1);expect(assigned.map(owner=>owner.members)).toEqual([[1]]);
+            expect(collectMangaRegions({results:items,layoutBubbles:assigned},'ja',width,height)).toHaveLength(2);
+            expect(items).toEqual(snapshot);
+        }
+    });
+    it('成员浅底取样需十二点中至少九点，非法框或不足像素不能靠夹边通过',()=>{
+        const width=100,height=100,bbox=box(1,1,90,90),item=text('本文',20,20,40,40),p=image(width,height).fill(255);
+        const samples=[[20,20],[33,20],[46,20],[59,20],[20,33],[59,33],[20,46],[59,46],[20,59],[33,59],[46,59],[59,59]];
+        for(const [index,[x,y]] of samples.slice(0,3).entries()){
+            const color=[255,255,255,255];color[index]=235;rect(p,width,x,y,1,1,color);
+        }
+        expect(assignMangaLayoutBubbles(p,width,height,[bbox],[item])[0].members).toEqual([0]);
+        rect(p,width,59,20,1,1,[255,255,255,127]);expect(assignMangaLayoutBubbles(p,width,height,[bbox],[item])).toEqual([]);
+        const invalid=[text('x',NaN,20),text('x',-1,20),text('x',20,-1),text('x',20,20,0),text('x',20,20,20,0),text('x',90,20),text('x',20,95)];
+        expect(assignMangaLayoutBubbles(p,width,height,[bbox],invalid)).toEqual([]);
+        expect(assignMangaLayoutBubbles(p,width,height,[],[item])).toEqual([]);
+        expect(assignMangaLayoutBubbles(p,width,height,[box(70,70,20,20)],[item])).toEqual([]);
+        for(const [w,h] of [[0,1],[8193,1],[4097,4097],[100,100]])expect(assignMangaLayoutBubbles(image(1,1),w,h,[bbox],[item])).toEqual([]);
+    });
+    it('小于局部识别最小边的独立黑边白卡也不归属外层对白，不发送排除元数据',()=>{
+        const width=500,height=500,p=image(width,height);
+        for(let y=40;y<370;y++)for(let x=50;x<300;x++)if(((x-175)/125)**2+((y-205)/165)**2<1)p.set([255,255,255,255],(y*width+x)*4);
+        rect(p,width,195,160,28,80,[0,0,0,255]);rect(p,width,197,162,24,76);
+        const items=[text('外の注釈',199,170,20,60),text('本文の列',130,150,20,80)];
+        const originalItems=structuredClone(items),originalPixels=p.slice(),layout=findMangaBubbleLayout(p,width,height);
+        expect(layout.recognition).toEqual([]);expect(layout.ownership).toHaveLength(1);
+        expect(layout.ownership[0].exclusions).toEqual([box(197,162,24,76)]);
+        const assigned=assignMangaLayoutBubbles(p,width,height,layout.ownership,items);
+        expect(assigned).toEqual([{bbox:box(67,124,217,163),members:[1]}]);
+        expect(Object.keys(assigned[0].bbox)).toEqual(['x0','y0','x1','y1']);
+        const result=collectMangaRegions({results:items,layoutBubbles:assigned},'ja',width,height);
+        expect(result.map(region=>region.text)).toEqual(['本文の列','外の注釈']);
+        expect(result.flatMap(region=>region.sourceBoxes)).toEqual([box(130,150,20,80),box(199,170,20,60)]);
+        expect(items).toEqual(originalItems);expect(p.every((value,index)=>value===originalPixels[index])).toBe(true);
+    });
+    it('白卡跨内接框上沿或下沿时仍按原组件外接范围排除，不误并框内中心的旁白',()=>{
+        for(const [cardTop,captionTop,bodyTop] of [[110,124,150],[220,230,220]]){
+            const width=500,height=500,p=image(width,height);
+            for(let y=40;y<370;y++)for(let x=50;x<300;x++)if(((x-175)/125)**2+((y-205)/165)**2<1)p.set([255,255,255,255],(y*width+x)*4);
+            rect(p,width,195,cardTop,28,80,[0,0,0,255]);rect(p,width,197,cardTop+2,24,76);
+            const items=[text('外の注釈',199,captionTop,20,60),text('本文の列',130,bodyTop,20,80)];
+            const layout=findMangaBubbleLayout(p,width,height),owner=layout.ownership[0];
+            expect(owner.exclusions).toEqual([box(197,cardTop+2,24,76)]);
+            expect(cardTop<owner.y0||cardTop+80>owner.y1).toBe(true);
+            const assigned=assignMangaLayoutBubbles(p,width,height,layout.ownership,items);
+            expect(assigned.map(entry=>entry.members)).toEqual([[1]]);
+            expect(collectMangaRegions({results:items,layoutBubbles:assigned},'ja',width,height)).toHaveLength(2);
+        }
+    });
+    it('排除岛只剥离完整落入的物理框，字形孔洞只覆盖中心或部分边界不能剥离整行',()=>{
+        const p=image(100,100).fill(255),owner={...box(1,1,98,98),exclusions:[box(30,30,40,40)]};
+        const items=[text('卡片内部',30,30,40,40),text('跨左边界',29,30,40,40),text('跨上边界',30,29,40,40),
+            text('跨右边界',31,30,40,40),text('跨下边界',30,31,40,40),text('整行含孔洞',20,20,60,60)];
+        expect(assignMangaLayoutBubbles(p,100,100,[owner],items)).toEqual([{bbox:box(1,1,98,98),members:[1,2,3,4,5]}]);
+        expect(assignMangaLayoutBubbles(p,100,100,[{...owner,exclusions:[]}],items)[0].members).toEqual([0,1,2,3,4,5]);
+    });
+    it('小字形孔洞须至少五像素边且二十五像素面积才记录为排除岛',()=>{
+        const width=500,height=500,p=image(width,height);
+        for(let y=40;y<370;y++)for(let x=50;x<300;x++)if(((x-175)/125)**2+((y-205)/165)**2<1)p.set([255,255,255,255],(y*width+x)*4);
+        for(const [x,w,h] of [[120,4,7],[140,7,4],[160,5,5],[180,5,5]]){
+            rect(p,width,x-1,159,w+2,h+2,[0,0,0,255]);rect(p,width,x,160,w,h);
+        }
+        rect(p,width,160,160,1,1,[0,0,0,255]);
+        expect(findMangaBubbleLayout(p,width,height).ownership[0].exclusions).toEqual([box(180,160,5,5)]);
+    });
+    it('每大气泡最多一百二十八个排除岛，触顶仅撤回该新增归属且原识别候选不变',()=>{
+        for(const count of [128,129]){
+            const width=1000,height=500,p=image(width,height);
+            for(const center of [245,755])for(let y=40;y<460;y++)for(let x=center-210;x<center+210;x++)if(((x-center)/210)**2+((y-250)/210)**2<1)p.set([255,255,255,255],(y*width+x)*4);
+            for(let index=0;index<count;index++){
+                const x=150+(index%16)*9,y=160+Math.floor(index/16)*9;
+                rect(p,width,x,y,7,7,[0,0,0,255]);rect(p,width,x+1,y+1,5,5);
+            }
+            rect(p,width,750,220,7,7,[0,0,0,255]);rect(p,width,751,221,5,5);
+            rect(p,width,200,480,5,5);rect(p,width,480,20,35,35);
+            const layout=findMangaBubbleLayout(p,width,height);
+            expect(layout.recognition).toEqual([box(480,20,35,35)]);
+            expect(layout.recognition).toEqual(referenceBubbles(p,width,height));
+            expect(layout.ownership).toHaveLength(count===128?2:1);
+            expect(layout.ownership.at(-1)?.exclusions).toEqual([box(751,221,5,5)]);
+            const items=[text('右側の本文',280,300,20,80),text('左側の本文',200,300,20,80)];
+            const assigned=assignMangaLayoutBubbles(p,width,height,layout.ownership,items);
+            expect(collectMangaRegions({results:items,layoutBubbles:assigned},'ja',width,height)).toHaveLength(count===128?1:2);
+            if(count===128)expect(layout.ownership[0].exclusions).toHaveLength(128);
+        }
+    });
+    it('独立浅色岛复用唯一原像素分类扫描，不重新读取 RGBA 或复制原图',()=>{
+        const width=500,height=500,p=image(width,height),reads=new Uint8Array(p.length);
+        for(let y=40;y<370;y++)for(let x=50;x<300;x++)if(((x-175)/125)**2+((y-205)/165)**2<1)p.set([255,255,255,255],(y*width+x)*4);
+        rect(p,width,195,160,28,80,[0,0,0,255]);rect(p,width,197,162,24,76);
+        // Proxy 仅记录数值下标读取；typed array length 仍以真实接收者读取。
+        const observed=new Proxy(p,{get(target,key){if(typeof key==='string'&&/^\d+$/u.test(key))reads[Number(key)]++;return Reflect.get(target,key,target);}});
+        const layout=findMangaBubbleLayout(observed,width,height);
+        expect(layout.ownership[0].exclusions).toEqual([box(197,162,24,76)]);
+        expect(reads.some(count=>count>1)).toBe(false);
+        expect(reads.some(count=>count===1)).toBe(true);
+    });
     it('扫描行保持孔洞、桥接、对角分离及随机像素的四邻域面积和排序',()=>{
         let state=0x1068;const next=()=>{state=(Math.imul(state,1664525)+1013904223)>>>0;return state;};
         for(let sample=0;sample<40;sample++){

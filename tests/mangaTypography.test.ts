@@ -5,6 +5,33 @@ const measure = (text: string,size: number) => Array.from(text).length * size;
 function context() {return {save:vi.fn(),restore:vi.fn(),fillRect:vi.fn(),font:'',fillStyle:'',strokeStyle:'',lineWidth:0,
     beginPath:vi.fn(),rect:vi.fn(),clip:vi.fn(),measureText:vi.fn(function(this:{font:string},text:string){return {width:measure(text,Number(this.font.match(/ ([\d.]+)px/)![1]))};}),strokeText:vi.fn(),fillText:vi.fn()};}
 describe('漫画专用完整排版',()=>{
+    it('单行按实际字形上下界适配，行距不再重复挤掉识别框高度',()=>{
+        const layout=layoutMangaTranslationText('你好',100,10,measure,10,(_text,size)=>({ascent:size*.7,descent:size*.2}));
+        expect(layout).toEqual({lines:['你好'],fontSize:10,lineHeight:12,ink:{height:9,baselines:[7]}});
+        expect(layout.lineHeight).toBeGreaterThan(10);
+        expect(layoutMangaTranslationText('下划线',100,6,measure,10,()=>({ascent:-2,descent:8})).ink)
+            .toEqual({height:6,baselines:[-2]});
+    });
+    it('真实高字形、显式空段与不同上下行均保留基线间距和完整字形范围',()=>{
+        const layout=layoutMangaTranslationText('A\n\nB',100,48,measure,10,text=>text==='A'?{ascent:8,descent:2}:{ascent:12,descent:4});
+        expect(layout).toEqual({lines:['A','','B'],fontSize:10,lineHeight:16,ink:{height:44,baselines:[8,24,40]}});
+        const text='行\n'.repeat(1999)+'末',many=layoutMangaTranslationText(text,100,24000,measure,10,()=>({ascent:8,descent:2}));
+        expect(many.lines).toHaveLength(2000);expect(many.ink?.height).toBe(23998);expect(many.ink?.baselines).toHaveLength(2000);
+    });
+    it('缺少或非法字形指标时整段保守使用行框，不混用不完整基线',()=>{
+        for(const metric of [undefined,{ascent:NaN,descent:1},{ascent:1,descent:Infinity},{ascent:Number.MAX_VALUE,descent:Number.MAX_VALUE},{ascent:-2,descent:2}]){
+            const layout=layoutMangaTranslationText('内容',100,12,measure,20,()=>metric);
+            expect(layout.ink).toBeUndefined();expect(layout.fontSize).toBeLessThanOrEqual(10);expect(layout.fontSize).toBeGreaterThan(9.9);
+        }
+        const mixed=layoutMangaTranslationText('好\n坏',100,24,measure,10,text=>text==='好'?{ascent:8,descent:2}:undefined);
+        expect(mixed.ink).toBeUndefined();expect(mixed.lines).toEqual(['好','坏']);
+    });
+    it('完整译文按真实字形高度缩小，平衡换行也不得增加字形高度越界',()=>{
+        const fitted=layoutMangaTranslationText('你好',100,15,measure,30,(_text,size)=>({ascent:size*.8,descent:size*.2}));
+        expect(fitted.fontSize).toBeGreaterThan(14.9);expect(fitted.ink!.height).toBeLessThanOrEqual(15);expect(fitted.lines.join('')).toBe('你好');
+        const balanced=layoutMangaTranslationText('abcdefgh',70,14,measure,10,text=>text.length>1&&text.length<7?{ascent:12,descent:12}:{ascent:1,descent:1});
+        expect(balanced.lines).toEqual(['abcdefg','h']);expect(balanced.ink!.height).toBe(14);
+    });
     it('闭标点不会独自挤到下一行，开标点跟随下一字',()=>{
         const layout=layoutMangaTranslationText('你好。再见！「好的」',30,150,measure,10);
         expect(layout.lines.join('')).toBe('你好。再见！「好的」');
@@ -50,6 +77,47 @@ describe('漫画专用完整排版',()=>{
 describe('原图背景与字体层次',()=>{
     const width=1000,height=400,pixels=new Uint8ClampedArray(width*height*4).fill(255);
     const region={text:'你好世界',fontSize:70,bbox:{x0:100,y0:100,x1:400,y1:250}};
+    it('紧贴字形的单行使用真实上下界及描边居中，不扩大清字和裁剪范围',()=>{
+        for(const height of [7,8,13.333333,16]){
+            const c=Object.assign(context(),{textBaseline:''}),bbox={x0:40,y0:40,x1:276,y1:40+height};
+            c.measureText.mockImplementation(function(this:{font:string},text:string){const size=Number(this.font.match(/ ([\d.]+)px/)![1]);return {width:measure(text,size),actualBoundingBoxAscent:size*.8,actualBoundingBoxDescent:size*.15,fontBoundingBoxAscent:size,fontBoundingBoxDescent:size*.3};});
+            drawMangaTranslations(c as any,pixels,width,400,[{text:'完整译文',fontSize:height,bbox}],true,[{color:'rgb(255,255,255)',uniform:true}]);
+            const size=Number(c.font.match(/ ([\d.]+)px/)![1]),y=c.fillText.mock.calls[0][2],padding=c.lineWidth/2+.5;
+            expect(size).toBeGreaterThan(height*.8);expect(size).toBeLessThanOrEqual(height*1.05);
+            expect(y-size*.8-padding).toBeGreaterThanOrEqual(bbox.y0-1e-9);expect(y+size*.15+padding).toBeLessThanOrEqual(bbox.y1+1e-9);
+            expect(c.textBaseline).toBe('alphabetic');expect(c.rect).toHaveBeenCalledWith(40,40,236,bbox.y1-bbox.y0);
+            expect(c.fillRect).toHaveBeenCalledWith(40,40,236,bbox.y1-bbox.y0);expect(c.fillText.mock.calls.map(call=>call[0]).join('')).toBe('完整译文');
+        }
+    });
+    it('混合表情和下伸字形按实际整行上下界适配，缺少真实指标时退回完整行距',()=>{
+        for(const actualBounds of [true,false]){
+            const c=Object.assign(context(),{textBaseline:''});
+            c.measureText.mockImplementation(function(this:{font:string},text:string){const size=Number(this.font.match(/ ([\d.]+)px/)![1]);return {width:measure(text,size),fontBoundingBoxAscent:size*.6,fontBoundingBoxDescent:size*.1,...(actualBounds?{actualBoundingBoxAscent:size,actualBoundingBoxDescent:size*.3}:{})};});
+            drawMangaTranslations(c as any,pixels,width,height,[{text:'Go! 😊',fontSize:20,bbox:{x0:40,y0:40,x1:276,y1:60}}],true,[{color:'rgb(255,255,255)',uniform:true}]);
+            const size=Number(c.font.match(/ ([\d.]+)px/)![1]);
+            expect(c.fillText.mock.calls.map(call=>call[0]).join('')).toBe('Go! 😊');
+            if(actualBounds){expect(c.textBaseline).toBe('alphabetic');expect(size*1.3+c.lineWidth+1).toBeLessThanOrEqual(20+1e-9);}
+            else {expect(c.textBaseline).toBe('middle');expect(size*1.2).toBeLessThanOrEqual(20);}
+        }
+    });
+    it('零字形或非有限 Canvas 指标退回行框，复杂底色和竖框仍保留完整内容及原界',()=>{
+        for(const invalid of [{actualBoundingBoxAscent:0,actualBoundingBoxDescent:0},{actualBoundingBoxAscent:NaN,actualBoundingBoxDescent:2}]){
+            const c=Object.assign(context(),{textBaseline:''});c.measureText.mockImplementation(function(this:{font:string},text:string){return {width:measure(text,Number(this.font.match(/ ([\d.]+)px/)![1])),...invalid};});
+            const bbox={x0:100,y0:10,x1:118,y1:390},text='明日は駅で会いましょう。';
+            drawMangaTranslations(c as any,pixels,width,height,[{text,fontSize:18,bbox,vertical:true}],true,[{color:'#444',uniform:false}]);
+            expect(c.textBaseline).toBe('middle');expect(c.fillText.mock.calls.map(call=>call[0]).join('')).toBe(text);
+            expect(c.fillRect).not.toHaveBeenCalled();expect(c.rect).toHaveBeenCalledWith(100,10,18,380);
+        }
+    });
+    it('无效画布或框外区域不读取字形，合法部分继续保持原画布裁剪边界',()=>{
+        const c=context();
+        for(const [w,h,data] of [[0,height,pixels],[width,.5,pixels],[width,height,new Uint8ClampedArray(1)]] as const)
+            drawMangaTranslations(c as any,data,w,h,[region]);
+        drawMangaTranslations(c as any,pixels,width,height,[{...region,bbox:{x0:width+1,y0:1,x1:width+20,y1:30}},{...region,bbox:{x0:1,y0:height+1,x1:20,y1:height+30}}]);
+        expect(c.save).not.toHaveBeenCalled();expect(c.measureText).not.toHaveBeenCalled();
+        drawMangaTranslations(c as any,pixels,width,height,[{...region,bbox:{x0:-10,y0:-10,x1:100,y1:60}}],true,[{uniform:true,color:'#fff'}]);
+        expect(c.rect).toHaveBeenCalledWith(0,0,100,60);expect(c.restore).toHaveBeenCalledOnce();
+    });
     it('均匀气泡按源行和描边余量清字，段落空隙保留原图而不整块铺白', () => {
         const c=context(), boxes=[{x0:100,y0:100,x1:220,y1:120},{x0:100,y0:160,x1:220,y1:180}];
         drawMangaTranslations(c as any,pixels,width,height,[{text:'完整译文',fontSize:20,bbox:{x0:100,y0:100,x1:220,y1:180},sourceBoxes:boxes}],true,[{color:'rgb(255,255,255)',uniform:true}]);
