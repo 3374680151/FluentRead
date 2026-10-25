@@ -70,17 +70,61 @@
   {
     "id": "bbc-news",
     "url": "https://www.bbc.com/news/articles/example",
-    "html": "<nav id=\"navigation\"><a href=\"/settings\">Navigation remains unchanged</a></nav><article><span itemprop=\"author\" id=\"author\">Example Author</span><time id=\"time\">2026-09-05</time><p id=\"body1\">This readable paragraph describes the behavior and provides enough context for translation. <code id=\"protected\">KEEP_ORIGINAL_TOKEN</code></p><p id=\"body2\">A second independent paragraph explains the example and should remain stable during repeated translation.</p></article>",
+    "html": "<nav id=\"navigation\"><a href=\"/news\">News navigation remains unchanged</a></nav><article id=\"article\"><h1 id=\"title\">A reported story explains the latest developments clearly</h1><div id=\"byline\" data-testid=\"byline\"><time id=\"time\">2026-10-25</time><div><button id=\"share\">Share</button></div><div><span id=\"author\">Example Reporter With A Long Display Name</span></div></div><p id=\"body1\">This readable paragraph describes <span id=\"dirty\">important context for the reported story</span> with an <a id=\"reading-link\" href=\"/news/articles/related\">ordinary article reference</a> and <code id=\"protected\">KEEP_ORIGINAL_TOKEN</code>.</p><figure id=\"figure\"><div data-testid=\"image\"><img alt=\"An illustrative photo of a public event\" src=\"/example-photo.jpg\"><span id=\"credit\">Example Photo Agency Via Image Library</span></div><figcaption id=\"caption\">This photograph shows the public event described in the article.</figcaption></figure><p id=\"body2\">A second independent paragraph provides further reporting and remains readable after repeated translation.</p></article><section><p id=\"outside\">A separate explanation of the author and image remains readable outside metadata.</p></section>",
     "required": [
+      "#title",
       "#body1",
+      "#caption",
       "#body2"
     ],
     "forbidden": [
       "#navigation",
-      "#protected",
+      "#byline",
       "#author",
-      "#time"
-    ]
+      "#time",
+      "#share",
+      "#credit",
+      "#protected"
+    ],
+    "sourceAssertions": {
+      "required": [
+        "A reported story",
+        "This readable paragraph describes",
+        "This photograph shows",
+        "A second independent paragraph",
+        "A separate explanation"
+      ],
+      "forbidden": [
+        "Example Reporter With A Long Display Name",
+        "Example Photo Agency Via Image Library",
+        "2026-10-25",
+        "KEEP_ORIGINAL_TOKEN"
+      ]
+    },
+    "dynamic": {
+      "inlineText": [
+        {
+          "selector": "#dirty",
+          "owner": "#body1",
+          "from": "important context for the reported story",
+          "to": "newly updated context for the reported story"
+        }
+      ],
+      "appendHtml": [
+        {
+          "selector": "#article",
+          "html": "<figure id=\"dynamic-figure\"><div data-testid=\"image\"><img alt=\"Another illustrative photo\" src=\"/second-photo.jpg\"><span id=\"new-credit\">New Photo Agency Display Name</span></div><figcaption id=\"new-caption\">A newly added photograph gives the reader useful context.</figcaption></figure><p id=\"new-body\">The article receives a further independent paragraph as the report is updated.</p>",
+          "required": [
+            "#new-caption",
+            "#new-body"
+          ],
+          "forbidden": [
+            "#new-credit"
+          ]
+        }
+      ],
+      "noiseSelector": "#author"
+    }
   },
   {
     "id": "arstechnica",

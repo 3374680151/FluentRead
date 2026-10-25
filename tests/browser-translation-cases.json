@@ -1053,5 +1053,68 @@
     "fullPageHotkey": "Alt+T",
     "service": "freeTranslation",
     "notes": "普通网页搜索的标题与摘要；地址、搜索框与导航保持原文。验证码或页面无普通结果时记录站点限制。"
+  },
+  "bbc-france-protests-article": {
+    "url": "https://www.bbc.com/news/articles/c95ynd587ynzo",
+    "hoverSelector": "article p",
+    "hoverTargets": [
+      {
+        "name": "article-title",
+        "selector": "article h1"
+      },
+      {
+        "name": "article-body",
+        "selector": "article p"
+      },
+      {
+        "name": "article-caption",
+        "selector": "article figcaption"
+      }
+    ],
+    "requiredSelectors": [
+      "article h1",
+      "article p",
+      "article figcaption"
+    ],
+    "coverageRules": [
+      {
+        "name": "article-title",
+        "selector": "article h1",
+        "kind": "heading",
+        "minInitial": 1
+      },
+      {
+        "name": "article-body",
+        "selector": "article p",
+        "kind": "content",
+        "minInitial": 10
+      },
+      {
+        "name": "article-captions",
+        "selector": "article figcaption",
+        "kind": "content",
+        "minInitial": 2
+      }
+    ],
+    "forbiddenSelectors": [
+      "article [data-testid=\"byline\"]",
+      "article [data-testid=\"image\"] > span",
+      "nav",
+      "article button[aria-label=\"Share\"]",
+      "article button[aria-label=\"Save\"]"
+    ],
+    "interactionSelectors": [
+      "article p a[href]",
+      "article button[aria-label=\"Play video\"]"
+    ],
+    "modes": [
+      "hover",
+      "full"
+    ],
+    "tier": "required",
+    "hoverHotkey": "Control",
+    "fullPageHotkey": "Alt+T",
+    "service": "freeTranslation",
+    "notes": "2026-10-25公开DOM：1个主标题、30个正文p、5个图注。有限文章页追踪声明区域全部候选，最低数量仅作结构存在门槛；作者byline和图片直接署名保持原文，真正figcaption必须可译。视频播放按钮会原生加载时长，用交互语义契约核验；Share/Save保持DOM保护，不把视频时长更新归为翻译改动。"
   }
 }

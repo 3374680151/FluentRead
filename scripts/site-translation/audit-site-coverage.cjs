@@ -7,6 +7,7 @@ const path = require('node:path');
 
 const CATALOG_ROOT = path.join(__dirname, '../../src/core/site-adaptation/catalog');
 const read = (name) => JSON.parse(fs.readFileSync(path.join(CATALOG_ROOT, `${name}.json`), 'utf8'));
+const readBrowserCases = () => JSON.parse(fs.readFileSync(path.join(__dirname, '../../tests/browser-translation-cases.json'), 'utf8'));
 
 function hostDeclared(pattern, host) {
   return pattern === host || pattern.startsWith('*.') &&
@@ -20,7 +21,7 @@ function countBy(values) {
 }
 
 function auditSiteCoverage({established = read('established'), websites = read('websites'),
-  profiles = read('profiles'), coverage = read('coverage')} = {}) {
+  profiles = read('profiles'), coverage = read('coverage'), browserCases = readBrowserCases()} = {}) {
   const rules = [...established, ...websites];
   const metadata = new Map(coverage.rules.map((entry) => [entry.id, entry]));
   const ids = new Set(rules.map((rule) => rule.id));
@@ -49,8 +50,20 @@ function auditSiteCoverage({established = read('established'), websites = read('
       return [];
     }
     priorityIds.add(site.id);
+    const browserContracts = Object.entries(browserCases).flatMap(([id, contract]) => {
+      let url;
+      try {url = new URL(contract.url);} catch {return [];}
+      if (!['https:', 'http:'].includes(url.protocol) || url.hostname !== site.host) return [];
+      return [{id, url: contract.url, tier: contract.tier || 'required', modes: contract.modes || [],
+        fullPageScope: contract.fullPageScope || 'finite-page'}];
+    });
+    for (const id of site.browserCases || []) {
+      if (!Object.hasOwn(browserCases, id)) errors.push(`Priority site ${site.id} references missing browser case: ${id}`);
+      else if (!browserContracts.some((contract) => contract.id === id)) errors.push(`Priority site ${site.id} browser case has a different host: ${id}`);
+    }
     const declarations = rules.filter((rule) => rule.match.hosts.some((host) => hostDeclared(host, site.host)));
     return [{...site, status: declarations.length ? 'declared-host-needs-page-verification' : 'no-dedicated-rule',
+      browserContracts,
       declarations: declarations.map((rule) => ({id: rule.id,
         paths: rule.match.paths || ['*'], excludePaths: rule.match.excludePaths || [],
         mode: rule.mode || profiles[rule.profile]?.mode || 'augment', profile: rule.profile || null,
@@ -77,7 +90,7 @@ function renderText(report) {
   for (const site of report.prioritySites) {
     lines.push(`- ${site.name} (${site.host}): ${site.status}; rules=${site.declarations.map((rule) => rule.id).join(',') || 'none'}`);
     lines.push(`  Review separately: ${site.reviewSurfaces.join('; ')}`);
-    if (site.browserCases?.length) lines.push(`  Browser cases (not pass results): ${site.browserCases.join(', ')}`);
+    if (site.browserContracts.length) lines.push(`  Registered browser contracts (not pass results): ${site.browserContracts.map((contract) => `${contract.id} [${contract.tier}; ${contract.fullPageScope}]`).join(', ')}`);
     for (const rule of site.declarations) lines.push(`  ${rule.id}: paths=${rule.paths.join(',')}; evidence=${rule.verification}; historical live evidence=${rule.historicalLiveEvidence}`);
   }
   if (report.withoutEvidenceMetadata.length) lines.push('', `No per-rule coverage metadata: ${report.withoutEvidenceMetadata.join(', ')}`);

@@ -50,7 +50,7 @@ Include the complete URL, browser and extension versions, the area that should b
 <details class="guide-details">
 <summary>Maintainers: inspect the priority website review list</summary>
 
-Run `node scripts/site-translation/audit-site-coverage.cjs` in the repository, adding `--json` for structured output. It reads the current catalog to report declaration counts, categories, fixture evidence, page types to review separately, and priority hosts without dedicated rules. Host declarations help schedule reviews; they do not establish full URL matching or DOM coverage.
+Run `node scripts/site-translation/audit-site-coverage.cjs` in the repository, adding `--json` for structured output. It reads the current catalog to report declaration counts, categories, fixture evidence, page types to review separately, registered browser contracts, and priority hosts without dedicated rules. Contract registration and host declarations help schedule reviews; they do not establish full URL matching or DOM coverage.
 
 The `scopeAudit`, public HTML probes, and browser records in `coverage.json` retain their historical scope. Historical evidence is not a current live-site pass. Record semantic fixtures, site fixtures, actual pages, and actual translation services separately; rule counts cannot measure the percentage of popular websites that pass.
 

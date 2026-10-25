@@ -233,6 +233,61 @@ function assertCatalogBoundaries(shape: CatalogShape, document: Document, core: 
     for (const text of shape.sourceAssertions?.forbidden ?? []) expect(source, shape.name).not.toContain(text);
 }
 
+describe('BBC 实站文章的署名与正文边界', () => {
+    const shape: CatalogShape = {...catalogFixtures.find(fixture => fixture.id === 'bbc-news')!, name: 'bbc-news:observed-article'};
+    const url = new URL(shape.url);
+
+    it('实际 byline 与图片直接署名不会进入请求，标题、段落和真正图注仍共享候选语义', () => {
+        const document = documentFor(shape.html);
+        const baseline = fixtureCore(shape, true);
+        const oldSource = sources(baseline, document).join('\n');
+        expect(oldSource).toContain('Example Reporter With A Long Display Name');
+        expect(oldSource).toContain('Example Photo Agency Via Image Library');
+        const core = fixtureCore(shape);
+        assertCatalogBoundaries(shape, document, core);
+        expect(core.discover(node(document, 'outside'))).toHaveLength(1);
+        const articleSource = extractTranslationTextFromNodes([node(document, 'article')], core.shouldStayOriginal);
+        expect(articleSource).not.toContain('Example Reporter With A Long Display Name');
+        expect(articleSource).not.toContain('Example Photo Agency Via Image Library');
+        expect(articleSource).toContain('This photograph shows the public event');
+        const original = node(document, 'figure').outerHTML;
+        const snapshot = createTranslationSourceSnapshot(node(document, 'figure'), core.shouldStayOriginal,
+            undefined, undefined, core.shouldOmitFromTranslation);
+        expect(snapshot.slots.map(slot => slot.source).join(' ')).toContain('This photograph shows');
+        expect(snapshot.slots.map(slot => slot.source).join(' ')).not.toContain('Example Photo Agency');
+        const translated = documentFor(applyTranslationsToSnapshot(snapshot, snapshot.slots.map(() => '报道图片说明')));
+        expect(node(translated, 'credit').textContent).toBe('Example Photo Agency Via Image Library');
+        expect(node(translated, 'caption').textContent).toBe('报道图片说明');
+        expect(node(document, 'figure').outerHTML).toBe(original);
+    });
+
+    it('动态署名受保护、追加图注仍能发现，作者文字出现在正文时保持可译', () => {
+        const document = documentFor(shape.html);
+        const core = fixtureCore(shape);
+        const adapter = compileSiteRulePack(builtinSiteRulePack).find(item => item.id === shape.id)!;
+        node(document, 'author').textContent = 'A Newly Assigned Reporter Name';
+        expect(core.discover(node(document, 'author'))).toEqual([]);
+        expect(adapter.shouldIgnoreMutation?.(node(document, 'author'), {url})).toBe(true);
+        expect(adapter.shouldIgnoreMutation?.(node(document, 'credit'), {url})).toBe(true);
+        expect(adapter.shouldIgnoreMutation?.(node(document, 'caption'), {url})).toBe(false);
+        const operation = shape.dynamic!.appendHtml![0]!;
+        const appended = documentFor(operation.html);
+        while (appended.body.firstChild) node(document, 'article').appendChild(appended.body.firstChild);
+        for (const selector of operation.required) {
+            const owner = one(document, selector);
+            expect(core.discover(owner).filter(candidate => candidate.element === owner)).toHaveLength(1);
+            expect(core.resolve(readableText(document, owner, core))?.element).toBe(owner);
+        }
+        expect(core.discover(node(document, 'new-credit'))).toEqual([]);
+        node(document, 'body2').textContent = 'The article quotes Example Reporter With A Long Display Name in ordinary reporting.';
+        expect(sources(core, node(document, 'body2')).join(' ')).toContain('Example Reporter With A Long Display Name');
+        expect(core.shouldStayOriginal(node(document, 'body2'))).toBe(false);
+        document.body.innerHTML = shape.html;
+        assertCatalogBoundaries(shape, document, core);
+        expect(adapter.matches(new URL('https://www.bbc.com.evil.test/news/articles/example'))).toBe(false);
+    });
+});
+
 describe('常见站点正文规则', () => {
     it('五条新增规则各有主页面，Steam 讨论串和 AMO 评论保留同一规则下的独立结构夹具', () => {
         expect(new Set(expansionShapes.map(shape => shape.id))).toEqual(new Set(expansionIds));

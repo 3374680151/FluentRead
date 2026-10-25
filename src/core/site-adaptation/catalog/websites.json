@@ -2183,7 +2183,15 @@
         "/auth/*"
       ]
     },
-    "profile": "article"
+    "profile": "article",
+    "exclude": [
+      "article [data-testid=\"byline\"]",
+      "article [data-testid=\"image\"] > span"
+    ],
+    "watchIgnore": [
+      "article [data-testid=\"byline\"]",
+      "article [data-testid=\"image\"] > span"
+    ]
   },
   {
     "id": "guardian",

@@ -12,6 +12,7 @@ describe('website coverage maintenance report', () => {
         expect(Object.values(report.catalog.verification).reduce<number>((sum, count) => sum + Number(count), 0)).toBe(report.catalog.totalRules);
         expect(report.prioritySites.find((site: {id: string}) => site.id === 'youtube').declarations.some((rule: {id: string}) => rule.id === 'youtube')).toBe(true);
         expect(report.prioritySites.find((site: {id: string}) => site.id === 'facebook').status).toBe('no-dedicated-rule');
+        expect(report.prioritySites.find((site: {id: string}) => site.id === 'github').browserContracts.some((contract: {id: string}) => contract.id === 'github-fluentread-pr')).toBe(true);
         expect(report.boundary).toContain('not successful current live-site translations');
     });
 
@@ -46,5 +47,33 @@ describe('website coverage maintenance report', () => {
         expect(report.prioritySites).toHaveLength(1);
         expect(report.errors).toEqual(['Duplicate priority site ID: example', 'Invalid priority site: bad-host',
             'Invalid priority site: empty-contract', 'Invalid priority site: bad-case']);
+    });
+
+    it('links registered page contracts by exact public host without converting quarantine into acceptance', () => {
+        const report = auditSiteCoverage({profiles: {}, established: [], websites: [], coverage: {rules: [],
+            prioritySites: [{id: 'example', name: 'Example', host: 'example.com', reviewSurfaces: ['article']}]},
+            browserCases: {
+                article: {url: 'https://example.com/article', modes: ['hover', 'full']},
+                blocked: {url: 'https://example.com/feed', tier: 'quarantine', modes: ['full'], fullPageScope: 'initial-corpus'},
+                lookalike: {url: 'https://example.com.evil.test/article'},
+                subdomain: {url: 'https://login.example.com/article'},
+                nonWeb: {url: 'ftp://example.com/article'},
+                invalid: {url: 'not-a-url'},
+            }});
+        expect(report.ok).toBe(true);
+        expect(report.prioritySites[0].browserContracts).toEqual([
+            {id: 'article', url: 'https://example.com/article', tier: 'required', modes: ['hover', 'full'], fullPageScope: 'finite-page'},
+            {id: 'blocked', url: 'https://example.com/feed', tier: 'quarantine', modes: ['full'], fullPageScope: 'initial-corpus'},
+        ]);
+        expect(report.prioritySites[0].status).toBe('no-dedicated-rule');
+    });
+
+    it('rejects stale or cross-host explicit browser case references', () => {
+        const report = auditSiteCoverage({profiles: {}, established: [], websites: [], coverage: {rules: [],
+            prioritySites: [{id: 'example', name: 'Example', host: 'example.com', reviewSurfaces: ['article'], browserCases: ['removed', 'other']}]},
+            browserCases: {other: {url: 'https://other.example/article'}}});
+        expect(report.ok).toBe(false);
+        expect(report.errors).toEqual(['Priority site example references missing browser case: removed',
+            'Priority site example browser case has a different host: other']);
     });
 });

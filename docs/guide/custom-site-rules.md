@@ -52,7 +52,7 @@
 <details class="guide-details">
 <summary>维护者：查看常用网站复验清单</summary>
 
-在仓库中运行 `node scripts/site-translation/audit-site-coverage.cjs`；追加 `--json` 可保存结构化结果。脚本直接读取当前规则，列出实际数量、类别、夹具证据与常用网站需要分别复验的页面类型，并标出没有专站规则的主机。主机声明只用于安排复验，不代替完整网址匹配或真实 DOM 验证。
+在仓库中运行 `node scripts/site-translation/audit-site-coverage.cjs`；追加 `--json` 可保存结构化结果。脚本直接读取当前规则，列出实际数量、类别、夹具证据与常用网站需要分别复验的页面类型，并关联已注册的浏览器契约、标出没有专站规则的主机。契约登记和主机声明只用于安排复验，不代替完整网址匹配或真实 DOM 验证。
 
 `coverage.json` 中的 `scopeAudit`、公开 HTML 探测和浏览器记录保留其历史范围；旧记录不能作为当前实站通过结论。语义夹具、专站夹具、真实网页与真实翻译服务需要分别记录，不能用规则数量计算“常用网站通过率”。
 
