@@ -91,6 +91,17 @@ describe('hover pending config ownership', () => {
         source.modelThinking = {deepseek: {'fixed-model': true}}; sync(source); expect(cancel).toHaveBeenCalledOnce();
     });
 
+    it('keeps pending hover work when the full-page multi-segment preference changes', () => {
+        const source = new Config();
+        const cancel = vi.fn();
+        const sync = createHoverTranslationConfigInvalidator(source, cancel);
+        source.enableAIMultiSegment = true;
+        sync(source);
+        source.enableAIMultiSegment = false;
+        sync(source);
+        expect(cancel).not.toHaveBeenCalled();
+    });
+
     it('keeps pending work for UI updates, credentials and an unrelated service model', () => {
         const source = new Config();
         source.hoverTranslationService = 'microsoft';
