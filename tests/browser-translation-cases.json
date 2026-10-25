@@ -1905,5 +1905,167 @@
       "full"
     ],
     "notes": "Native HTTP200:1 title,1 complete OP and3 English replies; native pager shows1-3 of3. OP has direct Text,11 BR and one literal external-reference link. OP/all-replies sourcePartition excludeSelectors[] verifies complete native source. Each full pass freezes every reply loaded at that pass start; minInitial3 is this sample readiness floor, not an exact total. Later native replies, expansion and pagination require separate acceptance. Hover uses title, OP and reply0 with explicit-index partition capture. Preserve author/date/action/paging/search/hidden report textarea and the native literal link text/href; do not open external references. Actual .bb_code/pre/code/quote/button/reply-editor nodes are absent, so no real coverage claimed for them."
+  },
+  "linkedin-public-pulse-article": {
+    "tier": "required",
+    "hoverHotkey": "Control",
+    "fullPageHotkey": "Alt+T",
+    "service": "freeTranslation",
+    "url": "https://www.linkedin.com/pulse/what-linkedin-pulse-article-why-matters-more-than-you-kerry-baker-adlwe",
+    "fullPageScope": "finite-page",
+    "prepareScrollSelector": "article.article-main .article-main__content > p:first-of-type",
+    "prepareDismissiblePromotion": {
+      "dialogSelector": "[role=\"dialog\"][aria-modal=\"true\"][aria-labelledby=\"base-contextual-sign-in-modal-modal-header\"]",
+      "buttonSelector": "button.contextual-sign-in-modal__modal-dismiss[data-tracking-control-name=\"pulse-article_contextual-sign-in-modal_modal_dismiss\"]",
+      "contentSelector": "article.article-main"
+    },
+    "hoverSelector": "article.article-main .article-main__content > p",
+    "requiredSelectors": [
+      "article.article-main > header h1.pulse-title",
+      "article.article-main .article-main__content > p",
+      "article.article-main .inline-articles .inline-article-title",
+      "main .right-rail .aside-article-card h3.base-aside-card__title"
+    ],
+    "coverageRules": [
+      {
+        "name": "article-title",
+        "selector": "article.article-main > header h1.pulse-title",
+        "kind": "heading",
+        "minInitial": 1,
+        "sourceIncludes": [
+          "What Is a LinkedIn Pulse Article"
+        ]
+      },
+      {
+        "name": "complete-article-paragraphs",
+        "selector": "article.article-main .article-main__content > p",
+        "kind": "content",
+        "minInitial": 10,
+        "sourcePartition": {
+          "excludeSelectors": []
+        }
+      },
+      {
+        "name": "loaded-inline-recommendation-titles",
+        "selector": "article.article-main .inline-articles .inline-article-title",
+        "kind": "content",
+        "minInitial": 3
+      },
+      {
+        "name": "loaded-aside-recommendation-titles",
+        "selector": "main .right-rail .aside-article-card h3.base-aside-card__title",
+        "kind": "heading",
+        "minInitial": 6
+      }
+    ],
+    "hoverTargets": [
+      {
+        "name": "article-title",
+        "selector": "article.article-main > header h1.pulse-title",
+        "index": 0
+      },
+      {
+        "name": "complete-first-paragraph",
+        "selector": "article.article-main .article-main__content > p",
+        "index": 0
+      },
+      {
+        "name": "inline-recommendation-title",
+        "selector": "article.article-main .inline-articles .inline-article-title",
+        "index": 0
+      },
+      {
+        "name": "aside-recommendation-title",
+        "selector": "main .right-rail .aside-article-card h3.base-aside-card__title",
+        "index": 0
+      }
+    ],
+    "forbiddenSelectors": [
+      "article.article-main > header .publisher-author-card > .base-main-card__info > .base-main-card__title",
+      "article.article-main > header .publisher-author-card > .base-main-card__info > .base-main-card__metadata",
+      "article.article-main .inline-articles .inline-article-meta",
+      "main .right-rail .aside-article-card .base-aside-card__metadata",
+      "main .article-social-activity a.social-action-bar__button"
+    ],
+    "interactionSelectors": [
+      "article.article-main .inline-articles a[href]",
+      "main .right-rail a.aside-article-card[href]"
+    ],
+    "modes": [
+      "hover",
+      "full"
+    ],
+    "notes": "Public native article observed HTTP200; dismiss only the exact optional contextual sign-in promotion with its native non-form dismissal button. Stop on authwall/challenge or unrecognized blocking UI; never mutate visibility/ARIA or authentication state. Sample contains one title, ten direct article paragraphs, three inline and ten aside recommendation titles, of which six aside titles have native layout and four are hidden behind the native expansion; every currently eligible visible title/paragraph is required, with complete Text/BR source ledgers for each main paragraph. Protect publisher name/date, inline/aside recommendation metadata and article action anchors. Native article has no body list/code/reading href, so those boundaries remain authored fixture evidence. Native expansion of the four hidden recommendations remains separate pending coverage. Readiness floor six is confirmed by actual per-node rects, not a reduction of the six visible-title corpus. The raw pre-fix run translated ten metadata owners and changed author class whitespace on restoration; retain that failure and global exact restoration guards."
+  },
+  "x-nasa-public-post": {
+    "tier": "required",
+    "url": "https://x.com/NASA/status/1571977394151383042",
+    "fullPageScope": "initial-corpus",
+    "hoverHotkey": "Control",
+    "fullPageHotkey": "Alt+T",
+    "service": "freeTranslation",
+    "hoverSelector": "main article:has(a[href=\"/NASA/status/1571977394151383042\"]) div[dir=\"auto\"].whitespace-pre-wrap",
+    "requiredSelectors": [
+      "main article:has(a[href=\"/NASA/status/1571977394151383042\"]) div[dir=\"auto\"].whitespace-pre-wrap",
+      "main article div[dir=\"auto\"].whitespace-pre-wrap"
+    ],
+    "coverageRules": [
+      {
+        "name": "all-loaded-public-post-bodies",
+        "selector": "main article div[dir=\"auto\"].whitespace-pre-wrap",
+        "kind": "content",
+        "minInitial": 6,
+        "sourcePartition": {
+          "excludeSelectors": []
+        }
+      }
+    ],
+    "hoverTargets": [
+      {
+        "name": "primary-public-post-complete-body",
+        "selector": "main article div[dir=\"auto\"].whitespace-pre-wrap",
+        "index": 0,
+        "sourceIncludes": [
+          "To all of you who suggested"
+        ],
+        "textIncludes": [
+          "To all of you who suggested"
+        ],
+        "sourcePartition": {
+          "excludeSelectors": []
+        }
+      }
+    ],
+    "forbiddenSelectors": [
+      "main article span:has(+ span > a.x-link[href^=\"/\"]:not([href^=\"//\"]) > span.text-secondary.line-clamp-1) > a.x-link[href^=\"/\"]:not([href^=\"//\"]) > div.text-body.font-bold.line-clamp-1:not([dir=\"auto\"] *)",
+      "main article span + span > a.x-link[href^=\"/\"]:not([href^=\"//\"]) > span.text-secondary.line-clamp-1:not([dir=\"auto\"] *)",
+      "main article a[data-base-ui-tooltip-trigger][href*=\"/status/\"]",
+      "main article [data-engagement-action]",
+      ":is(main article button[data-slot=\"xds-menu-trigger\"], main article [role=\"button\"][data-base-ui-click-trigger], main article button.cursor-pointer.bg-transparent):not(main article div.aspect-video:has(> video) button[data-slot=\"xds-menu-trigger\"]:has(svg[data-icon=\"icon-settings-stroke\"]))",
+      "nav",
+      "main article div.aspect-video:has(> video) button[data-slot=\"xds-menu-trigger\"]:has(svg[data-icon=\"icon-settings-stroke\"])"
+    ],
+    "forbiddenMustExistSelectors": [
+      "main article span:has(+ span > a.x-link[href^=\"/\"]:not([href^=\"//\"]) > span.text-secondary.line-clamp-1) > a.x-link[href^=\"/\"]:not([href^=\"//\"]) > div.text-body.font-bold.line-clamp-1:not([dir=\"auto\"] *)",
+      "main article span + span > a.x-link[href^=\"/\"]:not([href^=\"//\"]) > span.text-secondary.line-clamp-1:not([dir=\"auto\"] *)",
+      "main article a[data-base-ui-tooltip-trigger][href*=\"/status/\"]",
+      "main article [data-engagement-action]",
+      ":is(main article button[data-slot=\"xds-menu-trigger\"], main article [role=\"button\"][data-base-ui-click-trigger], main article button.cursor-pointer.bg-transparent):not(main article div.aspect-video:has(> video) button[data-slot=\"xds-menu-trigger\"]:has(svg[data-icon=\"icon-settings-stroke\"]))",
+      "nav"
+    ],
+    "interactionSelectors": [
+      "main article:has(a[href=\"/NASA/status/1571977394151383042\"]) div[dir=\"auto\"].whitespace-pre-wrap a[href=\"/hashtag/NASAMoonSnap\"]"
+    ],
+    "modes": [
+      "hover",
+      "full"
+    ],
+    "notes": "Official NASA page links this exact post ID. Native HTTP200; no login/challenge. New deployed layout has no data-testid:6 loaded article rich bodies (antecedent, quote, primary and3 replies); initial-corpus freezes every loaded body at each pass, min6 is readiness floor, not a total timeline or language count. Complete Text sourcePartition[] per native body; hover source filter selects the unique primary post (observed raw index2), not the hidden sr-only H1. Preserve author/handle6 each, date permalinks6, engagement25, native X menu/translation/badge controls20 and nav1 semantically after host remount. Pre-fix production demonstrated3 author-name requests/wrappers; this required case needs the unified fresh fix and both modes before acceptance. Keep exact X guide404 and GSI runtime attribution evidence; no blanket whitelist, no site action clicks. Exact native video-settings menu (aspect-video direct video + xds-menu-trigger + icon-settings-stroke) starts0 then1 after native player initialization. Preserve original20 static controls; separately optional+dynamic protect this one empty menu component with strict adopted baseline/multiset/owned0 semantics. No whole-player mutable exemption.",
+    "dynamicForbiddenSelectors": [
+      "main article div.aspect-video:has(> video) button[data-slot=\"xds-menu-trigger\"]:has(svg[data-icon=\"icon-settings-stroke\"])"
+    ],
+    "optionalForbiddenSelectors": [
+      "main article div.aspect-video:has(> video) button[data-slot=\"xds-menu-trigger\"]:has(svg[data-icon=\"icon-settings-stroke\"])"
+    ]
   }
 }

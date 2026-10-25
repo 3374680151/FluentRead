@@ -305,13 +305,17 @@
     "protect": [
       "time",
       "[role=\"progressbar\"]",
-      "[data-testid=\"app-bar-back\"]"
+      "[data-testid=\"app-bar-back\"]",
+      "main article span:has(+ span > a.x-link[href^=\"/\"]:not([href^=\"//\"]) > span.text-secondary.line-clamp-1) > a.x-link[href^=\"/\"]:not([href^=\"//\"]) > div.text-body.font-bold.line-clamp-1:not([dir=\"auto\"] *)"
     ],
     "exclude": [
       "[data-testid=\"tweetTextarea_0\"]",
       "[data-testid=\"DMComposerTextInput\"]",
       "[data-testid=\"User-Name\"]",
       "[data-testid=\"UserName\"]"
+    ],
+    "watchIgnore": [
+      "main article span:has(+ span > a.x-link[href^=\"/\"]:not([href^=\"//\"]) > span.text-secondary.line-clamp-1) > a.x-link[href^=\"/\"]:not([href^=\"//\"]) > div.text-body.font-bold.line-clamp-1:not([dir=\"auto\"] *)"
     ]
   },
   {

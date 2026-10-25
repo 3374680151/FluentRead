@@ -9,6 +9,324 @@ import cases from './browser-translation-cases.json';
 import establishedFixtures from '../scripts/site-translation/site-adaptation-established-fixtures.json';
 
 const require = createRequire(import.meta.url);
+
+describe('dismissible public promotion preparation', () => {
+  const {prepareDismissiblePromotion} = require('../scripts/run-site-translation-test.cjs');
+  const {normalizeDismissiblePromotion, normalizeCaseConfig, collectBaseCaseConfigErrors} =
+    require('../scripts/site-translation/case-config.cjs');
+  const config = {
+    dialogSelector: '[role="dialog"][aria-modal="true"][aria-labelledby="base-contextual-sign-in-modal-modal-header"]',
+    buttonSelector: 'button.contextual-sign-in-modal__modal-dismiss[data-tracking-control-name="pulse-article_contextual-sign-in-modal_modal_dismiss"]',
+    contentSelector: 'article.article-main',
+  };
+  const publicUrl = 'https://www.linkedin.com/pulse/independently-authored-public-article';
+  const html = '<main aria-hidden="true"><article class="article-main"><h1>A public article title</h1>' +
+    '<p>The complete public paragraph is present before dismissing the promotion.</p></article></main>' +
+    '<section role="dialog" aria-modal="true" aria-labelledby="base-contextual-sign-in-modal-modal-header">' +
+    '<button class="contextual-sign-in-modal__modal-dismiss" data-tracking-control-name="pulse-article_contextual-sign-in-modal_modal_dismiss">Dismiss</button>' +
+    '<form><input name="session_key"><button type="submit">Sign in</button></form></section>';
+  type Fixture = {
+    document: Document;
+    page: {url: () => string; locator: (selector: string) => {click: ReturnType<typeof vi.fn>};
+      evaluate: (fn: (input: unknown) => unknown, input: unknown) => Promise<unknown>;
+      waitForFunction: ReturnType<typeof vi.fn>};
+    nativeClick: ReturnType<typeof vi.fn>;
+    location: {href: string; pathname: string};
+  };
+  async function withPromotion(run: (fixture: Fixture) => Promise<void>,
+    options: {afterClick?: (fixture: Pick<Fixture, 'document' | 'location'>) => void;
+      beforePoll?: (fixture: Pick<Fixture, 'document' | 'location'>) => void} = {}) {
+    const parsed = parseHTML(`<html><body>${html}</body></html>`);
+    const document = parsed.document as unknown as Document;
+    Object.defineProperty(parsed.window.HTMLElement.prototype, 'getBoundingClientRect', {configurable: true,
+      value: () => ({width: 400, height: 100})});
+    const location = {href: publicUrl, pathname: new URL(publicUrl).pathname};
+    const globals = {document, location, getComputedStyle: (node: HTMLElement) => ({
+      display: node.style.display || 'block', visibility: node.style.visibility || 'visible', opacity: node.style.opacity || '1',
+    })};
+    const previous = new Map<string, PropertyDescriptor | undefined>();
+    for (const [name, value] of Object.entries(globals)) {
+      previous.set(name, Object.getOwnPropertyDescriptor(globalThis, name));
+      Object.defineProperty(globalThis, name, {configurable: true, writable: true, value});
+    }
+    const nativeClick = vi.fn(async () => {
+      // This is the authored site's native handler, not an action performed by the helper's page predicate.
+      expect(document.querySelector('main')!.getAttribute('aria-hidden')).toBe('true');
+      if (options.afterClick) options.afterClick({document, location});
+      else {
+        document.querySelector(config.dialogSelector)!.setAttribute('hidden', '');
+        document.querySelector('main')!.removeAttribute('aria-hidden');
+      }
+    });
+    const page = {url: () => location.href,
+      locator: (selector: string) => {expect(selector).toBe(config.buttonSelector); return {click: nativeClick};},
+      evaluate: async (fn: (input: unknown) => unknown, input: unknown) => fn(input),
+      waitForFunction: vi.fn(async (fn: (input: unknown) => unknown, input: unknown) => {
+        options.beforePoll?.({document, location});
+        if (!fn(input)) throw new Error('promotion/public content did not become readable');
+        return {dispose: vi.fn(async () => undefined)};
+      })};
+    try {await run({document, page, nativeClick, location});}
+    finally {for (const [name, descriptor] of previous) {
+      if (descriptor) Object.defineProperty(globalThis, name, descriptor);
+      else Reflect.deleteProperty(globalThis, name);
+    }}
+  }
+
+  it('normalizes only three explicit selectors and keeps the feature optional', () => {
+    expect(normalizeDismissiblePromotion(undefined)).toBeUndefined();
+    expect(normalizeDismissiblePromotion(Object.fromEntries(Object.entries(config).map(([key, value]) => [key, ` ${value} `])))).toEqual(config);
+    const base = Object.values(cases)[0];
+    expect(normalizeCaseConfig('public-promo', {...base, prepareDismissiblePromotion: config}).prepareDismissiblePromotion).toEqual(config);
+    expect(normalizeCaseConfig('ordinary', base)).not.toHaveProperty('prepareDismissiblePromotion');
+    expect(collectBaseCaseConfigErrors('public-promo', {...base, prepareDismissiblePromotion: config, prepareClickText: 'Any other action'}))
+      .toContain('public-promo 的 prepareDismissiblePromotion 不得与 prepareClickText 同时使用');
+  });
+
+  it.each([null, false, true, 1, 'click', [], {}, {...config, contentSelector: undefined},
+    {...config, dialogSelector: ''}, {...config, buttonSelector: '  '}, {...config, contentSelector: ['article']},
+    {...config, action: 'remove'}, {...config, url: '/login'}, {...config, clicks: 2}])('rejects malformed or additional action configuration %#', value => {
+    expect(() => normalizeDismissiblePromotion(value)).toThrow('prepareDismissiblePromotion');
+    expect(() => normalizeCaseConfig('invalid-promo', {...Object.values(cases)[0], prepareDismissiblePromotion: value})).toThrow('prepareDismissiblePromotion');
+  });
+
+  it.each([undefined, 'button'])('uses one native click for an unassociated safe button type %s', async type => {
+    await withPromotion(async ({document, page, nativeClick}) => {
+      if (type) document.querySelector(config.buttonSelector)!.setAttribute('type', type);
+      const before = document.querySelector('article')!.outerHTML;
+      await expect(prepareDismissiblePromotion(page, config, publicUrl, 1000)).resolves.toMatchObject({status: 'dismissed', nativeClicks: 1});
+      expect(nativeClick).toHaveBeenCalledTimes(1);
+      expect(page.waitForFunction).toHaveBeenCalledOnce();
+      expect(document.querySelector('article')!.outerHTML).toBe(before);
+      expect(document.querySelector('input')!.getAttribute('value')).toBeNull();
+    });
+  });
+
+  it.each(['absent', 'hidden'])('allows an already readable public article when the promotion is %s', async state => {
+    await withPromotion(async ({document, page, nativeClick}) => {
+      const dialog = document.querySelector(config.dialogSelector)!;
+      if (state === 'absent') dialog.remove(); else dialog.setAttribute('hidden', '');
+      document.querySelector('main')!.removeAttribute('aria-hidden');
+      const before = document.body.innerHTML;
+      await expect(prepareDismissiblePromotion(page, config, publicUrl, 1000)).resolves.toMatchObject({status: 'not-present', nativeClicks: 0});
+      expect(nativeClick).not.toHaveBeenCalled();
+      expect(document.body.innerHTML).toBe(before);
+    });
+  });
+
+  it('waits within one deadline for a unique safe button to become painted, then rechecks before clicking', async () => {
+    await withPromotion(async ({document, page, nativeClick}) => {
+      document.querySelector<HTMLElement>(config.buttonSelector)!.style.visibility = 'hidden';
+      await expect(prepareDismissiblePromotion(page, config, publicUrl, 1000)).resolves.toMatchObject({status: 'dismissed', nativeClicks: 1});
+      expect(page.waitForFunction).toHaveBeenCalledTimes(2);
+      expect(nativeClick).toHaveBeenCalledOnce();
+      for (const call of page.waitForFunction.mock.calls) expect((call[2] as {timeout?: number} | undefined)?.timeout ?? 0).toBeLessThanOrEqual(1000);
+    }, {beforePoll: ({document}) => {document.querySelector<HTMLElement>(config.buttonSelector)!.style.visibility = 'visible';}});
+  });
+
+  it('rejects a form association introduced while waiting and records its exact preconditions without clicking', async () => {
+    await withPromotion(async ({document, page, nativeClick}) => {
+      document.querySelector(config.buttonSelector)!.setAttribute('hidden', '');
+      const error = await prepareDismissiblePromotion(page, config, publicUrl, 1000).catch((value: Error) => value);
+      expect(error.message).toContain('belongs to a form');
+      expect(error.promotionDiagnostic.button).toMatchObject({count: 1, ancestorForm: true, insideDialog: true, painted: true});
+      expect(nativeClick).not.toHaveBeenCalled();
+      expect(page.waitForFunction).toHaveBeenCalledOnce();
+    }, {beforePoll: ({document}) => {
+      const button = document.querySelector(config.buttonSelector)!;
+      button.removeAttribute('hidden');
+      document.querySelector('form')!.appendChild(button);
+    }});
+  });
+
+  function inactiveOverlay(document: Document) {
+    const dialog = document.querySelector(config.dialogSelector)!;
+    const overlay = document.createElement('div');
+    overlay.className = 'modal__overlay';
+    overlay.setAttribute('aria-hidden', 'true');
+    dialog.replaceWith(overlay);
+    overlay.appendChild(dialog);
+    document.querySelector('main')!.removeAttribute('aria-hidden');
+    return overlay;
+  }
+
+  it('waits for an inactive known promotion to activate before its one native click', async () => {
+    await withPromotion(async ({document, page, nativeClick}) => {
+      inactiveOverlay(document);
+      await expect(prepareDismissiblePromotion(page, config, publicUrl, 1000)).resolves.toMatchObject({status: 'dismissed', nativeClicks: 1});
+      expect(nativeClick).toHaveBeenCalledOnce();
+      expect(page.waitForFunction).toHaveBeenCalledTimes(2);
+    }, {beforePoll: ({document}) => {
+      const overlay = document.querySelector('.modal__overlay')!;
+      if (overlay.getAttribute('aria-hidden') === 'true') {
+        overlay.setAttribute('aria-hidden', 'false');
+        document.querySelector('main')!.setAttribute('aria-hidden', 'true');
+      }
+    }});
+  });
+
+  it('allows an inactive known promotion to become visually hidden with readable public content and zero clicks', async () => {
+    await withPromotion(async ({document, page, nativeClick}) => {
+      inactiveOverlay(document);
+      await expect(prepareDismissiblePromotion(page, config, publicUrl, 1000)).resolves.toMatchObject({status: 'not-present', nativeClicks: 0});
+      expect(nativeClick).not.toHaveBeenCalled();
+      expect(page.waitForFunction).toHaveBeenCalledOnce();
+    }, {beforePoll: ({document}) => {document.querySelector<HTMLElement>('.modal__overlay')!.style.visibility = 'hidden';}});
+  });
+
+  it('times out with zero clicks when an inactive known promotion stays painted', async () => {
+    await withPromotion(async ({document, page, nativeClick}) => {
+      inactiveOverlay(document);
+      const before = document.body.innerHTML;
+      const error = await prepareDismissiblePromotion(page, config, publicUrl, 1000).catch((value: Error) => value);
+      expect(error.promotionDiagnostic.button).toMatchObject({inactiveKnownPromotionAncestor: true, inaccessibleAncestor: true, painted: true});
+      expect(nativeClick).not.toHaveBeenCalled();
+      expect(page.waitForFunction).toHaveBeenCalledOnce();
+      expect(document.body.innerHTML).toBe(before);
+    });
+  });
+
+  it.each(['inner aria-hidden', 'inert overlay'])('still refuses %s immediately even inside a known inactive promotion', async state => {
+    await withPromotion(async ({document, page, nativeClick}) => {
+      const overlay = inactiveOverlay(document);
+      if (state === 'inner aria-hidden') document.querySelector(config.buttonSelector)!.setAttribute('aria-hidden', 'true');
+      else overlay.setAttribute('inert', '');
+      await expect(prepareDismissiblePromotion(page, config, publicUrl, 1000)).rejects.toThrow('preparation refused');
+      expect(nativeClick).not.toHaveBeenCalled();
+      expect(page.waitForFunction).not.toHaveBeenCalled();
+    });
+  });
+
+  const invalid: Array<[string, (document: Document) => void]> = [
+    ['duplicate dialog', document => document.body.appendChild(document.querySelector(config.dialogSelector)!.cloneNode(true))],
+    ['duplicate button', document => document.querySelector(config.dialogSelector)!.appendChild(document.querySelector(config.buttonSelector)!.cloneNode(true))],
+    ['outside button', document => document.body.appendChild(document.querySelector(config.buttonSelector)!)],
+    ['missing content', document => document.querySelector('article')!.remove()],
+    ['ambiguous content', document => document.querySelector('main')!.appendChild(document.querySelector('article')!.cloneNode(true))],
+    ['content inside dialog', document => document.querySelector(config.dialogSelector)!.appendChild(document.querySelector('article')!)],
+    ['unrendered content', document => document.querySelector<HTMLElement>('article')!.style.display = 'none'],
+    ['hidden button', document => document.querySelector(config.buttonSelector)!.setAttribute('hidden', '')],
+    ['disabled button', document => document.querySelector(config.buttonSelector)!.setAttribute('disabled', '')],
+    ['inert button', document => document.querySelector(config.buttonSelector)!.setAttribute('inert', '')],
+    ['aria hidden button', document => document.querySelector(config.buttonSelector)!.setAttribute('aria-hidden', 'true')],
+    ['submit button', document => document.querySelector(config.buttonSelector)!.setAttribute('type', 'submit')],
+    ['reset button', document => document.querySelector(config.buttonSelector)!.setAttribute('type', 'reset')],
+    ['form attribute', document => document.querySelector(config.buttonSelector)!.setAttribute('form', 'login-form')],
+    ['submit override', document => document.querySelector(config.buttonSelector)!.setAttribute('formaction', '/login')],
+    ['ancestor form', document => document.querySelector('form')!.appendChild(document.querySelector(config.buttonSelector)!)],
+    ['associated form property', document => Object.defineProperty(document.querySelector(config.buttonSelector)!, 'form', {value: document.querySelector('form')})],
+    ['unrecognized blocking dialog', document => document.body.insertAdjacentHTML('beforeend', '<div role="dialog" aria-modal="true">Authentication required</div>')],
+    ['nonmodal known element', document => document.querySelector(config.dialogSelector)!.removeAttribute('aria-modal')],
+    ['hidden content with no promotion', document => document.querySelector(config.dialogSelector)!.remove()],
+  ];
+  it.each(invalid)('refuses %s before any native action', async (_name, alter) => {
+    await withPromotion(async ({document, page, nativeClick}) => {
+      alter(document);
+      const before = document.body.innerHTML;
+      await expect(prepareDismissiblePromotion(page, config, publicUrl, 1000)).rejects.toThrow('preparation refused');
+      expect(nativeClick).not.toHaveBeenCalled();
+      if (_name !== 'hidden button') expect(page.waitForFunction).not.toHaveBeenCalled();
+      expect(document.body.innerHTML).toBe(before);
+    });
+  });
+
+  it.each(['/authwall', '/checkpoint/challenge', '/login', '/signup/cold-join'])('stops an authentication or challenge path %s even with article DOM', async pathname => {
+    await withPromotion(async ({page, nativeClick, location}) => {
+      location.href = 'https://www.linkedin.com' + pathname;
+      location.pathname = pathname;
+      await expect(prepareDismissiblePromotion(page, config, location.href, 1000)).rejects.toThrow('authentication or challenge path');
+      expect(nativeClick).not.toHaveBeenCalled();
+    });
+  });
+
+  it.each(['URL change', 'promotion remains', 'main remains hidden', 'main remains inert', 'new blocking dialog'])
+    ('refuses incomplete native dismissal: %s', async mode => {
+      await withPromotion(async ({page, nativeClick}) => {
+        await expect(prepareDismissiblePromotion(page, config, publicUrl, 1000)).rejects.toThrow();
+        expect(nativeClick).toHaveBeenCalledTimes(1);
+      }, {afterClick: ({document, location}) => {
+        if (mode === 'URL change') {location.href = 'https://www.linkedin.com/login'; location.pathname = '/login'; return;}
+        if (mode === 'promotion remains') return;
+        document.querySelector(config.dialogSelector)!.setAttribute('hidden', '');
+        if (mode === 'main remains hidden') return;
+        document.querySelector('main')!.removeAttribute('aria-hidden');
+        if (mode === 'main remains inert') document.querySelector('main')!.setAttribute('inert', '');
+        if (mode === 'new blocking dialog') document.body.insertAdjacentHTML('beforeend', '<div role="alertdialog">Authentication required</div>');
+      }});
+    });
+});
+
+describe('coverage readiness failure diagnostics', () => {
+  const {waitForCoverageReady, readSanitizedFailureDomInPage} = require('../scripts/run-site-translation-test.cjs');
+  it('preserves raw counts and the original error while the same predicate reports each eligibility rejection', async () => {
+    const {document, window} = parseHTML('<html><body><main>' +
+      '<p id="good">A complete natural paragraph remains an eligible target.</p>' +
+      '<p id="tags">#LinkedInArticles #LinkedInMarketing #SocialMediaMarketing #JDRGroup</p>' +
+      '<div aria-hidden="true"><p id="excluded">A hidden paragraph has readable words.</p></div>' +
+      '<p id="no-rect" data-zero>A paragraph without layout still has words.</p>' +
+      '<p id="style" style="display:none">A hidden style paragraph has readable words.</p>' +
+      '<p id="natural">这段中文不属于英语正文。</p><p id="protected"><code>ORIGINAL_CODE</code></p>' +
+      '<p id="short">Short text</p></main><div id="single">Introduction</div></body></html>');
+    Object.defineProperty(window.HTMLElement.prototype, 'getBoundingClientRect', {configurable: true,
+      value(this: Element) {return {width: this.hasAttribute('data-zero') ? 0 : 400, height: 40};}});
+    const globals = {document, HTMLElement: window.HTMLElement, getComputedStyle: (node: HTMLElement) => ({
+      display: node.style.display || 'block', visibility: node.style.visibility || 'visible',
+    })};
+    const previous = new Map<string, PropertyDescriptor | undefined>();
+    for (const [name, value] of Object.entries(globals)) {
+      previous.set(name, Object.getOwnPropertyDescriptor(globalThis, name));
+      Object.defineProperty(globalThis, name, {configurable: true, writable: true, value});
+    }
+    const originalError = new Error('raw readiness timeout');
+    const page = {evaluate: vi.fn(async (fn: (input: unknown) => unknown, input: unknown) => fn(input)),
+      waitForFunction: vi.fn(async (fn: (input: unknown) => unknown, input: unknown) => {
+        expect(fn(input)).toBe(false); throw originalError;
+      })};
+    try {
+      const rules = [
+        {name: 'paragraphs', selector: 'main p', minInitial: 3, minTextLength: 15, sourceIncludes: []},
+        {name: 'fragment', selector: '#good', minInitial: 1, sourceIncludes: ['Absent required fragment']},
+        {name: 'phrase', selector: '#single', minInitial: 1, sourceIncludes: [], requiresPhrase: true},
+      ];
+      const error = await waitForCoverageReady(page, rules, 100).catch((value: Error) => value);
+      expect(error.cause).toBe(originalError);
+      expect(error.message).toContain('raw readiness timeout');
+      expect(page.waitForFunction.mock.calls[0][0]).toBe(page.evaluate.mock.calls[0][0]);
+      const [paragraphs, fragment, phrase] = error.readinessDiagnostic;
+      expect(paragraphs).toMatchObject({count: 8, eligibleCount: 2, minInitial: 3, ready: false});
+      expect(paragraphs.samples).toHaveLength(8);
+      expect(paragraphs.eligibleSamples.map((node: {index: number}) => node.index)).toEqual([0, 1]);
+      for (const [id, reason] of [['excluded', 'excluded-ancestor'], ['no-rect', 'no-rect'], ['style', 'hidden-style'],
+        ['natural', 'natural-language-false'], ['protected', 'protected-source-empty'], ['short', 'min-text-length']]) {
+        expect(paragraphs.rejected.find((node: {id: string}) => node.id === id).reasons).toContain(reason);
+      }
+      expect(fragment).toMatchObject({count: 1, eligibleCount: 1, ready: false,
+        missingSourceIncludes: ['Absent required fragment'], ruleRejections: ['source-fragment-missing'], rejected: []});
+      expect(phrase.rejected[0].reasons).toContain('requires-phrase');
+    } finally {for (const [name, descriptor] of previous) {
+      if (descriptor) Object.defineProperty(globalThis, name, descriptor); else Reflect.deleteProperty(globalThis, name);
+    }}
+  });
+
+  it('captures failure markup with native visibility intact but no form values, scripts or token attributes', () => {
+    const {document} = parseHTML('<html nonce="private-nonce"><head><script>private-script</script><style>private-style</style></head>' +
+      '<body><main aria-hidden="true"><article class="article-main"><p>Public source<br>and complete last line.</p></article></main>' +
+      '<section role="dialog" aria-modal="true"><button data-csrf="private-csrf">Dismiss</button>' +
+      '<form><input name="session_key" value="private-value"><textarea>private-textarea</textarea></form></section></body></html>');
+    const previous = Object.getOwnPropertyDescriptor(globalThis, 'document');
+    Object.defineProperty(globalThis, 'document', {configurable: true, value: document});
+    const before = document.documentElement.outerHTML;
+    try {
+      const html = readSanitizedFailureDomInPage();
+      for (const secret of ['private-nonce', 'private-script', 'private-style', 'private-csrf', 'private-value', 'private-textarea']) expect(html).not.toContain(secret);
+      expect(html).toContain('aria-hidden="true"');
+      expect(html).toContain('role="dialog"');
+      expect(html).toContain('Public source<br>and complete last line.');
+      expect(document.documentElement.outerHTML).toBe(before);
+    } finally {if (previous) Object.defineProperty(globalThis, 'document', previous); else Reflect.deleteProperty(globalThis, 'document');}
+  });
+});
+
 const {inspectFixtureTranslationParts} = require('../scripts/site-translation/fixture-translation-parts.cjs');
 const {
   COVERAGE_EXCLUDED_ANCESTORS,

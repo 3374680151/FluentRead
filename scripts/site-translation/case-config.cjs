@@ -22,6 +22,18 @@ function normalizeSelectorList(value, fallback) {
   return [...new Set(raw.map((selector) => String(selector).trim()).filter(Boolean))];
 }
 
+function normalizeDismissiblePromotion(value) {
+  if (value === undefined) return undefined;
+  const fields = ['dialogSelector', 'buttonSelector', 'contentSelector'];
+  if (!value || typeof value !== 'object' || Array.isArray(value) ||
+      Object.keys(value).length !== fields.length || Object.keys(value).some(key => !fields.includes(key)) ||
+      fields.some(key => !Object.prototype.hasOwnProperty.call(value, key) ||
+        typeof value[key] !== 'string' || !value[key].trim())) {
+    throw new Error('prepareDismissiblePromotion 必须仅声明非空字符串 dialogSelector/buttonSelector/contentSelector');
+  }
+  return Object.fromEntries(fields.map(key => [key, value[key].trim()]));
+}
+
 function normalizeSourcePartition(value) {
   if (value === undefined) return undefined;
   if (!value || typeof value !== 'object' || Array.isArray(value) ||
@@ -211,6 +223,9 @@ function normalizeCaseConfig(caseName, caseConfig) {
 
   return {
     selector: caseConfig.hoverSelector || caseConfig.selector || requiredSelectors[0],
+    ...(caseConfig.prepareDismissiblePromotion === undefined ? {} : {
+      prepareDismissiblePromotion: normalizeDismissiblePromotion(caseConfig.prepareDismissiblePromotion),
+    }),
     ...(typeof caseConfig.prepareScrollSelector === 'string' && caseConfig.prepareScrollSelector.trim()
       ? {prepareScrollSelector: caseConfig.prepareScrollSelector.trim()} : {}),
     ...(caseConfig.hoverSettleMs !== undefined ? {hoverSettleMs: caseConfig.hoverSettleMs} : {}),
@@ -233,6 +248,9 @@ function normalizeCaseConfig(caseName, caseConfig) {
 
 function collectBaseCaseConfigErrors(caseName, caseConfig, normalized = normalizeCaseConfig(caseName, caseConfig)) {
   const errors = [];
+  if (caseConfig.prepareDismissiblePromotion !== undefined && caseConfig.prepareClickText !== undefined) {
+    errors.push(`${caseName} 的 prepareDismissiblePromotion 不得与 prepareClickText 同时使用`);
+  }
   if (!['finite-page', 'initial-corpus'].includes(normalized.fullPageScope)) {
     errors.push(`${caseName} 的 fullPageScope 必须是 finite-page 或 initial-corpus`);
   }
@@ -317,6 +335,7 @@ module.exports = {
   MAX_INTERACTION_CLOSE_ATTEMPTS,
   collectBaseCaseConfigErrors,
   normalizeCaseConfig,
+  normalizeDismissiblePromotion,
   normalizeCoverageRules,
   normalizeHoverTargets,
   normalizeInteractionScenarios,

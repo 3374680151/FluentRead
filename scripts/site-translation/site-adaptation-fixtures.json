@@ -646,17 +646,56 @@
   },
   {
     "id": "linkedin-articles",
-    "url": "https://www.linkedin.com/pulse/example-article",
-    "html": "<nav id=\"navigation\"><a href=\"/settings\">Navigation remains unchanged</a></nav><article><span itemprop=\"author\" id=\"author\">User metadata remains unchanged</span><p id=\"body1\">This readable paragraph describes the behavior and provides enough context for translation. <code id=\"protected\">KEEP_ORIGINAL_TOKEN</code></p><p id=\"body2\">A second independent paragraph explains the example and should remain stable during repeated translation.</p></article>",
+    "url": "https://www.linkedin.com/pulse/authored-independent-article-example",
+    "html": "<nav id=\"navigation\"><a href=\"/settings\">Navigation remains unchanged</a></nav><main><section class=\"core-rail\"><article class=\"article-main\"><header><section><h1 id=\"title\" class=\"pulse-title\">A practical guide to readable public articles</h1><div class=\"publisher-author-card\"><a class=\"base-card__full-link\" href=\"https://www.linkedin.com/in/authored-person\"><span class=\"sr-only\">Riley Example</span></a><img alt=\"Riley Example\"><div class=\"base-main-card__info\"><h3 id=\"publisher-name\" class=\"base-main-card__title\">Riley Example</h3><div id=\"publisher-date\" class=\"base-main-card__metadata\">Published October 25, 2026</div><p id=\"publisher-bio\" class=\"base-main-card__subtitle\">This author explains accessible reading tools and practical workflows.</p></div><div class=\"base-main-card__ctas\"><a class=\"base-main-card__cta\" href=\"/signup/cold-join\">+ Follow</a></div></div></section></header><div class=\"article-main__content\"><h2 id=\"section\">A useful section heading</h2><p id=\"body-one\">A paragraph about Riley Example keeps a <a id=\"body-reference\" href=\"https://example.test/reading\">readable reference</a> and an <code id=\"protected\">KEEP_ORIGINAL_TOKEN</code> intact.</p><p id=\"body-two\">A second paragraph keeps all of its beginning, middle, and ending.<br>Another original line remains in the same complete source.</p><ul><li id=\"body-list\">An ordinary list item remains readable.</li></ul><h3 id=\"body-fake-author\" class=\"base-main-card__title\">A body heading with a nearby component class</h3><p id=\"body-fake-date\" class=\"base-main-card__metadata\">Published examples are discussed in this ordinary paragraph.</p><p id=\"body-fake-inline-meta\" class=\"inline-article-meta\">An inline metadata class alone is ordinary article prose.</p><p id=\"body-fake-aside-meta\" class=\"base-aside-card__metadata\">An aside metadata class alone is ordinary article prose.</p><p id=\"body-fake-action\"><a class=\"social-action-bar__button\" href=\"https://example.test/action-reference\">A reading reference with an action class</a></p><div class=\"publisher-author-card\"><div class=\"base-main-card__info\"><h3 id=\"body-fake-publisher\" class=\"base-main-card__title\">A quoted publisher name in body prose</h3></div></div></div><div><div class=\"inline-articles\"><h2 id=\"recommendations-heading\">Recommended reading</h2><div><div class=\"inline-article\"><a href=\"https://www.linkedin.com/pulse/authored-recommendation\"><div id=\"inline-title\" class=\"inline-article-title\">A recommendation title remains readable</div><div id=\"inline-metadata\" class=\"inline-article-meta\"><span class=\"inline-article-author\">Jordan Example</span><span class=\"inline-article-published-date\">2 years ago</span></div></a></div></div></div></div></article><div class=\"article-social-activity\"><a id=\"like-control\" class=\"social-action-bar__button\" href=\"/signup/cold-join?trk=like\"><div><span class=\"social-action-bar__button-text\">Like</span></div></a><a id=\"comment-control\" class=\"social-action-bar__button\" href=\"/signup/cold-join?trk=comment\"><span class=\"social-action-bar__button-text\">Comment</span></a><button id=\"share-control\"><span class=\"social-action-bar__button-text\">Share</span></button></div></section><section class=\"right-rail\"><a class=\"aside-article-card\" href=\"https://www.linkedin.com/pulse/authored-aside\"><div class=\"base-aside-card__info\"><h3 id=\"aside-title\" class=\"base-aside-card__title\">An aside recommendation remains readable</h3><div id=\"aside-metadata\" class=\"base-aside-card__metadata\"><span>Casey Example</span><span>3w</span></div></div></a><div><p id=\"aside-fake-metadata\" class=\"base-aside-card__metadata\">A nearby class outside an aside article card is readable.</p></div></section></main><div class=\"publisher-author-card\"><div class=\"base-main-card__info\"><h3 id=\"outside-publisher\" class=\"base-main-card__title\">An outside publisher reference</h3></div></div><div class=\"inline-articles\"><p id=\"outside-inline\" class=\"inline-article-meta\">An outside inline reference remains readable.</p></div><div class=\"article-social-activity\"><p id=\"outside-action\"><a class=\"social-action-bar__button\" href=\"https://example.test/outside\">An outside action reference remains readable</a></p></div>",
     "required": [
-      "#body1",
-      "#body2"
+      "#title",
+      "#section",
+      "#body-one",
+      "#body-two",
+      "#body-list",
+      "#publisher-bio",
+      "#body-fake-author",
+      "#body-fake-date",
+      "#body-fake-inline-meta",
+      "#body-fake-aside-meta",
+      "#body-fake-action",
+      "#body-fake-publisher",
+      "#recommendations-heading"
     ],
     "forbidden": [
       "#navigation",
-      "#protected",
-      "#author"
-    ]
+      "#publisher-name",
+      "#publisher-date",
+      "#inline-metadata",
+      "#aside-metadata",
+      "#like-control",
+      "#comment-control",
+      "#share-control",
+      "#protected"
+    ],
+    "sourceAssertions": {
+      "required": [
+        "Riley Example keeps a",
+        "readable reference",
+        "A second paragraph keeps all of its beginning, middle, and ending.",
+        "Another original line remains",
+        "This author explains accessible reading tools",
+        "A recommendation title remains readable",
+        "An aside recommendation remains readable"
+      ],
+      "forbidden": [
+        "Published October 25, 2026",
+        "Jordan Example",
+        "2 years ago",
+        "Casey Example",
+        "3w",
+        "Like",
+        "Comment",
+        "KEEP_ORIGINAL_TOKEN"
+      ]
+    },
+    "provenance": "Independently authored from the public LinkedIn Pulse publisher, recommendation and action component topology observed 2026-10-25; all text, names, paths and destinations are original. Not a copied page or live-site acceptance."
   },
   {
     "id": "seekingalpha",

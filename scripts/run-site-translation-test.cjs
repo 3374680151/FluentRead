@@ -20,6 +20,7 @@ const {
   CASES,
   collectBaseCaseConfigErrors,
   normalizeCaseConfig,
+  normalizeDismissiblePromotion,
 } = require('./site-translation/case-config.cjs');
 
 const PRODUCTION_SOURCE_ROOTS = ['src', 'entrypoints', 'components', 'public', 'styles'];
@@ -316,65 +317,77 @@ const COVERAGE_EXCLUDED_SELECTOR_LIST = [
 const COVERAGE_EXCLUDED_ANCESTORS = COVERAGE_EXCLUDED_SELECTOR_LIST.join(', ');
 const COVERAGE_PROTECTED_DESCENDANTS = [...COVERAGE_EXCLUDED_SELECTOR_LIST, 'math', 'svg'].join(', ');
 
+// Predicate and failure details share exactly the same eligibility decisions.
+function readCoverageReadinessInPage({coverageRules, excludedSelector, protectedSelector, technicalWords, diagnostics = false}) {
+  const technicalWordSet = new Set(technicalWords);
+  const naturalLanguage = value => {
+    const text = String(value || '').replace(/\s+/gu, ' ').trim();
+    if (/^https?:\/\/\S+$/iu.test(text)) return false;
+    if (!text || /^#!|^#lang\b|^<!doctype\b|^<\?xml\b/iu.test(text)) return false;
+    if (/^[a-z][a-z0-9_-]*(?:-stmt|-expr|-clause)?:\s*(?:hide|show|expand|collapse|藏起来)?$/iu.test(text)) return false;
+    const token = text.replace(/^[`'"([{]+|[`'"\])},.!?;:]+$/gu, '');
+    if (!/\s/u.test(token) && (technicalWordSet.has(token.toLowerCase()) ||
+      (/^[A-Z][A-Z0-9_-]{3,15}$/u.test(token) && !/[AEIOU]/u.test(token)))) return false;
+    const letters = text.match(/[A-Za-z]/gu)?.length || 0;
+    const cjk = text.match(/[\u3400-\u9fff]/gu)?.length || 0;
+    return letters >= 2 && letters >= cjk;
+  };
+  const sourceText = node => {
+    const clone = node.cloneNode(true);
+    clone.querySelectorAll('.fluent-read-bilingual-content, .fluent-read-loading, .fluent-read-retry-wrapper, [data-fr-translation-owned="true"]')
+      .forEach(owned => owned.remove());
+    clone.querySelectorAll('[data-fr-translation-segment="true"]').forEach(segment => segment.replaceWith(...segment.childNodes));
+    clone.querySelectorAll(protectedSelector).forEach(protectedNode => protectedNode.remove());
+    return (clone.textContent || '').replace(/\s+/gu, ' ').trim();
+  };
+  const rows = coverageRules.map(rule => {
+    const nodes = [...document.querySelectorAll(rule.selector)].map((node, index) => {
+      const text = sourceText(node), reasons = [];
+      const isHtml = node instanceof HTMLElement;
+      const excluded = node.closest(excludedSelector);
+      const artifact = node.closest('.fluent-read-bilingual-content, [data-fr-translation-owned="true"]');
+      const rect = node.getBoundingClientRect(), style = getComputedStyle(node);
+      if (!isHtml) reasons.push('not-html-element');
+      if (excluded) reasons.push('excluded-ancestor');
+      if (artifact) reasons.push('translation-artifact');
+      if (!(rect.width > 0 && rect.height > 0)) reasons.push('no-rect');
+      if (style.display === 'none' || style.visibility === 'hidden') reasons.push('hidden-style');
+      if (!text) reasons.push('protected-source-empty');
+      if (!naturalLanguage(text)) reasons.push('natural-language-false');
+      if (text.length < (rule.minTextLength || 0)) reasons.push('min-text-length');
+      if (rule.requiresPhrase && !/[\s.,:;!?()\-]/u.test(text)) reasons.push('requires-phrase');
+      return {index, tag: node.localName, id: node.id, text, sourceLength: text.length, reasons,
+        excludedAncestor: excluded ? {tag: excluded.localName, id: excluded.id, classes: excluded.className} : null,
+        rect: {width: rect.width, height: rect.height}, style: {display: style.display, visibility: style.visibility},
+        rawSample: (node.textContent || '').replace(/\s+/gu, ' ').trim().slice(0, 180)};
+    });
+    const eligible = nodes.filter(node => node.reasons.length === 0);
+    const missingSourceIncludes = rule.sourceIncludes.filter(fragment => !eligible.some(node => node.text.includes(fragment)));
+    return {name: rule.name, selector: rule.selector, nodes, eligible, missingSourceIncludes,
+      minInitial: rule.minInitial, ready: eligible.length >= rule.minInitial && missingSourceIncludes.length === 0};
+  });
+  if (!diagnostics) return rows.every(row => row.ready);
+  return rows.map(row => ({name: row.name, selector: row.selector, count: row.nodes.length,
+    samples: row.nodes.slice(0, 8).map(node => node.rawSample), eligibleCount: row.eligible.length,
+    minInitial: row.minInitial, ready: row.ready, missingSourceIncludes: row.missingSourceIncludes,
+    ruleRejections: [...(row.eligible.length < row.minInitial ? ['minimum-eligible-count'] : []),
+      ...(row.missingSourceIncludes.length ? ['source-fragment-missing'] : [])],
+    eligibleSamples: row.eligible.slice(0, 8).map(node => ({index: node.index, source: node.text.slice(0, 180)})),
+    rejected: row.nodes.filter(node => node.reasons.length).map(({text, ...node}) => ({...node, sourceSample: text.slice(0, 180)}))}));
+}
+
 async function waitForCoverageReady(page, rules, timeout) {
+  const argument = {coverageRules: rules, excludedSelector: COVERAGE_EXCLUDED_ANCESTORS,
+    protectedSelector: COVERAGE_PROTECTED_DESCENDANTS, technicalWords: [...SINGLE_TOKEN_TECHNICAL_WORDS]};
   try {
-    await page.waitForFunction(({coverageRules, excludedSelector, protectedSelector, technicalWords}) => {
-      const technicalWordSet = new Set(technicalWords);
-      const naturalLanguage = (value) => {
-        const text = String(value || '').replace(/\s+/gu, ' ').trim();
-        if (/^https?:\/\/\S+$/iu.test(text)) return false;
-        if (!text || /^#!|^#lang\b|^<!doctype\b|^<\?xml\b/iu.test(text)) return false;
-        if (/^[a-z][a-z0-9_-]*(?:-stmt|-expr|-clause)?:\s*(?:hide|show|expand|collapse|藏起来)?$/iu.test(text)) {
-          return false;
-        }
-        const token = text.replace(/^[`'"([{]+|[`'"\])},.!?;:]+$/gu, '');
-        if (!/\s/u.test(token) && (technicalWordSet.has(token.toLowerCase()) ||
-          (/^[A-Z][A-Z0-9_-]{3,15}$/u.test(token) && !/[AEIOU]/u.test(token)))) return false;
-        const letters = text.match(/[A-Za-z]/gu)?.length || 0;
-        const cjk = text.match(/[\u3400-\u9fff]/gu)?.length || 0;
-        return letters >= 2 && letters >= cjk;
-      };
-      const sourceText = (node) => {
-        const clone = node.cloneNode(true);
-        clone.querySelectorAll(
-          '.fluent-read-bilingual-content, .fluent-read-loading, .fluent-read-retry-wrapper, [data-fr-translation-owned="true"]',
-        ).forEach((owned) => owned.remove());
-        clone.querySelectorAll('[data-fr-translation-segment="true"]').forEach((segment) => {
-          segment.replaceWith(...segment.childNodes);
-        });
-        clone.querySelectorAll(protectedSelector).forEach((protectedNode) => protectedNode.remove());
-        return (clone.textContent || '').replace(/\s+/gu, ' ').trim();
-      };
-      const eligible = (node, rule) => {
-        if (!(node instanceof HTMLElement) || node.closest(excludedSelector)) return false;
-        if (node.closest('.fluent-read-bilingual-content, [data-fr-translation-owned="true"]')) return false;
-        const rect = node.getBoundingClientRect();
-        const style = getComputedStyle(node);
-        const text = sourceText(node);
-        return rect.width > 0 && rect.height > 0 && style.display !== 'none' && style.visibility !== 'hidden' &&
-          naturalLanguage(text) && text.length >= (rule.minTextLength || 0) &&
-          (!rule.requiresPhrase || /[\s.,:;!?()\-]/u.test(text));
-      };
-      return coverageRules.every((rule) => {
-        const texts = [...document.querySelectorAll(rule.selector)].filter((node) => eligible(node, rule)).map(sourceText);
-        return texts.length >= rule.minInitial &&
-          rule.sourceIncludes.every((fragment) => texts.some((text) => text.includes(fragment)));
-      });
-    }, {
-      coverageRules: rules,
-      excludedSelector: COVERAGE_EXCLUDED_ANCESTORS,
-      protectedSelector: COVERAGE_PROTECTED_DESCENDANTS,
-      technicalWords: [...SINGLE_TOKEN_TECHNICAL_WORDS],
-    }, {timeout});
+    await page.waitForFunction(readCoverageReadinessInPage, argument, {timeout});
   } catch (error) {
-    const diagnostics = await page.evaluate((coverageRules) => coverageRules.map((rule) => ({
-      name: rule.name,
-      selector: rule.selector,
-      count: document.querySelectorAll(rule.selector).length,
-      samples: [...document.querySelectorAll(rule.selector)].slice(0, 8)
-        .map((node) => (node.textContent || '').replace(/\s+/gu, ' ').trim().slice(0, 180)),
-    })), rules);
-    throw new Error(`${error.message}\ncoverageRules 页面就绪诊断：${JSON.stringify(diagnostics)}`);
+    let diagnostics;
+    try {diagnostics = await page.evaluate(readCoverageReadinessInPage, {...argument, diagnostics: true});}
+    catch (diagnosticError) {diagnostics = {status: 'unavailable', reason: diagnosticError.message};}
+    const failure = new Error(`${error.message}\ncoverageRules 页面就绪诊断：${JSON.stringify(diagnostics)}`, {cause: error});
+    failure.readinessDiagnostic = diagnostics;
+    throw failure;
   }
 }
 
@@ -1590,6 +1603,121 @@ async function waitForStableTarget(page, selector, timeout) {
     throw new Error(`${error.message}\n目标 selector 诊断：${JSON.stringify(diagnostics)}`);
   }
   await page.waitForTimeout(1000);
+}
+
+// Read-only preconditions for one native dismiss action. Accessibility attributes are never rewritten.
+function readDismissiblePromotionStateInPage({dialogSelector, buttonSelector, contentSelector, expectedUrl,
+  afterDismissal = false, waitForButton = false, diagnostics = false}) {
+  const paint = node => {
+    if (!node) return {painted: false, reasons: ['missing']};
+    const reasons = [], rect = node.getBoundingClientRect();
+    if (!node.isConnected) reasons.push('disconnected');
+    if (node.closest('[hidden]')) reasons.push('hidden-attribute');
+    if (!(rect.width > 0 && rect.height > 0)) reasons.push('no-rect');
+    for (let current = node; current; current = current.parentElement) {
+      const style = getComputedStyle(current);
+      if (style.display === 'none') reasons.push(`display:none:${current.localName}`);
+      if (['hidden', 'collapse'].includes(style.visibility)) reasons.push(`visibility:${style.visibility}:${current.localName}`);
+      if (style.opacity === '0') reasons.push(`opacity:0:${current.localName}`);
+    }
+    return {painted: reasons.length === 0, reasons, width: rect.width, height: rect.height};
+  };
+  const dialogs = [...document.querySelectorAll(dialogSelector)], buttons = [...document.querySelectorAll(buttonSelector)];
+  const contents = [...document.querySelectorAll(contentSelector)];
+  const visibleDialogs = dialogs.filter(node => paint(node).painted);
+  const blockers = [...document.querySelectorAll('dialog[open],[role="dialog"],[role="alertdialog"],[aria-modal="true"]')]
+    .filter(node => paint(node).painted);
+  const button = buttons[0], content = contents[0];
+  const contentHidden = !!content?.closest('[hidden],[inert],[aria-hidden="true"]');
+  const ariaHiddenAncestor = button?.closest('[aria-hidden="true"]');
+  const inertAncestor = button?.closest('[inert]');
+  // Native inactive promotion markup can be present before its hiding CSS settles.
+  // Only an external ancestor containing the whole known dialog may wait; no click occurs in that state.
+  const inactiveKnownPromotionAncestor = !!ariaHiddenAncestor && !!content && !inertAncestor && dialogs.length === 1 &&
+    ariaHiddenAncestor !== dialogs[0] && ariaHiddenAncestor.contains(dialogs[0]) && !ariaHiddenAncestor.contains(content);
+  const formAttributes = ['form', 'formaction', 'formmethod', 'formenctype', 'formtarget', 'formnovalidate'];
+  const state = {urlUnchanged: location.href === expectedUrl, path: location.pathname,
+    dialogCount: dialogs.length, visibleDialogCount: visibleDialogs.length, blockingDialogCount: blockers.length,
+    unrecognizedBlockingDialogs: blockers.filter(node => !visibleDialogs.includes(node)).map(node => ({tag: node.localName,
+      role: node.getAttribute('role'), ariaModal: node.getAttribute('aria-modal')})),
+    dialog: dialogs[0] ? {role: dialogs[0].getAttribute('role'), ariaModal: dialogs[0].getAttribute('aria-modal'), ...paint(dialogs[0])} : null,
+    button: {count: buttons.length, tag: button?.localName || null, insideDialog: !!button && dialogs.length === 1 && dialogs[0].contains(button),
+      typeAttribute: button?.getAttribute('type') ?? null, effectiveType: button?.type ?? null,
+      ancestorForm: !!button?.closest('form'), associatedForm: !!button?.form,
+      formAttributes: button ? formAttributes.filter(name => button.hasAttribute(name)) : [],
+      disabled: !!button && (!!button.disabled || button.hasAttribute('disabled') || button.getAttribute('aria-disabled') === 'true'),
+      inaccessibleAncestor: !!ariaHiddenAncestor || !!inertAncestor, inactiveKnownPromotionAncestor,
+      ariaHiddenAncestor: ariaHiddenAncestor ? {tag: ariaHiddenAncestor.localName, id: ariaHiddenAncestor.id} : null,
+      inertAncestor: inertAncestor ? {tag: inertAncestor.localName, id: inertAncestor.id} : null, ...paint(button)},
+    content: {count: contents.length, hasText: !!content?.textContent?.trim(), hiddenOrInertAncestor: contentHidden,
+      insideDialog: !!content && dialogs.some(dialog => dialog.contains(content)), ...paint(content)}};
+  if (diagnostics) return state;
+  const reject = reason => {throw new Error(`Dismissible promotion preparation refused: ${reason}; ${JSON.stringify(state)}`);};
+  if (!state.urlUnchanged) reject('URL changed');
+  if (/(?:^|\/)(?:authwall|login|signin|signup|checkpoint|challenge|captcha)(?:\/|$)/iu.test(location.pathname)) {
+    reject('authentication or challenge path');
+  }
+  if (state.unrecognizedBlockingDialogs.length) reject('unrecognized blocking dialog');
+  if (contents.length !== 1 || !state.content.hasText || !state.content.painted) {
+    if (afterDismissal) return false;
+    reject('public content is absent, ambiguous or not rendered');
+  }
+  // A hidden known dialog needs no action when the public article is already readable.
+  const needsDialog = visibleDialogs.length > 0 || (contentHidden && dialogs.length > 0);
+  if (needsDialog) {
+    if (dialogs.length !== 1 || visibleDialogs.length > 1 || dialogs[0].getAttribute('role') !== 'dialog' ||
+        dialogs[0].getAttribute('aria-modal') !== 'true') reject('promotion dialog is not unique and modal');
+    if (state.content.insideDialog) reject('configured content is inside the promotion');
+    if (afterDismissal) return false;
+    if (buttons.length !== 1 || !state.button.insideDialog || button.localName !== 'button' || state.button.disabled ||
+        (state.button.inaccessibleAncestor && !inactiveKnownPromotionAncestor)) reject('dismiss button is not unique, native and actionable inside the promotion');
+    const type = state.button.typeAttribute;
+    // Native LinkedIn's close button omits type. It is safe only without any associated/ancestor form.
+    if ((type !== null && type.toLowerCase() !== 'button') || state.button.ancestorForm || state.button.associatedForm ||
+        state.button.formAttributes.length) reject('dismiss button can submit/reset or belongs to a form');
+    if (inactiveKnownPromotionAncestor || !state.dialog.painted || !state.button.painted) {
+      if (waitForButton) return false;
+      reject('known promotion dismiss button is not yet active and painted');
+    }
+    return {action: 'dismiss', publicContentCount: contents.length};
+  }
+  if (contentHidden) {
+    if (afterDismissal) return false;
+    reject('public content remains hidden or inert without a known promotion');
+  }
+  return {action: 'none', publicContentCount: contents.length};
+}
+
+async function prepareDismissiblePromotion(page, config, expectedUrl, timeout) {
+  const normalized = normalizeDismissiblePromotion(config);
+  if (!normalized) return undefined;
+  const argument = {...normalized, expectedUrl}, deadline = Date.now() + timeout;
+  const remaining = () => Math.max(1, deadline - Date.now());
+  try {
+    if (!await page.evaluate(readDismissiblePromotionStateInPage, {...argument, waitForButton: true})) {
+      const painted = await page.waitForFunction(readDismissiblePromotionStateInPage,
+        {...argument, waitForButton: true}, {timeout: remaining(), polling: 100});
+      await painted?.dispose?.();
+    }
+    const before = await page.evaluate(readDismissiblePromotionStateInPage, argument);
+    if (before.action === 'none') return {status: 'not-present', nativeClicks: 0, ...normalized, url: expectedUrl};
+    if (Date.now() >= deadline) throw new Error('native preparation deadline exceeded before click');
+    await page.locator(normalized.buttonSelector).click({timeout: remaining()});
+    if (page.url() !== expectedUrl) throw new Error('URL changed after click');
+    const ready = await page.waitForFunction(readDismissiblePromotionStateInPage,
+      {...argument, afterDismissal: true}, {timeout: remaining(), polling: 100});
+    await ready?.dispose?.();
+    const after = await page.evaluate(readDismissiblePromotionStateInPage, {...argument, afterDismissal: true});
+    if (!after || after.action !== 'none' || page.url() !== expectedUrl) throw new Error('public content did not become readable');
+    return {status: 'dismissed', nativeClicks: 1, ...normalized, url: expectedUrl};
+  } catch (error) {
+    let details;
+    try {details = await page.evaluate(readDismissiblePromotionStateInPage, {...argument, diagnostics: true});}
+    catch (diagnosticError) {details = {status: 'unavailable', reason: diagnosticError.message};}
+    const failure = new Error(`Dismissible promotion preparation refused: ${error.message}\npromotion diagnostics: ${JSON.stringify(details)}`, {cause: error});
+    failure.promotionDiagnostic = details;
+    throw failure;
+  }
 }
 
 async function waitForPageContract(
@@ -3001,6 +3129,19 @@ function readFullPageFailureSnapshotInPage(targetSelector) {
   };
 }
 
+function readSanitizedFailureDomInPage() {
+  const clone = document.documentElement.cloneNode(true);
+  clone.querySelectorAll('script,noscript,style').forEach(node => node.remove());
+  clone.querySelectorAll('input').forEach(node => node.removeAttribute('value'));
+  clone.querySelectorAll('textarea').forEach(node => {node.textContent = '';});
+  for (const node of [clone, ...clone.querySelectorAll('*')]) {
+    for (const attribute of [...node.attributes]) {
+      if (/nonce|csrf|token/iu.test(attribute.name)) node.removeAttribute(attribute.name);
+    }
+  }
+  return '<!doctype html>\n' + clone.outerHTML;
+}
+
 async function completeFullPageScope({page, timeout, scrollContainer, selector, verifyUnchanged, waitForTarget,
   fullPageScope = 'finite-page'}, actions = {scrollAndWaitFullPage, settleCoverageByReveal,
   revealFullPageTarget, waitForTranslationIdle, observeCoverage}) {
@@ -3269,6 +3410,8 @@ async function main() {
   let extensionId;
   let diagnosticService = args.service;
   let controlledProvider;
+  let promotionPreparation;
+  let failureDomEvidence;
   let runtimeStarted = false;
   const attemptStartedAt = Date.now();
   try {
@@ -3341,6 +3484,14 @@ async function main() {
       // Use normal browser scrolling; never remove the site's hidden markers.
       await page.locator(args.prepareScrollSelector).first().scrollIntoViewIfNeeded({timeout: args.timeout});
       reportProgress(`页面预滚动已完成：${args.prepareScrollSelector}`);
+    }
+    if (args.prepareDismissiblePromotion) {
+      // 实站可能在早期准备后才激活推广；正常预滚动后有界等候，再检查唯一安全关闭动作。
+      await page.waitForTimeout(Math.min(2000, args.timeout));
+      runtimeDiagnostics.setPhase(`${args.case}/${args.mode}/dismissible-promotion`);
+      promotionPreparation = {status: 'started', ...args.prepareDismissiblePromotion};
+      promotionPreparation = await prepareDismissiblePromotion(page, args.prepareDismissiblePromotion, args.url, args.timeout);
+      reportProgress(`公开推广准备完成：${promotionPreparation.status}`);
     }
     const hostMathRendering = await waitForHostMathRendering(page, args.timeout);
     await waitForStableTarget(page, args.selector, args.timeout);
@@ -3422,6 +3573,7 @@ async function main() {
       case: args.case,
       mode: args.mode,
       hostMathRendering,
+      promotionPreparation,
       url: args.url,
       selector: args.selector,
       requiredSelectors: args.requiredSelectors,
@@ -3470,6 +3622,18 @@ async function main() {
       let optionsStage = 'page-selection';
       try {
         if (page && !page.isClosed()) {
+          let failureDom;
+          try {
+            const html = await page.evaluate(readSanitizedFailureDomInPage);
+            if (!expired) {
+              const file = path.join(artifactsDir, 'failure-native-dom.html');
+              fs.writeFileSync(file, html);
+              failureDom = {status: 'saved', path: file,
+                sanitization: 'scripts/styles removed; input values, textarea contents and nonce/csrf/token attributes removed; source DOM unchanged'};
+            }
+          } catch {failureDom = {status: 'unavailable', reason: 'native-dom-read-unavailable'};}
+          if (expired) return;
+          failureDomEvidence = failureDom;
           try {
             const snapshot = await page.evaluate(() => {
               const owned = (name) => `.${name}[data-fr-translation-owned="true"]`;
@@ -3506,7 +3670,7 @@ async function main() {
                 progress, requestSlotCounts: 'unavailable',
               };
             });
-            if (!expired) diagnostics.page = {status: 'available', ...snapshot};
+            if (!expired) diagnostics.page = {status: 'available', ...snapshot, failureDom};
           } catch { if (!expired) diagnostics.page.reason = 'page-read-unavailable'; }
         } else diagnostics.page.reason = 'page-unavailable';
         if (expired) return;
@@ -3638,7 +3802,11 @@ async function main() {
     const cleanupErrors = [];
     output ||= {ok: false, artifactsDir, case: args.case, mode: args.mode, url: args.url,
       launchMode: launched?.launchMode, focusPolicy: launched?.focusPolicy, windowPlacement: launched?.windowPlacement};
+    if (promotionPreparation) output.promotionPreparation = promotionPreparation;
     if (primaryError) {output.ok = false; output.error = redact(primaryError.message || primaryError);}
+    if (primaryError?.readinessDiagnostic) output.coverageReadinessDiagnostic = primaryError.readinessDiagnostic;
+    if (primaryError?.promotionDiagnostic) output.promotionDiagnostic = primaryError.promotionDiagnostic;
+    if (failureDomEvidence) output.failureNativeDom = failureDomEvidence;
     try {
       output.unload = await unloadRuntimePage(page, runtimeDiagnostics, `${args.case}/${args.mode}/unload`);
       if (output.ok && output.unload.status !== 'observed') throw new Error('未观察到目标文档卸载，不能判定本轮通过');
@@ -3697,6 +3865,8 @@ if (require.main === module) {
 
 module.exports = {
   parseArgs,
+  prepareDismissiblePromotion,
+  readDismissiblePromotionStateInPage,
   loadRuntimeDiagnostics,
   finishRuntimeDiagnostics,
   unloadRuntimePage,
@@ -3716,6 +3886,7 @@ module.exports = {
   readCoverageStatuses,
   readFullTargetReadiness,
   readFullPageFailureSnapshotInPage,
+  readSanitizedFailureDomInPage,
   waitForFullTargetReadiness,
   runFullCase,
   captureSourcePartitionLedger,
@@ -3733,6 +3904,7 @@ module.exports = {
   closeInteractionDialog,
   validateCoverageRevealStatuses,
   waitForCoverageReady,
+  readCoverageReadinessInPage,
   waitForHostMathRendering,
   observeTranslationIdleInPage,
   waitForTranslationIdle,

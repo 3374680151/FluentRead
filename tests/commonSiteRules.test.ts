@@ -7,6 +7,7 @@ import {describe, expect, it} from 'vitest';
 import {builtinSiteRulePack} from '@/src/core/site-adaptation/catalog';
 import catalogFixtures from '@/scripts/site-translation/site-adaptation-fixtures.json';
 import establishedFixtures from '@/scripts/site-translation/site-adaptation-established-fixtures.json';
+import xDeployedFixture from '@/scripts/site-translation/x-deployed-author-fixture.json';
 import {compileSiteRulePack, composeSiteAdapters} from '@/src/core/site-adaptation/compiler';
 import {createDeclarativeAdapter} from '@/src/core/translation/adapters/declarative';
 import {TranslationCandidateCore} from '@/src/core/translation/engine';
@@ -116,6 +117,109 @@ interface CatalogShape {
 }
 
 const youtubeSearch = establishedFixtures.find(fixture => fixture.id === 'youtube')!.variants![0]!;
+
+describe('X 公开帖作者与相邻 handle 组件的实站结构边界', () => {
+    const url = new URL(xDeployedFixture.url);
+    const createCore = (generic = false, currentUrl = url) => new TranslationCandidateCore({url: currentUrl,
+        adapters: generic ? [] : compileSiteRulePack(builtinSiteRulePack)});
+
+    it('通用正文已经完整可读；规则仅阻止实际作者显示名进入候选', () => {
+        const document = documentFor(xDeployedFixture.html);
+        const generic = createCore(true);
+        const genericSource = sources(generic, document).join('\n');
+        const core = createCore();
+        const source = sources(core, document).join('\n');
+        for (const id of xDeployedFixture.authorIds) {
+            const author = node(document, id);
+            expect(genericSource, id).toContain(author.textContent);
+            expect(source, id).not.toContain(author.textContent);
+            expect(core.shouldStayOriginal(author), id).toBe(true);
+            expect(core.discover(author), id).toEqual([]);
+            expect(core.resolve(author.firstChild), id).toBeNull();
+        }
+        for (const id of xDeployedFixture.bodyIds) {
+            const body = node(document, id);
+            const candidate = core.discover(document).find(item => item.element === body)!;
+            expect(candidate, id).toBeDefined();
+            expect(candidate.kind, id).toBe('content');
+            expect(candidate.reason, id).toBe('generic-readable-block');
+            expect(candidate.adapterId, id).toBeUndefined();
+            expect(core.resolve(body.firstChild)?.element, id).toBe(body);
+        }
+    });
+
+    it('正文近似组件、引用、外链、协议相对链接和缺少 handle 的样式仍可译', () => {
+        const document = documentFor(xDeployedFixture.html);
+        const core = createCore();
+        const source = sources(core, document).join('\n');
+        for (const id of xDeployedFixture.nearMissIds) {
+            const text = node(document, id);
+            expect(core.shouldStayOriginal(text), id).toBe(false);
+            expect(core.shouldIgnoreMutation(text), id).toBe(false);
+            expect(source, id).toContain(text.textContent);
+        }
+        for (const currentUrl of [new URL('https://example.test/ExampleAgency/status/12345'),
+            new URL('https://x.com.evil.test/ExampleAgency/status/12345')]) {
+            const external = createCore(false, currentUrl);
+            for (const id of xDeployedFixture.authorIds) expect(external.shouldStayOriginal(node(document, id)), id).toBe(false);
+            expect(sources(external, document).join('\n')).toContain(node(document, 'author-primary').textContent);
+        }
+        expect(createCore(false, new URL('https://twitter.com/ExampleAgency/status/12345'))
+            .shouldStayOriginal(node(document, 'author-primary'))).toBe(true);
+    });
+
+    it('快照只翻译正文槽，保护作者并保留正文链接和源 DOM', () => {
+        const document = documentFor(xDeployedFixture.html);
+        const core = createCore();
+        const post = node(document, 'post');
+        const original = post.outerHTML;
+        const author = node(document, 'author-primary');
+        const link = node(document, 'hashtag');
+        const snapshot = createTranslationSourceSnapshot(post, core.shouldStayOriginal,
+            undefined, undefined, core.shouldOmitFromTranslation);
+        const requested = snapshot.slots.map(slot => slot.source).join('\n');
+        expect(requested).not.toContain(author.textContent);
+        expect(requested).not.toContain(node(document, 'author-quote').textContent);
+        expect(requested).toContain('Readers can follow the complete explanation');
+        expect(requested).toContain('#ExampleTopic');
+        const translated = documentFor(applyTranslationsToSnapshot(snapshot,
+            snapshot.slots.map((_slot, index) => `翻译正文片段 ${index}`)));
+        expect(node(translated, 'author-primary').textContent).toBe(author.textContent);
+        expect(node(translated, 'hashtag').getAttribute('href')).toBe(link.getAttribute('href'));
+        expect(post.outerHTML).toBe(original);
+        expect(node(document, 'author-primary')).toBe(author);
+        expect(node(document, 'hashtag')).toBe(link);
+    });
+
+    it('仅作者显示名忽略 mutation，动态正文、组件失配和宿主恢复均使用当前节点', () => {
+        const document = documentFor(xDeployedFixture.html);
+        const core = createCore();
+        const adapter = compileSiteRulePack(builtinSiteRulePack).find(item => item.id === 'x')!;
+        // 关联相邻 handle 的复杂 selector 不能安全穷举属性；null 要求观察全部属性。
+        expect(adapter.observedAttributes).toBeNull();
+        const author = node(document, 'author-primary');
+        expect(core.shouldIgnoreMutation(author)).toBe(true);
+        expect(core.shouldIgnoreMutation(author.parentElement!)).toBe(false);
+        expect(core.shouldIgnoreMutation(node(document, 'body-primary').firstElementChild!)).toBe(false);
+        author.textContent = 'A changed public display name stays original';
+        expect(sources(core, document).join('\n')).not.toContain(author.textContent);
+        const added = documentFor(xDeployedFixture.dynamicHtml).body.firstElementChild!;
+        document.querySelector('main')!.appendChild(added);
+        expect(core.discover(node(document, 'author-dynamic'))).toEqual([]);
+        expect(core.shouldIgnoreMutation(node(document, 'author-dynamic'))).toBe(true);
+        expect(core.discover(node(document, 'body-dynamic')).map(item => item.element.id)).toEqual(['body-dynamic']);
+        // 当前链接不再是站内 profile 时，旧的同节点保护结果不得继续生效。
+        author.parentElement!.setAttribute('href', 'https://example.test/ordinary-reading');
+        expect(core.shouldStayOriginal(author)).toBe(false);
+        expect(core.shouldIgnoreMutation(author)).toBe(false);
+        expect(sources(core, author).join('\n')).toContain(author.textContent);
+        document.body.innerHTML = xDeployedFixture.html;
+        expect(node(document, 'author-primary')).not.toBe(author);
+        expect(core.shouldStayOriginal(node(document, 'author-primary'))).toBe(true);
+        expect(sources(core, document).join('\n')).not.toContain('A changed public display name stays original');
+        expect(core.resolve(node(document, 'body-primary').firstChild)?.element).toBe(node(document, 'body-primary'));
+    });
+});
 
 describe('YouTube 实站搜索结构的正文与元数据边界', () => {
     const url = new URL(youtubeSearch.url);

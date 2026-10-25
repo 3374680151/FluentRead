@@ -5508,7 +5508,21 @@
         "/auth/*"
       ]
     },
-    "profile": "article"
+    "profile": "article",
+    "exclude": [
+      "article.article-main > header .publisher-author-card > .base-main-card__info > .base-main-card__title",
+      "article.article-main > header .publisher-author-card > .base-main-card__info > .base-main-card__metadata",
+      "article.article-main .inline-articles .inline-article-meta",
+      "main .right-rail .aside-article-card .base-aside-card__metadata",
+      "main .article-social-activity a.social-action-bar__button"
+    ],
+    "watchIgnore": [
+      "article.article-main > header .publisher-author-card > .base-main-card__info > .base-main-card__title",
+      "article.article-main > header .publisher-author-card > .base-main-card__info > .base-main-card__metadata",
+      "article.article-main .inline-articles .inline-article-meta",
+      "main .right-rail .aside-article-card .base-aside-card__metadata",
+      "main .article-social-activity a.social-action-bar__button"
+    ]
   },
   {
     "id": "seekingalpha",

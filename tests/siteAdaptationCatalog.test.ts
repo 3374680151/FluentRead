@@ -27,6 +27,142 @@ function documentFor(html: string): Document {
 }
 
 describe('网站正文规则目录', () => {
+    it('LinkedIn 公开长文只保护身份、推荐元数据和动作链接，简介与近似类名正文继续可译', () => {
+        const fixture = fixtures.find(item => item.id === 'linkedin-articles')!;
+        const url = new URL(fixture.url);
+        const document = documentFor(fixture.html);
+        const core = new TranslationCandidateCore({url, adapters});
+        const adapter = adapterById.get(fixture.id)!;
+        const baselinePack = structuredClone(pack);
+        const baselineRule = baselinePack.rules.find(rule => rule.id === fixture.id)!;
+        delete baselineRule.exclude;
+        delete baselineRule.watchIgnore;
+        const baselineCore = new TranslationCandidateCore({url, adapters: compileSiteRulePack(baselinePack)});
+        const baselineCandidates = baselineCore.discover(document);
+        // 旧 article 模板将作者标题当作正文，通用发现也会接受推荐元数据和动作链接的文字。
+        for (const selector of ['#publisher-name', '#inline-metadata', '#aside-metadata', '#like-control', '#comment-control']) {
+            const node = document.querySelector(selector)!;
+            expect(baselineCandidates.some(candidate => candidate.element === node || node.contains(candidate.element)), selector).toBe(true);
+        }
+        expect(adapter.genericCandidatePolicy).toBe('allow');
+        const original = document.body.innerHTML;
+        const verify = () => {
+            const candidates = core.discover(document);
+            // 推荐标题和站外的近似组件仍走通用发现，不给它们虚构专站正文选择器。
+            for (const selector of [...fixture.required, '#inline-title', '#aside-title', '#aside-fake-metadata',
+                '#outside-publisher', '#outside-inline', '#outside-action']) {
+                const node = document.querySelector(selector)!;
+                expect(core.shouldStayOriginal(node), selector).toBe(false);
+                expect(candidates.some(candidate => candidate.element === node), selector).toBe(true);
+                expect(core.resolve(node.firstChild)?.element, `hover ${selector}`).toBe(node);
+                expect(adapter.shouldIgnoreMutation?.(node, {url}), `watch ${selector}`).toBe(false);
+            }
+            for (const selector of fixture.forbidden) {
+                const node = document.querySelector(selector)!;
+                expect(core.shouldStayOriginal(node), selector).toBe(true);
+                expect(candidates.some(candidate => candidate.element === node || node.contains(candidate.element)), selector).toBe(false);
+            }
+            for (const selector of ['#publisher-name', '#publisher-date', '#inline-metadata', '#aside-metadata', '#like-control', '#comment-control']) {
+                const node = document.querySelector(selector)!;
+                expect(core.resolve(node.firstChild), selector).toBeNull();
+                expect(adapter.shouldIgnoreMutation?.(node, {url}), selector).toBe(true);
+            }
+            const source = candidates.map(candidate => extractTranslationTextFromNodes(
+                candidate.nodes ?? [candidate.element], core.shouldStayOriginal)).join('\n');
+            const snapshot = createTranslationSourceSnapshot(document.body, core.shouldStayOriginal);
+            const snapshotSource = snapshot.slots.map(slot => slot.source).join('\n');
+            for (const text of fixture.sourceAssertions!.required) {
+                expect(source).toContain(text);
+                expect(snapshotSource).toContain(text);
+            }
+            for (const text of fixture.sourceAssertions!.forbidden) {
+                expect(source).not.toContain(text);
+                expect(snapshotSource).not.toContain(text);
+            }
+        };
+        verify();
+        expect(document.body.innerHTML).toBe(original);
+        document.body.innerHTML = fixture.html;
+        verify();
+    });
+
+    it('LinkedIn 元数据保护不扩展到其他主机、登录页或非长文路径', () => {
+        const fixture = fixtures.find(item => item.id === 'linkedin-articles')!;
+        const document = documentFor(fixture.html);
+        const adapter = adapterById.get(fixture.id)!;
+        const baselinePack = structuredClone(pack);
+        const baselineRule = baselinePack.rules.find(rule => rule.id === fixture.id)!;
+        delete baselineRule.exclude;
+        delete baselineRule.watchIgnore;
+        const baselineAdapters = compileSiteRulePack(baselinePack);
+        for (const raw of ['https://example.test/pulse/authored-article', 'https://uk.linkedin.com/pulse/authored-article',
+            'https://www.linkedin.com/in/authored-person', 'https://www.linkedin.com/feed/', 'https://www.linkedin.com/login',
+            'https://www.linkedin.com/signup/cold-join']) {
+            const url = new URL(raw);
+            expect(adapter.matches(url), raw).toBe(false);
+            const core = new TranslationCandidateCore({url, adapters});
+            const baselineCore = new TranslationCandidateCore({url, adapters: baselineAdapters});
+            for (const selector of ['#publisher-name', '#publisher-date', '#inline-metadata', '#aside-metadata', '#like-control', '#comment-control']) {
+                const node = document.querySelector(selector)!;
+                expect(core.shouldStayOriginal(node), `${raw} ${selector}`).toBe(baselineCore.shouldStayOriginal(node));
+            }
+            const source = core.discover(document).map(candidate => extractTranslationTextFromNodes(
+                candidate.nodes ?? [candidate.element], core.shouldStayOriginal));
+            const baselineSource = baselineCore.discover(document).map(candidate => extractTranslationTextFromNodes(
+                candidate.nodes ?? [candidate.element], baselineCore.shouldStayOriginal));
+            expect(source, raw).toEqual(baselineSource);
+        }
+    });
+
+    it('LinkedIn 新增正文、作者简介和推荐标题仍可译，重挂组件后元数据边界保持一致', () => {
+        const fixture = fixtures.find(item => item.id === 'linkedin-articles')!;
+        const url = new URL(fixture.url);
+        const document = documentFor(fixture.html);
+        const core = new TranslationCandidateCore({url, adapters});
+        const adapter = adapterById.get(fixture.id)!;
+        const paragraph = document.querySelector<HTMLElement>('#body-one')!;
+        const snapshot = createTranslationSourceSnapshot(paragraph, core.shouldStayOriginal);
+        const rendered = applyTranslationsToSnapshot(snapshot, snapshot.slots.map(() => '独立正文译文'));
+        expect(rendered).toContain('KEEP_ORIGINAL_TOKEN');
+        expect(rendered).toContain('href="https://example.test/reading"');
+        const lines = createTranslationSourceSnapshot(document.querySelector<HTMLElement>('#body-two')!, core.shouldStayOriginal);
+        expect(lines.slots.map(slot => slot.source).join('\n')).toContain('all of its beginning, middle, and ending.');
+        expect(lines.slots.map(slot => slot.source).join('\n')).toContain('Another original line remains');
+        expect(applyTranslationsToSnapshot(lines, lines.slots.map(() => '独立换行译文'))).toContain('<br');
+
+        document.querySelector('.article-main__content')!.insertAdjacentHTML('beforeend',
+            '<p id="new-body">A newly loaded paragraph retains <a href="https://example.test/new-reference">a new reading reference</a><br>and a complete final line.</p>');
+        const info = document.querySelector('article.article-main > header .publisher-author-card > .base-main-card__info')!;
+        info.insertAdjacentHTML('beforeend', '<p id="new-bio" class="base-main-card__subtitle">A newly loaded biography explains the author’s work in full.</p>');
+        document.querySelector('.inline-articles > div')!.insertAdjacentHTML('beforeend',
+            '<div class="inline-article"><a href="/pulse/new-reading"><div id="new-inline-title" class="inline-article-title">A newly loaded recommendation stays readable</div><div id="new-inline-metadata" class="inline-article-meta"><span>New Recommendation Author</span><span>1 month ago</span></div></a></div>');
+        document.querySelector('.right-rail')!.insertAdjacentHTML('beforeend',
+            '<a class="aside-article-card" href="/pulse/new-aside"><div class="base-aside-card__info"><h3 id="new-aside-title" class="base-aside-card__title">Another newly loaded article remains readable</h3><div id="new-aside-metadata" class="base-aside-card__metadata">Another Recommendation Author</div></div></a>');
+        document.querySelector('#publisher-name')!.textContent = 'Updated Publisher Name';
+        const publisher = info.parentElement!;
+        info.remove();
+        publisher.appendChild(info);
+        const candidates = core.discover(document);
+        for (const selector of ['#new-body', '#new-bio', '#new-inline-title', '#new-aside-title']) {
+            const node = document.querySelector(selector)!;
+            expect(candidates.some(candidate => candidate.element === node), selector).toBe(true);
+            expect(core.resolve(node.firstChild)?.element, selector).toBe(node);
+            expect(core.shouldStayOriginal(node), selector).toBe(false);
+            expect(adapter.shouldIgnoreMutation?.(node, {url}), selector).toBe(false);
+        }
+        for (const selector of ['#publisher-name', '#publisher-date', '#new-inline-metadata', '#new-aside-metadata']) {
+            const node = document.querySelector(selector)!;
+            expect(core.shouldStayOriginal(node), selector).toBe(true);
+            expect(adapter.shouldIgnoreMutation?.(node, {url}), selector).toBe(true);
+            expect(candidates.some(candidate => candidate.element === node || node.contains(candidate.element)), selector).toBe(false);
+        }
+        const source = candidates.map(candidate => extractTranslationTextFromNodes(
+            candidate.nodes ?? [candidate.element], core.shouldStayOriginal)).join('\n');
+        for (const text of ['A newly loaded paragraph retains', 'a new reading reference', 'and a complete final line.',
+            'A newly loaded biography explains', 'A newly loaded recommendation stays readable', 'Another newly loaded article remains readable']) expect(source).toContain(text);
+        for (const text of ['Updated Publisher Name', 'New Recommendation Author', 'Another Recommendation Author']) expect(source).not.toContain(text);
+    });
+
     it('Steam 按钮卡片中的长短评论在发现与悬浮时都由独立正文拥有，元数据和相似结构不获得正文权限', () => {
         const fixture = steamReviewFixture;
         const url = new URL(fixture.url);
