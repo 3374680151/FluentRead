@@ -378,8 +378,13 @@ describe('已提交网页译文显示切换', () => {
         expect(link.getAttribute('href')).toBe('https://example.com/after');
     });
 
-    it.each(['immediate', 'late-replay'])('安全href/title更新通过%s重放后仍能切换目标模式，无需再次访问provider', path => {
-        const {owner, state} = committed();
+    it.each([
+        ['immediate', false], ['late-replay', false], ['immediate', true], ['late-replay', true],
+    ] as const)('安全href/title更新通过%s重放后仍能切换目标模式，合成段=%s，无需再次访问provider', (path, synthetic) => {
+        const {owner, state, nodes} = committed('bilingual', {}, undefined, synthetic);
+        const controller = state.controller, generation = state.generation;
+        const neighbor = document.createElement('p'); neighbor.textContent = 'Untranslated neighbor.';
+        owner.after(neighbor);
         const original = state.sourceTextNodes![1]!.parentElement!;
         original.setAttribute('href', 'https://example.com/current'); original.setAttribute('title', 'Current');
         config.display = 0;
@@ -388,6 +393,9 @@ describe('已提交网页译文显示切换', () => {
         expect(syncTranslationDisplayMode(owner, state, 1)).toBe(true);
         expect(state.bilingualContent!.querySelector('a')!.getAttribute('href')).toBe('https://example.com/current');
         expect(state.bilingualContent!.querySelector('a')!.getAttribute('title')).toBe('Current');
+        expect(state.controller).toBe(controller); expect(state.generation).toBe(generation);
+        expect(nodes.every(node => owner.contains(node))).toBe(true);
+        expect(neighbor.textContent).toBe('Untranslated neighbor.');
     });
 
     it('真实来源变化使迟到骨架重放失败，保留宿主文本与原生命周期', () => {
