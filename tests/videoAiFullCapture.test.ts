@@ -6,12 +6,33 @@ import {
 } from '@/src/features/video-subtitle/content/video-ai/fullCapture';
 import {normalizeCompletedVideoAiSubtitleCues} from '@/src/features/video-subtitle/transcriptionCache';
 import type { VideoAiAudioChunk } from '@/src/features/video-subtitle/content/video-ai/fullCapture';
+import {VideoAiTranscriptStabilizer} from '@/src/features/video-subtitle/content/video-ai/streamingTranscript';
+import {mergeVideoAiSubtitleCues, normalizeVideoAiSubtitleTimeline} from '@/src/features/video-subtitle/content/video-ai/cueTimeline';
 
 afterEach(() => {
   vi.unstubAllGlobals();
 });
 
 describe('本地 AI 完整视频字幕合并', () => {
+  it('含标点的跨窗原文只提交新增部分，最终合并与时间轴不重复旧句尾', () => {
+    const stabilizer = new VideoAiTranscriptStabilizer({mode: 'complete'});
+    const first = stabilizer.ingest({startMs: 0, durationMs: 2000, availableAtMs: 2000, text: '早安，今天晴朗。'});
+    const second = stabilizer.ingest({startMs: 1000, durationMs: 4000, availableAtMs: 5000, text: '嗯，早安，今天晴朗。接着出发。'});
+    expect(first).toHaveLength(1);
+    expect(second).toHaveLength(1);
+    expect(second[0].text).toBe('接着出发。');
+    expect(second[0].cueId).not.toBe(first[0].cueId);
+    const merged = mergeVideoAiSubtitleCues([...first, ...second]).map(cue => {
+      if (!('availableAtMs' in cue) || typeof cue.availableAtMs !== 'number'
+        || !('spokenEndMs' in cue) || typeof cue.spokenEndMs !== 'number') {
+        throw new Error('合并字幕丢失稳定时间元数据');
+      }
+      return {...cue, availableAtMs: cue.availableAtMs, spokenEndMs: cue.spokenEndMs};
+    });
+    const finalized = normalizeVideoAiSubtitleTimeline(consolidateVideoAiFullCues(merged));
+    expect(finalized.map(cue => cue.text)).toEqual(['早安，今天晴朗。', '接着出发。']);
+  });
+
   it('完整模式只合并有校正证据的重叠句子', () => {
     const cues = consolidateVideoAiFullCues([
       {

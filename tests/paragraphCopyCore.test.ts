@@ -83,6 +83,14 @@ const a = 1;
         expect(texts.original).toBe('标题\n第一段\nconst a = 1;\n  const b = 2;\n甲\n乙');
     });
 
+    it.each(['', '<p> 说明 </p>'])('代码块在段落开头或说明之后保留首行缩进及连续空行：%s', prefix => {
+        const code = '    first line\n\n\n    fourth line';
+        const document = domFrom(`<div id="target">${prefix}<pre>${code}</pre><p> 结束 </p></div>`);
+        const root = document.getElementById('target')!;
+        expect(readParagraphTexts(root).original).toBe(`${prefix ? '说明\n' : ''}${code}\n结束`);
+        expect(readParagraphTexts(root.querySelector('pre')!).original).toBe(code);
+    });
+
     it('不重复采集嵌套在译文内部的插件节点，并忽略脚本与样式', () => {
         const document = domFrom(`<div id="target"><script>var a = 1;</script><style>.x{}</style>原文<span class="fluent-read-bilingual-content" data-fr-translation-owned="true">译文<span class="fluent-read-single-slot" data-fr-translation-owned="true" aria-label="忽略">inner</span></span></div>`);
         const texts = readParagraphTexts(document.getElementById('target')!);

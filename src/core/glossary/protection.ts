@@ -31,8 +31,13 @@ export class GlossaryPlaceholderError extends Error {
 /** 免费池在每条候选线路获胜前验证完整标记；丢失、重复或串入别段标记的结果应换线。 */
 export function validateGlossaryProtectedTokens(origin: string, result: unknown, tokens?: readonly string[]): void {
     if (!tokens?.length) return;
-    if (typeof result !== 'string' || tokens.some(token => origin.split(token).length !== result.split(token).length)
-        || [...result.matchAll(/__FRTERM_[a-z0-9_]+/giu)].some(([token]) => !origin.includes(token))) {
+    if (typeof result !== 'string' || tokens.some(token => origin.split(token).length !== result.split(token).length)) {
+        throw new GlossaryPlaceholderError();
+    }
+    // 已知完整标记后的英文属于正文；先按精确身份移除，再检查剩余的未知或损坏标记。
+    let remainder = result;
+    for (const token of tokens) remainder = remainder.replaceAll(token, '');
+    if ([...remainder.matchAll(/__FRTERM_[a-z0-9_]+/giu)].some(([token]) => !origin.includes(token))) {
         throw new GlossaryPlaceholderError();
     }
 }

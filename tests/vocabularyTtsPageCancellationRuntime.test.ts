@@ -193,6 +193,31 @@ describe('vocabulary extension-page TTS cancellation through public runtime', ()
         expect(ctx.audioContexts[0].createBufferSource.mock.results[0].value.start).toHaveBeenCalledOnce();
         expect(ctx.audioPlay).not.toHaveBeenCalled();
     });
+    it('does not decode returned audio after STOP while Web Audio is resuming', async () => {
+        const ctx = await mountBook(); ctx.clickSpeech(); await settle();
+        const context = ctx.audioContexts[0], resumed = deferred<void>();
+        context.resume.mockImplementationOnce(() => resumed.promise);
+        ctx.jobs[0].task.resolve(audio()); await settle();
+        expect(context.resume).toHaveBeenCalledTimes(2); expect(context.decodeAudioData).not.toHaveBeenCalled();
+        ctx.clickSpeech(); await settle(); resumed.resolve(); await settle();
+        expect(context.decodeAudioData).not.toHaveBeenCalled(); expect(context.createBufferSource).not.toHaveBeenCalled();
+        expect(ctx.document.querySelector('.entry-speech-status')).toBeNull();
+    });
+    it('ignores a canceled browser utterance starting during the next fallback and retains its watchdog', async () => {
+        const ctx = await mountBook(true, {mode: 'online-first', audioContext: false});
+        ctx.fetchPageAudio.mockRejectedValue(new Error('Google unavailable'));
+        ctx.clickSpeech(); await settle(); ctx.jobs[0].task.reject(new Error('Local unavailable')); await settle();
+        expect(ctx.browserSpeech).toHaveBeenCalledOnce();
+        const old = ctx.browserSpeech.mock.calls[0][0];
+        ctx.clickSpeech(); await settle(); ctx.clickSpeech(); await settle();
+        ctx.jobs[1].task.reject(new Error('Local unavailable')); await settle();
+        expect(ctx.browserSpeech).toHaveBeenCalledTimes(2);
+        old.onstart(); await settle();
+        expect(ctx.document.querySelector('.entry-speech-status')?.textContent).toBe('learning.collection.speechRequesting');
+        await vi.advanceTimersByTimeAsync(8000); await settle();
+        expect(ctx.document.querySelector('.entry-actions button.entry-icon')?.getAttribute('aria-label')).toBe('朗读原文');
+        expect(ctx.document.querySelector('.book-toast')?.textContent).toBe('learning.collection.speechBrowserNotStarted');
+    });
     it('keeps the visible speech status while offscreen reports playback progress', async () => {
         const ctx = await mountBook(); ctx.clickSpeech(); await settle();
         ctx.jobs[0].task.resolve(audio()); await settle();

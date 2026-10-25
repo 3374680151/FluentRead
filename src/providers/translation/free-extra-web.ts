@@ -5,8 +5,8 @@
  * 模块边界：不读取用户 Cookie、凭据或代理；免费链的超时、冷却和并发由上层编排负责。
  */
 import {translateFreeTextChunks} from './freeTextChunks';
-import {serializeTranslationSlots} from '@/src/core/translation/serialization';
-import {getTranslationGlossarySourceText} from '@/src/services/translation/requestSnapshot';
+import {rebuildTranslationSlots} from '@/src/core/translation/slotProtocol';
+import {getTranslationGlossarySourceSlots} from '@/src/services/translation/requestSnapshot';
 import {abortErrorFromSignal, cancelUnreadResponseBody, runtimeFetch} from '@/src/platform/http/runtime';
 import {createHttpStatusError, readJsonResponse} from '@/src/platform/http/errors';
 
@@ -188,10 +188,11 @@ export async function translateExtraFreeWebText(
             apertiumPairValidated = true;
             return output;
         };
-    const slots = getTranslationGlossarySourceText(text);
-    if (!Array.isArray(slots)) return translatePlain(text, from, to, signal, translator);
+    const slots = getTranslationGlossarySourceSlots(text);
+    if (!slots) return translatePlain(text, from, to, signal, translator);
     const translated: string[] = [];
-    for (const slot of slots) translated.push(await translatePlain(slot, from, to, signal, translator));
-    const nonce = text.match(/^___FLUENTREAD_([a-z0-9_-]+)_0_BEGIN___/iu)![1]!;
-    return serializeTranslationSlots(translated, nonce).payload;
+    for (const slot of slots.texts) translated.push(await translatePlain(slot, from, to, signal, translator));
+    const result = rebuildTranslationSlots(slots.packet, translated);
+    if (result === null) throw failure('免费网页翻译返回的文本槽结构无效', 502, 'request');
+    return result;
 }

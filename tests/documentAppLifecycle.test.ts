@@ -86,6 +86,27 @@ const walkHost = (entry: HostNode): HostNode[] => [entry, ...entry.children.flat
 const hostText = (entry: HostNode): string => (entry.text || '') + entry.children.map(hostText).join('');
 const windowTimers = new Set<ReturnType<typeof setTimeout>>();
 
+async function loadMixedPdfWithCorrection(): Promise<ParsedDocument> {
+    await state.loadFiles([file('mixed-partial-correction.pdf')]);
+    const original = state.parsedDocument;
+    const nativePage = original.binary.pages[0];
+    const nativeBlock = nativePage.blocks.find((block: any) => block.segmentIndex >= 0);
+    const mixed = markRaw({...original,
+        segments: [{id: 0, source: 'Native alpha paragraph.'}, {id: 1, source: 'Native beta paragraph.'}],
+        binary: {...original.binary, pages: [
+            {...nativePage, pageNumber: 1, scanned: true, segmentIndexes: [], blocks: []},
+            {...nativePage, pageNumber: 2, scanned: false, segmentIndexes: [0, 1], blocks: [
+                {...nativeBlock, segmentIndex: 0}, {...nativeBlock, segmentIndex: 1, y: nativeBlock.y + 30},
+            ]},
+        ]},
+    });
+    state.parsedDocument = mixed;
+    state.documentQueue[0].document = mixed;
+    state.editSegment(0, 'Human correction');
+    await flush();
+    return mixed;
+}
+
 beforeEach(async () => {
     ports.privateContext = false;
     ports.tasks = []; ports.zoomBindings = []; ports.renderPending = undefined; ports.pagePending = undefined; ports.pageProvider = undefined; ports.pageCount = 1;
@@ -1388,6 +1409,66 @@ describe('documentbinaryAudit actual DocumentApp SFC ownership', () => {
         await state.downloadBatch(); await flush();
         expect(download).toHaveBeenCalledTimes(2);
         expect(download.mock.calls.every(([, , , options]) => options?.pdfPresentation === 'layout')).toBe(true);
+    });
+
+    it('preserves a partial human correction through actual mixed-PDF OCR segment insertion without asking to restart', async () => {
+        await loadMixedPdfWithCorrection();
+        expect(state.translationComplete).toBe(false);
+        expect(state.settingsChanged).toBe(false);
+        ports.createRecognizer.mockReturnValue(async () => [{text: 'Scanned opening paragraph.', x: 5, y: 5, width: 90, height: 12}]);
+        state.requestTranslation();
+        expect(state.pendingAction).toBeNull();
+        await vi.waitFor(() => expect(state.translating).toBe(false));
+        expect(state.parsedDocument.segments.map((segment: any) => segment.source)).toEqual([
+            'Scanned opening paragraph.', 'Native alpha paragraph.', 'Native beta paragraph.',
+        ]);
+        expect(state.translatedSegments).toEqual(['译 Scanned opening paragraph.', 'Human correction', '译 Native beta paragraph.']);
+        expect(state.confirmedTranslationIds).toEqual([1]);
+        expect(ports.batch.mock.calls.flatMap(([sources]: any) => sources)).not.toContain('Native alpha paragraph.');
+    });
+
+    it.each(['pause', 'failure'] as const)('retains native corrections after mixed-PDF OCR %s and resumes them on retry', async outcome => {
+        const source = await loadMixedPdfWithCorrection();
+        const pending = deferred<ParsedDocument>();
+        ports.recognize.mockReturnValueOnce(pending.promise);
+        const running = state.startTranslation();
+        await vi.waitFor(() => expect(ports.recognize).toHaveBeenCalledOnce());
+        if (outcome === 'pause') {
+            state.pauseTranslation();
+            pending.resolve(await ports.actualRecognize(source, async () => [{text: 'Scanned opening paragraph.', x: 5, y: 5, width: 90, height: 12}]));
+        } else pending.reject(new Error('OCR unavailable'));
+        await running; await flush();
+        expect(state.parsedDocument).toBe(source);
+        expect(state.translatedSegments).toEqual(['Human correction']);
+        expect(state.confirmedTranslationIds).toEqual([0]);
+        expect(ports.batch).not.toHaveBeenCalled();
+        ports.createRecognizer.mockReturnValue(async () => [{text: 'Scanned opening paragraph.', x: 5, y: 5, width: 90, height: 12}]);
+        await state.startTranslation(); await flush();
+        expect(state.translatedSegments).toEqual(['译 Scanned opening paragraph.', 'Human correction', '译 Native beta paragraph.']);
+        expect(state.confirmedTranslationIds).toEqual([1]);
+    });
+
+    it('keeps the native correction when the inserted scan has no recognized text', async () => {
+        await loadMixedPdfWithCorrection();
+        ports.createRecognizer.mockReturnValue(async () => []);
+        await state.startTranslation(); await flush();
+        expect(state.translatedSegments).toEqual(['Human correction', '译 Native beta paragraph.']);
+        expect(state.confirmedTranslationIds).toEqual([0]);
+        expect(state.needsOcr).toBe(false);
+    });
+
+    it('clears mixed-PDF corrections only after accepting the completed-document restart confirmation', async () => {
+        await loadMixedPdfWithCorrection();
+        state.editSegment(1, 'Second human correction');
+        ports.createRecognizer.mockReturnValue(async () => [{text: 'Scanned opening paragraph.', x: 5, y: 5, width: 90, height: 12}]);
+        state.requestTranslation();
+        expect(state.pendingAction).toBe('restart');
+        expect(ports.recognize).not.toHaveBeenCalled();
+        expect(state.translatedSegments).toEqual(['Human correction', 'Second human correction']);
+        state.confirmAction();
+        await vi.waitFor(() => expect(state.translating).toBe(false));
+        expect(state.translatedSegments).toEqual(['译 Scanned opening paragraph.', '译 Native alpha paragraph.', '译 Native beta paragraph.']);
+        expect(state.confirmedTranslationIds).toEqual([]);
     });
 
     it.each(['pause', 'switch', 'reset'] as const)('clears an in-flight OCR status on %s and ignores progress from the abandoned request', async action => {

@@ -27,6 +27,23 @@ describe('普通图片按完整段落翻译', () => {
         expect(regions.some(region => region.text === 'Video tutorial')).toBe(true);
     });
 
+    it.each([
+        ["two supplementary Han", "𠀀", "𠀁", "𠀀𠀁"],
+        ["BMP then supplementary", "汉", "𠀁", "汉𠀁"],
+        ["supplementary then BMP", "𠀀", "字", "𠀀字"],
+        ["extended G Han", "𰀀", "𠀁", "𰀀𠀁"],
+        ["Latin", "alpha", "beta", "alpha beta"],
+        ["emoji", "😀", "😁", "😀 😁"],
+        ["closing punctuation", "hello", ")", "hello)"],
+        ["opening punctuation", "(", "world", "(world"],
+        ["astral then Latin", "𠀀", "word", "𠀀 word"],
+        ["Latin then astral", "word", "𠀀", "word 𠀀"],
+        ["astral then emoji", "𠀀", "😀", "𠀀 😀"],
+        ["emoji then astral", "😀", "𠀀", "😀 𠀀"]
+    ])('OCR 续行保留完整码点和两侧 CJK 边界连接策略：%s', (_name, left, right, expected) => {
+        expect(groupImageParagraphs([line(left, 0, 0), line(right, 0, 14)])[0].text).toBe(expected);
+    });
+
     it('中文换行不加入空格，英文续行、标点与断词恢复为完整句子', () => {
         expect(groupImageParagraphs([line('这是一个', 0, 0), line('完整段落。', 0, 14)])[0].text).toBe('这是一个完整段落。');
         expect(groupImageParagraphs([line('A filament-', 0, 0), line('saving mode', 0, 14), line(', with words.', 0, 28)])[0].text).toBe('A filament-saving mode, with words.');

@@ -1,7 +1,7 @@
 <!--
  * @file src/features/settings/ui/SelectionSettings.vue
  * 文件职责：作为统一划词翻译的设置入口，说明翻译卡片与按需学习，并提供即时预览。
- * 主要内容：用共享预览布局说明卡片的单词与句子效果，直接组织触发、AI 学习与朗读分区及页内导航；预览不发送请求。
+ * 主要内容：用共享预览布局说明卡片的单词与句子效果，直接组织触发、AI 学习与朗读分区及页内导航；再启用时检查保留的点选快捷键，避免静默丢失入口；预览不发送请求。
  * 模块边界：仅编辑父级配置副本，沿用 SettingsSections 的保存和快捷键校验；不建立第二份存储或调用供应商。
  -->
 <template>
@@ -33,8 +33,10 @@
 </template>
 <script setup lang="ts">
 import {computed, ref} from 'vue';
+import {ElMessage} from 'element-plus';
+import {findClickSelectionHotkeyConflict, normalizeClickSelectionHotkey} from '@/src/core/config/clickSelection';
 import {useUiI18n} from '@/src/ui/i18n';
-const {t} = useUiI18n();
+const {t, translateLegacy} = useUiI18n();
 import type {Config} from '@/src/core/config/model';
 import FeatureEnableCard from '@/src/ui/components/FeatureEnableCard.vue';
 import SettingsGroup from './components/SettingsGroup.vue';
@@ -47,6 +49,12 @@ const emit = defineEmits<{navigate: [section: string]}>();
 const sentence = ref(false);
 const previousMode = ref(props.config.selectionTranslatorMode === 'translation-only' ? 'translation-only' : 'bilingual');
 const enabled = computed({get: () => props.config.selectionTranslatorMode !== 'disabled', set: (value: boolean) => {
+  if (value && props.config.selectionClickSelectEnabled) {
+    const owner = findClickSelectionHotkeyConflict({...props.config,
+      selectionTranslatorMode: previousMode.value, disableSelectionTranslator: false},
+      normalizeClickSelectionHotkey(props.config.selectionClickSelectHotkey));
+    if (owner) {ElMessage.warning(t('quickTranslation.legacyConflictEdit', {feature: translateLegacy(owner)}));return;}
+  }
   if (!value && props.config.selectionTranslatorMode !== 'disabled') previousMode.value = props.config.selectionTranslatorMode;
   props.config.selectionTranslatorMode = value ? previousMode.value : 'disabled';
   props.config.disableSelectionTranslator = !value;

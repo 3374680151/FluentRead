@@ -6,8 +6,8 @@
  */
 import MD5 from 'crypto-js/md5';
 import {translateFreeTextChunks} from './freeTextChunks';
-import {serializeTranslationSlots} from '@/src/core/translation/serialization';
-import {getTranslationGlossarySourceText} from '@/src/services/translation/requestSnapshot';
+import {rebuildTranslationSlots} from '@/src/core/translation/slotProtocol';
+import {getTranslationGlossarySourceSlots} from '@/src/services/translation/requestSnapshot';
 import type {TranslationProviderRequest} from '@/src/services/translation/types';
 import {abortErrorFromSignal, cancelUnreadResponseBody, runtimeFetch} from '@/src/platform/http/runtime';
 import {createHttpStatusError, readJsonResponse} from '@/src/platform/http/errors';
@@ -148,12 +148,13 @@ export async function translateOfficialFreeWebText(provider: OfficialFreeWebProv
     const from = providerLanguage(provider, language(source, false));
     const to = providerLanguage(provider, language(target, true));
     if (from && from === to) return text;
-    const slots = getTranslationGlossarySourceText(text);
-    if (!Array.isArray(slots)) return translatePlain(provider, slots, from, to, signal);
+    const slots = getTranslationGlossarySourceSlots(text);
+    if (!slots) return translatePlain(provider, text, from, to, signal);
     const translated: string[] = [];
-    for (const slot of slots) translated.push(await translatePlain(provider, slot, from, to, signal));
-    const nonce = text.match(/^___FLUENTREAD_([a-z0-9_-]+)_0_BEGIN___/iu)![1]!;
-    return serializeTranslationSlots(translated, nonce).payload;
+    for (const slot of slots.texts) translated.push(await translatePlain(provider, slot, from, to, signal));
+    const result = rebuildTranslationSlots(slots.packet, translated);
+    if (result === null) throw failure();
+    return result;
 }
 
 /** 沿用免费池已冻结的语言和取消上下文，不读取独立服务配置。 */

@@ -5,6 +5,27 @@ import { getImageOcrModelLanguages, IMAGE_OCR_LANGUAGE_PACKS, IMAGE_OCR_RECOMMEN
 import { getImageTextBackgroundColor, getImageTextColor } from '@/src/features/image-translation/services/rendering';
 
 describe('图片翻译 OCR 工具', () => {
+    it.each([
+        ["two supplementary Han", "𠀀", "𠀁", "𠀀𠀁"],
+        ["BMP then supplementary", "汉", "𠀁", "汉𠀁"],
+        ["supplementary then BMP", "𠀀", "字", "𠀀字"],
+        ["extended G Han", "𰀀", "𠀁", "𰀀𠀁"],
+        ["Latin", "alpha", "beta", "alpha beta"],
+        ["emoji", "😀", "😁", "😀 😁"],
+        ["closing punctuation", "hello", ")", "hello)"],
+        ["opening punctuation", "(", "world", "(world"],
+        ["astral then Latin", "𠀀", "word", "𠀀word"],
+        ["Latin then astral", "word", "𠀀", "word𠀀"],
+        ["astral then emoji", "𠀀", "😀", "𠀀😀"],
+        ["emoji then astral", "😀", "𠀀", "😀𠀀"]
+    ])('OCR 词保留完整码点和任一 CJK 边界连接策略：%s', (_name, left, right, expected) => {
+        const words = [left, right].map((text, index) => ({text,
+            bbox: {x0: index * 11, y0: 0, x1: index * 11 + 10, y1: 10}}));
+        const input = [{paragraphs: [{lines: [{text: left + right, words,
+            bbox: {x0: 0, y0: 0, x1: 21, y1: 10}}]}]}];
+        expect(normalizeOcrLines(input).map(line => line.text)).toEqual([expected]);
+    });
+
     it('按源语言选择最小 OCR 语言集', () => {
         for (const source of ['es', 'es-ES', 'es-MX', ' ES_ar ']) expect(getOcrLanguages(source)).toEqual(['spa', 'eng']);
         expect(getOcrLanguages('esperanto')).toEqual(['chi_sim', 'chi_tra', 'eng', 'jpn']);

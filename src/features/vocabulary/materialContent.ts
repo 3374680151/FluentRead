@@ -1,7 +1,7 @@
 /**
  * @file src/features/vocabulary/materialContent.ts
  * 文件职责：在获准网页恢复本地材料的原段落或视频时间，并维护主动打开材料的阅读位置。
- * 主要内容：仅本地标识进入地址，后台核对来源后读取定位；动态内容按整页游标分片扫描，变更合并后重试；文章只沿可信阅读输入后的滚动链更新，收藏和布局变化撤销旧任务；预算不足不覆盖已有位置，关闭及卸载清理所有异步归属。
+ * 主要内容：仅本地标识进入地址，后台核对来源后读取定位；动态内容按整页游标分片扫描，变更合并后重试；文章只沿可信阅读输入后的滚动链更新，收藏和布局变化撤销旧任务及过期恢复提示；预算不足不覆盖已有位置，关闭及卸载清理所有异步归属。
  * 模块边界：使用配置公开服务与框架无关的界面翻译函数，不读取其他来源材料，不扫描或保存整页正文，不自动收藏新材料；文档恢复由文档页通过公共定位合同接入。
  */
 import {materialCapture, materialGeneration, materialResolve} from './materialClient';
@@ -88,6 +88,7 @@ export function mountMaterialContent(doc: Document, signal: AbortSignal, enabled
     };
     const load = async (id: string, resume: boolean) => {
         const owner = ++epoch; stopWaiting(); cancelReadingScroll(); active = undefined; activeGeneration = 0; lastPosition = '';
+        notice?.remove(); notice = undefined;
         const url = canonicalMaterialUrl(view.location.href);
         try {
             const [record, generation] = await Promise.all([materialResolve(id), materialGeneration()]);

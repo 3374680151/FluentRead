@@ -68,6 +68,40 @@ describe('fixed model artifacts integrity and bounded resumable cache', () => {
         expect(progress).toHaveBeenCalledWith(body.length, true); await store.download(file, new AbortController().signal, progress); expect(fetcher).toHaveBeenCalledOnce();
         await store.remove(file); expect(await store.complete(file)).toBe(false);
     });
+    it('keeps cancellation bookkeeping bounded across thousands of successful stream reads', async () => {
+        const body = new Uint8Array(2048 * 16).fill(7), file = fileFor(body), store = createModelArtifactStore('models', [file]);
+        let offset = 0;
+        const reader = {read: vi.fn(async () => {
+            if (offset === body.length) return {done: true as const, value: undefined};
+            const value = body.subarray(offset, offset + 16); offset += value.length;
+            return {done: false as const, value};
+        }), cancel: vi.fn(async () => {}), releaseLock: vi.fn()};
+        vi.stubGlobal('fetch', vi.fn(async () => ({ok: true, status: 200, headers: new Headers(), body: {getReader: () => reader}})));
+        const nativeRace = Promise.race.bind(Promise), registrations = new WeakMap<object, number>();
+        let mostRegistrations = 0;
+        // 同一个未决取消 Promise 会保留每次 race 的 reaction；只计数身份复用，不依赖 GC 或耗时。
+        const race = vi.spyOn(Promise, 'race').mockImplementation(values => {
+            const inputs = Array.from(values);
+            if (inputs.length === 2 && inputs[1] instanceof Promise) {
+                const count = (registrations.get(inputs[1]) ?? 0) + 1;
+                registrations.set(inputs[1], count); mostRegistrations = Math.max(mostRegistrations, count);
+            }
+            return nativeRace(inputs);
+        });
+        try {
+            await store.download(file, new AbortController().signal, () => {});
+            expect(reader.read).toHaveBeenCalledTimes(2049);
+            expect(new Uint8Array(await (await store.blob(file)).arrayBuffer())).toEqual(body);
+            expect(await store.complete(file)).toBe(true);
+            expect(mostRegistrations).toBeLessThanOrEqual(1);
+        } finally {race.mockRestore();}
+    });
+    it('observes synchronous transport failure even when it also cancels the owner', async () => {
+        const file = fileFor(new Uint8Array([1, 2])), store = createModelArtifactStore('models', [file]), abort = new AbortController();
+        const fetcher = vi.fn(() => {abort.abort(); throw new Error('transport revoked');}); vi.stubGlobal('fetch', fetcher);
+        await expect(store.download(file, abort.signal, () => {})).rejects.toMatchObject({name: 'AbortError'});
+        expect(fetcher).toHaveBeenCalledOnce(); expect(cache.put).not.toHaveBeenCalled();
+    });
     it('requires a valid receipt plus all actual chunks; stale/corrupt receipts cannot claim ready', async () => {
         const body = new Uint8Array([1,2]), file = fileFor(body), store = createModelArtifactStore('models', [file]);
         const receipt = `${file.url}?fluent-read-verified=${file.sha256}`, chunk = `${file.url}?fluent-read-part=0`;
@@ -128,6 +162,97 @@ describe('fixed model artifacts integrity and bounded resumable cache', () => {
         const controller = new AbortController(); controller.abort(); await expect(store.download(file, controller.signal, () => {})).rejects.toMatchObject({name: 'AbortError'});
         const during = new AbortController(); vi.stubGlobal('fetch', vi.fn(async () => {during.abort(); return new Response(body);})); await expect(store.download(file, during.signal, () => {})).rejects.toMatchObject({name: 'AbortError'});
         vi.useFakeTimers(); const fetcher = vi.fn((_url, {signal}: {signal: AbortSignal}) => new Promise<Response>((_resolve, reject) => signal.addEventListener('abort', () => reject(new Error('stalled'))))); vi.stubGlobal('fetch', fetcher);
-        const stalled = store.download(file, new AbortController().signal, () => {}); const expectation = expect(stalled).rejects.toThrow('stalled'); await vi.runAllTimersAsync(); await expectation; expect(fetcher).toHaveBeenCalledTimes(huggingFaceDownloadOrigins().length);
+        const stalled = store.download(file, new AbortController().signal, () => {}); const expectation = expect(stalled).rejects.toMatchObject({name: 'TimeoutError'}); await vi.runAllTimersAsync(); await expectation; expect(fetcher).toHaveBeenCalledTimes(huggingFaceDownloadOrigins().length);
+    });
+    it('rejects cancellation during an asynchronous cache hit instead of reporting ready', async () => {
+        const bytes = new Uint8Array([1, 2]), file = fileFor(bytes), store = createModelArtifactStore('models', [file]);
+        const controller = new AbortController(), progress = vi.fn();
+        entries.set(`${file.url}?fluent-read-verified=${file.sha256}`, new Response(JSON.stringify({size: file.size, sha256: file.sha256})));
+        entries.set(`${file.url}?fluent-read-part=0`, new Response(bytes));
+        cache.match.mockImplementation(async (key: string) => {
+            if (key.endsWith('part=0')) controller.abort();
+            return entries.get(key)?.clone();
+        });
+        await expect(store.download(file, controller.signal, progress)).rejects.toMatchObject({name: 'AbortError'});
+        expect(progress).not.toHaveBeenCalled();
+    });
+    it('switches sources at the header deadline even if fetch ignores abort and cancels its late body', async () => {
+        vi.useFakeTimers();
+        const bytes = new Uint8Array([1, 2]), file = fileFor(bytes), store = createModelArtifactStore('models', [file]);
+        let release!: (response: Response) => void;
+        const held = new Promise<Response>(resolve => {release = resolve;});
+        const fetcher = vi.fn().mockReturnValueOnce(held).mockResolvedValueOnce(new Response(bytes));
+        vi.stubGlobal('fetch', fetcher);
+        const pending = store.download(file, new AbortController().signal, () => {});
+        await vi.waitFor(() => expect(fetcher).toHaveBeenCalledOnce());
+        await vi.advanceTimersByTimeAsync(20_000);
+        expect(fetcher).toHaveBeenCalledTimes(2);
+        await pending;
+        const cancel = vi.fn();
+        release(new Response(new ReadableStream({cancel})));
+        await vi.waitFor(() => expect(cancel).toHaveBeenCalledOnce());
+        expect(await store.complete(file)).toBe(true);
+        expect(vi.getTimerCount()).toBe(0);
+    });
+    it('abandons a stalled read without waiting for cleanup and cannot write its late chunk', async () => {
+        vi.useFakeTimers();
+        const bytes = new Uint8Array([1, 2]), file = fileFor(bytes), store = createModelArtifactStore('models', [file]);
+        let release!: (value: {done: boolean; value: Uint8Array}) => void;
+        const read = vi.fn(() => new Promise<{done: boolean; value: Uint8Array}>(resolve => {release = resolve;}));
+        const reader = {read, cancel: vi.fn(() => new Promise<void>(() => {})), releaseLock: vi.fn()};
+        const fetcher = vi.fn().mockResolvedValueOnce({ok: true, status: 200, body: {getReader: () => reader}}).mockResolvedValueOnce(new Response(bytes));
+        vi.stubGlobal('fetch', fetcher);
+        const pending = store.download(file, new AbortController().signal, () => {});
+        await vi.waitFor(() => expect(read).toHaveBeenCalledOnce());
+        await vi.advanceTimersByTimeAsync(45_000);
+        expect(fetcher).toHaveBeenCalledTimes(2);
+        await pending;
+        const writes = cache.put.mock.calls.length;
+        release({done: false, value: new Uint8Array([9, 9])});
+        await Promise.resolve(); await Promise.resolve();
+        expect(cache.put).toHaveBeenCalledTimes(writes);
+        expect(reader.cancel).toHaveBeenCalledOnce();
+        expect(reader.releaseLock).toHaveBeenCalledOnce();
+        expect(await (await store.blob(file)).arrayBuffer()).toEqual(bytes.buffer);
+        expect(vi.getTimerCount()).toBe(0);
+    });
+    it('settles user cancellation immediately while fetch ignores abort and never starts fallback', async () => {
+        const file = fileFor(new Uint8Array([1, 2])), store = createModelArtifactStore('models', [file]);
+        const controller = new AbortController(), progress = vi.fn();
+        let release!: (response: Response) => void;
+        const fetcher = vi.fn(() => new Promise<Response>(resolve => {release = resolve;}));
+        vi.stubGlobal('fetch', fetcher);
+        const pending = store.download(file, controller.signal, progress);
+        const expected = expect(pending).rejects.toMatchObject({name: 'AbortError'});
+        await vi.waitFor(() => expect(fetcher).toHaveBeenCalledOnce());
+        controller.abort();
+        await expected;
+        const cancel = vi.fn();
+        release(new Response(new ReadableStream({cancel})));
+        await vi.waitFor(() => expect(cancel).toHaveBeenCalledOnce());
+        expect(fetcher).toHaveBeenCalledOnce();
+        expect(cache.put).not.toHaveBeenCalled();
+        expect(progress).not.toHaveBeenCalled();
+    });
+    it('does not read an expired source after cache opening resumes and tolerates reader cleanup failures', async () => {
+        vi.useFakeTimers();
+        const bytes = new Uint8Array([1, 2]), file = fileFor(bytes), store = createModelArtifactStore('models', [file]);
+        let reopen!: (value: typeof cache) => void;
+        const delayed = new Promise<typeof cache>(resolve => {reopen = resolve;});
+        const cachePort = cache as unknown as Cache;
+        vi.mocked(caches.open).mockResolvedValueOnce(cachePort).mockResolvedValueOnce(cachePort).mockReturnValueOnce(delayed as unknown as Promise<Cache>);
+        const reader = {read: vi.fn(), cancel: vi.fn(() => {throw new Error('cleanup unavailable');}), releaseLock: vi.fn(() => {throw new Error('lock already gone');})};
+        const fetcher = vi.fn().mockResolvedValueOnce({ok: true, status: 200, body: {getReader: () => reader}}).mockResolvedValueOnce(new Response(bytes));
+        vi.stubGlobal('fetch', fetcher);
+        const pending = store.download(file, new AbortController().signal, () => {});
+        await vi.waitFor(() => expect(caches.open).toHaveBeenCalledTimes(3));
+        await vi.advanceTimersByTimeAsync(20_000);
+        reopen(cache);
+        await pending;
+        expect(reader.read).not.toHaveBeenCalled();
+        expect(reader.cancel).toHaveBeenCalledOnce();
+        expect(reader.releaseLock).toHaveBeenCalledOnce();
+        expect(fetcher).toHaveBeenCalledTimes(2);
+        expect(await store.complete(file)).toBe(true);
     });
 });

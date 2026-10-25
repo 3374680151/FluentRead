@@ -57,7 +57,7 @@ function encodedDataBytes(source: string, decoder = 'decodeUserscriptData'): Uin
     const values = [...source.matchAll(pattern)].map(match => JSON.parse(match[1]) as string);
     expect(values.length).toBeGreaterThan(0);
     return values.map(value => {
-        expect(value.startsWith('~85:')).toBe(true);
+        expect(value).toMatch(/^~85:[0-3]/u);
         return decodeUserscriptData(value);
     });
 }
@@ -260,9 +260,7 @@ describe('userscript build gzip portability', () => {
                 const id = plugin.resolveId(`./catalog/${name}.json`, importer);
                 expect(id).not.toBeNull();
                 const source = plugin.load(id!);
-                const base64 = source?.match(/atob\("([A-Za-z0-9+/=]+)"\)/u)?.[1];
-                expect(base64).toBeTruthy();
-                const encoded = Buffer.from(base64!, 'base64');
+                const encoded = encodedDataBytes(source!)[0];
                 expect(gunzipSync(encoded)).toEqual(Buffer.from(JSON.stringify(expected)));
                 expect(JSON.parse(inflateBundledFrancData(encoded))).toEqual(expected);
             }
@@ -900,7 +898,7 @@ describe('userscript browser shim injection', () => {
         } finally {rmSync(fixture, {recursive: true, force: true});vi.unstubAllEnvs();vi.resetModules();}
     });
 
-    it('keeps all site rule JSON data intact when embedding compressed offline catalogs', () => {
+    it('keeps all site rule JSON data intact when embedding compressed offline catalogs', async () => {
         const plugin = createUserscriptCatalogCompressionPlugin() as unknown as {
             resolveId: (source: string, importer: string) => string | null;
             load: (id: string) => string | null;
@@ -910,11 +908,20 @@ describe('userscript browser shim injection', () => {
             const id = plugin.resolveId(`./catalog/${name}.json`, importer);
             expect(id).toContain('fluentread-userscript-site-catalog:');
             const moduleSource = plugin.load(id!);
-            const base64 = moduleSource?.match(/atob\("([A-Za-z0-9+/=]+)"\)/u)?.[1];
-            expect(base64).toBeTruthy();
+            const encoded = encodedDataBytes(moduleSource!)[0];
             const original = JSON.parse(readFileSync(resolve(process.cwd(), `src/core/site-adaptation/catalog/${name}.json`), 'utf8'));
-            const restored = JSON.parse(gunzipSync(Buffer.from(base64!, 'base64')).toString('utf8'));
-            expect(restored).toEqual(original);
+            expect(JSON.parse(gunzipSync(encoded).toString('utf8'))).toEqual(original);
+            const {transformWithEsbuild} = await import('vite');
+            const compiled = await transformWithEsbuild(moduleSource!, 'offline-catalog.js', {format: 'cjs', target: 'es2018'});
+            const inflate = vi.fn(inflateBundledFrancData), decode = vi.fn(decodeUserscriptData);
+            const realm = {module: {exports: {} as {default: unknown}}, require: (id: string) => {
+                if (id === '@/userscript/pakoRuntime') return {inflateWithPako: inflate};
+                if (id === '@/userscript/dataEncoding') return {decodeUserscriptData: decode};
+                throw new Error(`Unexpected catalog import: ${id}`);
+            }};
+            runInNewContext(compiled.code, realm, {timeout: 5_000});
+            expect(realm.module.exports.default).toEqual(original);
+            expect(decode).toHaveBeenCalledTimes(1);expect(inflate).toHaveBeenCalledTimes(1);
             expect(moduleSource).toContain(createHash('sha256').update(JSON.stringify(original)).digest('hex'));
         }
         expect(plugin.resolveId('./catalog/other.json', importer)).toBeNull();
@@ -1110,6 +1117,7 @@ describe('userscript lossless Unicode character data', () => {
         const original = readFileSync(dataPath, 'utf8');
         const transformed = createPlugin().transform(original, dataPath);
         expect(transformed).not.toBeNull();
+        encodedDataBytes(transformed!.code)[0];
         vi.stubGlobal('pako', {ungzip});
         try {
             const restored = restoreExports(transformed!.code, Object.keys(chineseCharacterData));
@@ -1828,6 +1836,7 @@ describe('standalone service brand paths at actual icon use', () => {
         expect(result.addWatchFile).toHaveBeenCalledTimes(1);expect(result.addWatchFile).toHaveBeenCalledWith(watchedPath);
         expect(result.source).toBeTypeOf('string');
         if (typeof result.source !== 'string') throw new Error('Expected actual brand data module');
+        encodedDataBytes(result.source)[0];
         return result.source;
     }
     async function loadAccessors(decoder = vi.fn(inflateBundledFrancData), source = positiveSource()) {
@@ -1835,11 +1844,11 @@ describe('standalone service brand paths at actual icon use', () => {
         const compiled = await transformWithEsbuild(source, 'service-brands-owner.js', {format: 'cjs', target: 'es2018'});
         const module = {exports: {} as BrandApi};
         const decode = vi.fn(decodeUserscriptData), parse = vi.fn(JSON.parse), hostData = {controlledHostData: true};
-        const realm = {module, exports: module.exports, Uint8Array, atob, JSON: {parse}, controlledHostData: hostData,
+        const realm = {module, exports: module.exports, Uint8Array, JSON: {parse}, controlledHostData: hostData,
             require: (id: string) => {
+                if (id === '@/userscript/pakoRuntime') return {inflateWithPako: decoder};
                 if (id === '@/userscript/dataEncoding') return {decodeUserscriptData: decode};
-                expect(id).toBe('@/userscript/pakoRuntime');
-                return {inflateWithPako: decoder};
+                throw new Error(`Unexpected brand import: ${id}`);
             }};
         runInNewContext(compiled.code, realm, {timeout: 5_000});
         expect(decoder).not.toHaveBeenCalled();expect(decode).not.toHaveBeenCalled();expect(parse).not.toHaveBeenCalled();

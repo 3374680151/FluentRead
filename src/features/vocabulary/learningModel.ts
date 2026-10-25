@@ -81,14 +81,6 @@ function clozeWithIndex(context: string, index: ExpressionIndex): string {
   return parts.join('');
 }
 
-/** 按统一词界挖空真实表达，支持连续中文及假名、组合字符与原文空白。 */
-export function buildVocabularyCloze(context: string, term: string): string {
-  const source = String(context || '');
-  const expression = String(term || '').trim();
-  if (!source || !expression) return '';
-  return clozeWithIndex(source, createExpressionIndex([{id: 'study', term: expression}]));
-}
-
 function studyContextWithCloze(entry: Pick<VocabularyEntry, 'term' | 'contexts'>): {context: VocabularyContext; cloze: string} | undefined {
   if (!entry.contexts.length) return;
   const index = createExpressionIndex([{id: 'study', term: entry.term}]);

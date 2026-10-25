@@ -163,7 +163,7 @@ describe('options UI composition architecture', () => {
 
   it('keeps the WXT options entrypoint as a thin app composition shell', () => {
     const entrypoint = sourceBody('entrypoints/options/main.ts')
-    expect(entrypoint).toBe("import { mountOptionsApp } from '@/src/app/options'\n\nmountOptionsApp('#app')\n")
+    expect(entrypoint).toBe("import { mountOptionsApp } from '@/src/app/options'\nimport { createPopupStartupFeedback } from '@/src/app/popup/startupFeedback'\n\nconst feedback = createPopupStartupFeedback('#app')\nvoid mountOptionsApp('#app').then(feedback.dispose, feedback.fail)\n")
     const optionsEntry = sourceBody('src/app/options/index.ts')
     const shadowPlatform = sourceBody('src/platform/shadow-ui/vue.ts')
     expect(optionsEntry).toMatch(/uiRoot\?:\s*HTMLElement\s*\|\s*null;/u)

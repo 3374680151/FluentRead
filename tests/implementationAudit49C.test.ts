@@ -958,6 +958,40 @@ describe('audit49C followup2 restore visibility during the dialog closing transi
 
 describe('audit49C followup1 cache-limit draft and authoritative configuration', () => {
     const stats = {success: true, stats: {bytes: 0, entries: 0, maxBytes: 10 * 1024 * 1024, maxEntries: 10000}};
+    it.each(['panel', 'keep-alive'] as const)('[cache-draft-owner] %s departure settles old authoritative limits without replacing a later failed draft', async reason => {
+        for (const oldOutcome of ['success', 'failure'] as const) for (const oldTiming of ['before', 'after'] as const) {
+            ports.send.mockReset();ports.patch.mockReset();ports.send.mockResolvedValue(stats);
+            const old = deferred<void>(), latest = deferred<void>();
+            ports.patch.mockReturnValueOnce(old.promise).mockReturnValueOnce(latest.promise).mockResolvedValue(undefined);
+            const page = await mount(TranslationCacheSettings, {config: normalizeConfig({}), active: true}, true);
+            const fields = () => Array.from(page.host.querySelectorAll<HTMLInputElement>('input[type="number"]')).map(field => field.value);
+            const edit = async (size: string, entries: string) => {
+                input(page.host, 'input[aria-label="settings.cache.maxSize"]', size);
+                input(page.host, 'input[aria-label="settings.cache.maxEntries"]', entries);await settle();
+            };
+            const submit = async () => {page.host.querySelector('form')!.dispatchEvent(new Event('submit', {bubbles: true, cancelable: true}));await settle();};
+            await edit('2', '300');await submit();
+            Object.assign(page.state.config as object, {translationCacheMaxBytes: 3 * 1024 * 1024, translationCacheMaxEntries: 500});await settle();
+            if (reason === 'panel') page.state.active = false;else page.shown.value = false;
+            await settle();
+            if (reason === 'panel') page.state.active = true;else page.shown.value = true;
+            await settle();expect.soft(fields()).toEqual(['3', '500']);
+            await edit('4', '600');await submit();
+            const reads = ports.send.mock.calls.length;
+            const settleOld = async () => {if (oldOutcome === 'success') old.resolve();else old.reject(new Error('old departed save'));await settle();};
+            if (oldTiming === 'before') {
+                await settleOld();expect(namedButton(page.host, 'common.save').disabled).toBe(true);
+                expect(page.host.querySelector('[role="status"]')).toBeNull();
+            }
+            latest.reject(new Error('fresh save failed'));await settle();
+            if (oldTiming === 'after') await settleOld();
+            expect.soft(fields()).toEqual(['4', '600']);
+            expect(page.host.querySelector('[role="alert"]')!.textContent).toContain('settings.cache.saveFailed');
+            expect(namedButton(page.host, 'common.save').disabled).toBe(false);expect(ports.send).toHaveBeenCalledTimes(reads);
+            await submit();expect(ports.patch.mock.calls[2][0]).toEqual({translationCacheMaxBytes: 4 * 1024 * 1024, translationCacheMaxEntries: 600});
+            page.stop();
+        }
+    });
     it('[cache-recovery] clear timeout is unconfirmed and releases the button', async () => {
         vi.useFakeTimers({toFake: ['setTimeout', 'clearTimeout', 'performance']});
         ports.send.mockResolvedValue(stats); const page = await mount(TranslationCacheSettings, {config: normalizeConfig({})});

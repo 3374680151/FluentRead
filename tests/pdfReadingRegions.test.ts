@@ -66,6 +66,16 @@ function displayMath(expression = 'λ → kernel(x) + 𝑦') {
 }
 
 describe('PDF preserved image components with unchanged text sequence', () => {
+    it.each(['empty', 'translated', 'source-only', 'source-control'] as const)('preserves %s text entries without consulting page geometry when no region exists', kind => {
+        const targets = kind === 'empty' ? [] : [text(kind === 'source-only' ? -1 : 0, rect(40, 100), kind === 'source-control' ? '\u0093' : 'First paragraph'), text(1, rect(40, 180), 'Second paragraph')];
+        const original = JSON.stringify(targets), entries = Object.freeze(targets.map(entry => Object.freeze(entry)));
+        const sourcePage = {...page([]), get blocks(): PdfDocumentBlock[] {throw new Error('No-region plans must not inspect page geometry');}};
+        const output = groupPdfReadingRegions(sourcePage, entries, new Set(kind === 'source-control' ? [0] : []));
+        expect(output).toEqual(entries); expect(output).not.toBe(entries);
+        output.forEach((entry, index) => expect(entry).toBe(entries[index]));
+        expect(JSON.stringify(entries)).toBe(original);
+    });
+
     it('joins a complete centered single-line mathematical body with its same-baseline terminal number before the unchanged body text', () => {
         for (const expression of ['λ → kernel(x) + 𝑦', '𝔇Σ ≔ 𝖲𝖾𝗍(𝐾)', 'ℳ = f(x)', 'x = 1']) {
             const fixture = displayMath(expression), original = JSON.stringify(fixture), output = group(fixture.blocks, fixture.entries);

@@ -20,10 +20,14 @@ import {
   getVisibleVideoAiCue,
   mergeVideoAiSubtitleCues,
   normalizeVideoAiSubtitleTimeline,
-  upsertVideoAiSubtitleCue,
   finalizeVideoAiCuesForPlayback,
 } from '@/src/features/video-subtitle/content/video-ai/cueTimeline';
 import { VideoAiCanceledGenerationRegistry } from '@/src/features/video-subtitle/content/video-ai/generationRegistry';
+
+
+// 使用完整识别路径现行的合并与边界规范化，不再测试已退役的逐句尾部缓存。
+const updateCueTimeline = (cues: VideoAiStabilizedCue[], cue: VideoAiStabilizedCue) =>
+  normalizeVideoAiSubtitleTimeline(mergeVideoAiSubtitleCues([...cues, cue]));
 
 describe('完成识别字幕的原文回放', () => {
   it('保留稳定身份、使用实际说话时长并清除识别和翻译等待时间', () => {
@@ -428,8 +432,8 @@ describe('本地 AI 字幕滑窗文本合并', () => {
     });
 
     let timeline: VideoAiStabilizedCue[] = [];
-    timeline = upsertVideoAiSubtitleCue(timeline, first[0]) as VideoAiStabilizedCue[];
-    timeline = upsertVideoAiSubtitleCue(timeline, continuation[0]) as VideoAiStabilizedCue[];
+    timeline = updateCueTimeline(timeline, first[0]) as VideoAiStabilizedCue[];
+    timeline = updateCueTimeline(timeline, continuation[0]) as VideoAiStabilizedCue[];
     expect(timeline).toHaveLength(1);
     expect(timeline[0].text).toBe(
       'They finished the test with a concise summary and a plan for tomorrow.',
@@ -534,8 +538,8 @@ describe('本地 AI 字幕滑窗文本合并', () => {
     });
 
     let timeline: VideoAiStabilizedCue[] = [];
-    timeline = upsertVideoAiSubtitleCue(timeline, first[0]) as VideoAiStabilizedCue[];
-    timeline = upsertVideoAiSubtitleCue(timeline, corrected[0]) as VideoAiStabilizedCue[];
+    timeline = updateCueTimeline(timeline, first[0]) as VideoAiStabilizedCue[];
+    timeline = updateCueTimeline(timeline, corrected[0]) as VideoAiStabilizedCue[];
     expect(timeline).toHaveLength(1);
     expect(timeline[0].text).toBe(
       'Inside, the team compared both models and recorded every observation.',
@@ -886,7 +890,7 @@ describe('本地 AI 字幕滑窗文本合并', () => {
     expect(outputs[1].cueId).toBe(outputs[0].cueId);
     let timeline: VideoAiStabilizedCue[] = [];
     for (const cue of outputs) {
-      timeline = upsertVideoAiSubtitleCue(timeline, cue) as VideoAiStabilizedCue[];
+      timeline = updateCueTimeline(timeline, cue) as VideoAiStabilizedCue[];
     }
     expect(timeline.map((cue) => cue.text)).toEqual([
       'Local subtitles stay synchronized with the video.',
@@ -1153,12 +1157,11 @@ describe('本地 AI 字幕时间轴稳定性', () => {
     expect(getVisibleVideoAiCue([cue], 10_799)).toBeNull();
   });
 
-  it('长期追加 cue 后历史有界，递增播放头始终选择最新可用项且不回退', () => {
+  it('完整识别的长时间轴有界，递增播放头始终选择最新可用项且不回退', () => {
     const overflowCount = 75;
-    let cues: VideoAiStabilizedCue[] = [];
-    for (let index = 0; index < VIDEO_AI_MAX_CUE_COUNT + overflowCount; index += 1) {
+    const input: VideoAiStabilizedCue[] = Array.from({length: VIDEO_AI_MAX_CUE_COUNT + overflowCount}, (_, index) => {
       const startMs = index * 1_000;
-      const cue: VideoAiStabilizedCue = {
+      return {
         startMs,
         durationMs: 900,
         text: `Bounded cue ${index} remains distinct.`,
@@ -1166,8 +1169,8 @@ describe('本地 AI 字幕时间轴稳定性', () => {
         availableAtMs: startMs + 120,
         spokenEndMs: startMs + 800,
       };
-      cues = upsertVideoAiSubtitleCue(cues, cue) as VideoAiStabilizedCue[];
-    }
+    });
+    const cues = normalizeVideoAiSubtitleTimeline(mergeVideoAiSubtitleCues(input)) as VideoAiStabilizedCue[];
 
     expect(cues).toHaveLength(VIDEO_AI_MAX_CUE_COUNT);
     expect(cues[0].cueId).toBe(`bounded-${overflowCount}`);

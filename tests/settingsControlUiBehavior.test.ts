@@ -19,11 +19,11 @@ import {options, getMultilingualTargetLanguageLabel} from '@/src/core/config/cat
 import {SENTENCE_HIGHLIGHT_STYLES} from '@/src/core/config/sentenceHighlight';
 import {getDefaultHarnessPrompt} from '@/src/core/harness/prompts';
 import {HARNESS_PROMPT_MAX_LENGTH, HARNESS_PROMPT_VARIABLES} from '@/src/core/config/harness';
-const webdav=vi.hoisted(()=>({settings:vi.fn(),clear:vi.fn(),save:vi.fn(),test:vi.fn(),confirm:vi.fn(),success:vi.fn(),status:vi.fn(),prepare:vi.fn(),prepareDelete:vi.fn(),cancel:vi.fn()}));
+const webdav=vi.hoisted(()=>({settings:vi.fn(),clear:vi.fn(),save:vi.fn(),test:vi.fn(),confirm:vi.fn(),success:vi.fn(),warning:vi.fn(),status:vi.fn(),prepare:vi.fn(),prepareDelete:vi.fn(),cancel:vi.fn()}));
 vi.mock('@/src/services/config/webDavBackupClient',()=>({webDavBackupClient:webdav}));
 vi.mock('webextension-polyfill',()=>({default:{runtime:{sendMessage:vi.fn()}}}));
 vi.mock('element-plus/es/components/alert/style/css',()=>({}));
-vi.mock('element-plus',()=>({ElAlert:{props:['title','type'],setup:(props:any)=>()=>h('p',{role:'alert','data-alert-type':props.type},props.title)},ElMessage:{success:webdav.success},ElMessageBox:{confirm:webdav.confirm}}));
+vi.mock('element-plus',()=>({ElAlert:{props:['title','type'],setup:(props:any)=>()=>h('p',{role:'alert','data-alert-type':props.type},props.title)},ElMessage:{success:webdav.success,warning:webdav.warning},ElMessageBox:{confirm:webdav.confirm}}));
 // RemoteConfigSync's public client contract is driven through child UI events; its separate lifecycle suite keeps the full transaction implementation real.
 vi.mock('@/src/features/settings/ui/RemoteConfigSync.vue',()=>({default:{props:['client'],emits:['busy'],setup:(props:any,{slots,expose,emit}:any)=>{
   const status=ref<any>(null),result=ref('');
@@ -213,4 +213,14 @@ it('requires explicit insecure-HTTP consent and clears password on the actual di
   const save=ui.host.querySelector('[data-testid="webdav-save"]')!;expect(save.hasAttribute('disabled')).toBe(true);expect(ui.host.textContent).toContain('settings.webdav.httpWarning');
   const consent=ui.host.querySelector<HTMLInputElement>('input[type="checkbox"]')!;consent.checked=true;consent.dispatchEvent(new win.Event('change',{bubbles:true}));await flush();expect(save.hasAttribute('disabled')).toBe(false);
   const password=ui.host.querySelector('#webdav-password')!;await click(ui.host.querySelector('[data-dialog-dismiss]')!);expect(ui.host.querySelector('[data-dialog]')).toBeNull();await click(ui.host.querySelector('[data-testid="webdav-setup"]')!);expect((ui.host.querySelector('#webdav-password') as HTMLInputElement).value).toBe('');expect(password.isConnected).toBe(false);
+});
+
+it('划词真实开关在停用后重读点选冲突，保留原显示方式并允许显式解除',async()=>{
+  const config=reactive(Object.assign(new Config(),{selectionTranslatorMode:'translation-only',disableSelectionTranslator:false,selectionClickSelectEnabled:true}));
+  const ui=mount(SelectionSettings,{config});const toggle=ui.host.querySelector('[role="switch"]')!;await click(toggle);
+  config.quickTranslationProfiles=[{id:'occupied',action:'section',enabled:true,hotkey:'Alt+Shift+S',service:'',model:'',targetLanguage:'',displayMode:'inherit',fullPageMode:'inherit'}];
+  await click(toggle);expect(config.selectionTranslatorMode).toBe('disabled');expect(config.disableSelectionTranslator).toBe(true);expect(webdav.warning).toHaveBeenCalled();
+  config.quickTranslationProfiles[0].enabled=false;await click(toggle);expect(config.selectionTranslatorMode).toBe('translation-only');
+  await click(toggle);config.quickTranslationProfiles[0].enabled=true;config.selectionClickSelectEnabled=false;await click(toggle);
+  expect(config.selectionTranslatorMode).toBe('translation-only');expect(config.disableSelectionTranslator).toBe(false);
 });

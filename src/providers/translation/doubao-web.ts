@@ -4,8 +4,8 @@
  * 主要内容：在单次调用内初始化并复用匿名访客、最多刷新一次失效访客，严格读取完整 SSE 译文；按 Unicode 码点分块并保护原文本槽、换行、边缘空白、取消和 HTTP 限流信息；未读错误正文立即发起取消，已锁定的 SSE reader 取消仍由其持有者结算后结束候选。
  * 模块边界：只通过 runtimeFetch 访问固定官方端点，不读取个人 Cookie、配置或持久化访客令牌；平台层把受限内部访客头转换为匿名 Cookie，调度、超时和失败换线由上层免费池负责。
  */
-import {parseTranslationSlots, serializeTranslationSlots} from '@/src/core/translation/slotProtocol';
-import {getTranslationGlossarySourceText} from '@/src/services/translation/requestSnapshot';
+import {rebuildTranslationSlots} from '@/src/core/translation/slotProtocol';
+import {getTranslationGlossarySourceSlots} from '@/src/services/translation/requestSnapshot';
 import type {TranslationProviderRequest} from '@/src/services/translation/types';
 import {abortErrorFromSignal, cancelUnreadResponseBody, runtimeFetch} from '@/src/platform/http/runtime';
 import {createHttpStatusError, createProviderCodeError, readJsonResponse} from '@/src/platform/http/errors';
@@ -250,13 +250,11 @@ export async function translateDoubaoWeb(request: TranslationProviderRequest<str
     const random = new Uint8Array(18);
     crypto.getRandomValues(random);
     const session: GuestSession = {refreshed: false, teaUuid: `${random[0]! % 9 + 1}${Array.from(random.slice(1), byte => byte % 10).join('')}`, webTabId: randomWebTabId()};
-    const slots = getTranslationGlossarySourceText(origin);
-    if (!Array.isArray(slots)) return translatePlain(slots, target, session, abortSignal);
+    const slots = getTranslationGlossarySourceSlots(origin);
+    if (!slots) return translatePlain(origin, target, session, abortSignal);
     const translations: string[] = [];
-    for (const slot of slots) translations.push(await translatePlain(slot, target, session, abortSignal));
-    const nonce = origin.match(/^___FLUENTREAD_([a-z0-9_-]+)_0_BEGIN___/iu)![1]!;
-    const packet = serializeTranslationSlots(slots, nonce);
-    const result = serializeTranslationSlots(translations, nonce).payload;
-    if (!parseTranslationSlots(packet, result)) throw incompleteTranslation();
+    for (const slot of slots.texts) translations.push(await translatePlain(slot, target, session, abortSignal));
+    const result = rebuildTranslationSlots(slots.packet, translations);
+    if (result === null) throw incompleteTranslation();
     return result;
 }

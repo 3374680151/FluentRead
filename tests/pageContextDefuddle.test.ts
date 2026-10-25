@@ -201,6 +201,28 @@ afterEach(() => {
 });
 
 describe('Defuddle page snapshot adapter', () => {
+    it('uses the window location and safely captures an empty fallback without any location or mutable attributes', async () => {
+        const clone = {textContent: '', querySelectorAll: (selector: string) => selector === '*' ? [{}, {attributes: []}] : []};
+        Object.defineProperty(globalThis, 'document', {value: {title: '', body: {cloneNode: () => clone}, querySelector: () => null}, configurable: true});
+        Object.defineProperty(globalThis, 'location', {value: undefined, configurable: true});
+        Object.defineProperty(globalThis, 'window', {value: {location: {href: 'https://example.com/window-location'}}, configurable: true});
+        expect(await getPageTranslationContext()).toBe('');
+        resetPageTranslationContextCache();
+        Object.defineProperty(globalThis, 'window', {value: {}, configurable: true});
+        expect(await getPageTranslationContext()).toBe('');
+    });
+
+    it.each(['body', 'html'] as const)('bounded capture uses the %s fallback and isolates selector failures', async fallback => {
+        const {document} = parseHTML(`<html><body data-payload="${'x'.repeat(300_000)}"><p>Fallback article</p></body></html>`);
+        installFilteredTreeWalker(document as unknown as Document);
+        if (fallback === 'html') Object.defineProperty(document, 'body', {value: null});
+        const node = document.querySelector('p')!;
+        node.matches = () => {throw new Error('controlled selector port failure');};
+        Object.defineProperty(globalThis, 'document', {value: document, configurable: true});
+        Object.defineProperty(globalThis, 'location', {value: {href: `https://example.com/bounded-${fallback}`}, configurable: true});
+        expect(await getPageTranslationContext()).toContain('Fallback article');
+        expect(constructor).not.toHaveBeenCalled();expect(parse).not.toHaveBeenCalled();
+    });
     it.each(fixtureContracts)('真实 core 提取并保留 $name 的正文语义', async ({name, assert}) => {
         const {default: RealDefuddle} = await vi.importActual<typeof import('defuddle')>('defuddle');
         const {liveDocument, snapshot, html} = installFixturePage(name);
@@ -420,6 +442,35 @@ describe('Defuddle page snapshot adapter', () => {
         expect(parse).not.toHaveBeenCalled();expect(constructor).not.toHaveBeenCalled();
     });
 
+    it.each(['whitespace', 'visible'] as const)('bounded capture clips raw %s before trimming and charges it to the budget', async kind => {
+        const source = kind === 'whitespace' ? ' '.repeat(200_000) : 'Readable '.repeat(30_000);
+        const {document} = parseHTML(`<html><body><main><p>${source}</p><p>LATER_TEXT</p></main></body></html>`);
+        installFilteredTreeWalker(document as unknown as Document);
+        Object.defineProperty(globalThis, 'document', {value: document, configurable: true});
+        Object.defineProperty(globalThis, 'location', {value: {href: 'https://example.com/raw-budget'}, configurable: true});
+        const trim = String.prototype.trim;
+        let largestInput = 0;
+        const spy = vi.spyOn(String.prototype, 'trim').mockImplementation(function (this: string) {
+            largestInput = Math.max(largestInput, this.length); return trim.call(this);
+        });
+        let context;
+        try {context = await getPageTranslationContext();} finally {spy.mockRestore();}
+        expect(largestInput).toBeLessThanOrEqual(6000);
+        expect(context).not.toContain('LATER_TEXT');
+        if (kind === 'whitespace') expect(context).toBe('');
+        else expect(context).toContain('Readable');
+        expect(constructor).not.toHaveBeenCalled();expect(parse).not.toHaveBeenCalled();
+    });
+
+    it('bounded capture counts whitespace from each text node toward one shared raw character budget', async () => {
+        const {document} = parseHTML(`<html><body data-payload="${'x'.repeat(300_000)}"><main><span>${' '.repeat(3500)}</span><span>${' '.repeat(3500)}</span><p>LATER_TEXT</p></main></body></html>`);
+        installFilteredTreeWalker(document as unknown as Document);
+        Object.defineProperty(globalThis, 'document', {value: document, configurable: true});
+        Object.defineProperty(globalThis, 'location', {value: {href: 'https://example.com/whitespace-budget'}, configurable: true});
+        expect(await getPageTranslationContext()).toBe('');
+        expect(constructor).not.toHaveBeenCalled();expect(parse).not.toHaveBeenCalled();
+    });
+
     it.each([
         ['main root', '<main contenteditable="true"><p>private draft</p></main>'],
         ['excluded ancestor', '<form><main><p>private draft</p></main></form>'],
@@ -554,5 +605,23 @@ describe('Defuddle page snapshot adapter', () => {
         expect(cachedNewA).toContain('New A context.');
         expect(cachedNewA).not.toContain('Old stale A context.');
         expect(constructor).toHaveBeenCalledTimes(2);
+    });
+    it('releases a failed extractor import so a later capture can load the module again', async () => {
+        vi.resetModules();
+        const failure = new Error('controlled extractor import failure');
+        vi.doMock('defuddle', () => {throw failure;});
+        const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+        Object.defineProperty(globalThis, 'document', {value: {title: '', body: {cloneNode: () => ({textContent: 'Safe fallback', querySelectorAll: () => []})}, querySelector: () => null}, configurable: true});
+        Object.defineProperty(globalThis, 'location', {value: {href: 'https://example.com/retry-import'}, configurable: true});
+        try {
+            const isolated = await import('@/src/services/translation/context/browser');
+            expect(await isolated.getPageTranslationContext()).toContain('Safe fallback');
+            expect(warn).toHaveBeenCalledWith('[FluentRead] readable page extraction failed; using body text:', expect.objectContaining({message: expect.stringContaining('mocking a module')}));
+            const retry = vi.fn(() => ({default: class {parse() {return {};}}}));
+            vi.doMock('defuddle', retry);
+            isolated.resetPageTranslationContextCache();
+            expect(await isolated.getPageTranslationContext()).toContain('Safe fallback');
+            expect(retry).toHaveBeenCalledOnce();expect(warn).toHaveBeenCalledOnce();
+        } finally {vi.doUnmock('defuddle');warn.mockRestore();}
     });
 });

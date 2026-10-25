@@ -10,6 +10,7 @@ import {
     serializeTranslationSlots,
 } from '@/src/core/translation/public';
 import {isForeignTranslationBoundary} from '@/src/core/translation/dom';
+import {rebuildTranslationSlots} from '@/src/core/translation/slotProtocol';
 import {
     createTranslationTextProtectionCache,
     isTranslationTextElementProtected,
@@ -17,6 +18,30 @@ import {
 } from '@/src/core/translation/text';
 
 describe('translation snapshot mapping performance', () => {
+    it('rebuilds translated slots with the original packet, including empty and whitespace values', () => {
+        const literal = '___FLUENTREAD_literal_0_BEGIN___文字___FLUENTREAD_literal_0_END___';
+        const packet = serializeTranslationSlots(['First', 'Second', 'Third'], 'fixed');
+        const original = structuredClone(packet);
+        const values = [literal, '', ' \n\t '];
+        const payload = rebuildTranslationSlots(packet, values)!;
+        expect(parseTranslationSlots(packet, payload)).toEqual(values);
+        expect(packet).toEqual(original);
+        expect(rebuildTranslationSlots(serializeTranslationSlots([]), [])).toBe('');
+        const custom = {payload: '', starts: ['<a>'], ends: ['</a>']};
+        expect(rebuildTranslationSlots(custom, ['文字'])).toBe('<a>文字</a>');
+    });
+
+    it('rejects wrong cardinality, missing ends and active markers rather than renaming the result namespace', () => {
+        const packet = serializeTranslationSlots(['First', 'Second'], 'fixed');
+        expect(rebuildTranslationSlots(packet, ['one'])).toBeNull();
+        expect(rebuildTranslationSlots({...packet, ends: []}, ['one', 'two'])).toBeNull();
+        for (const marker of [...packet.starts, ...packet.ends]) {
+            expect(rebuildTranslationSlots(packet, [`one${marker}`, 'two'])).toBeNull();
+        }
+        expect(rebuildTranslationSlots(packet, [`${packet.starts[1]}one${packet.ends[0]}`, 'two'])).toBeNull();
+        expect(rebuildTranslationSlots({payload: '', starts: [''], ends: ['</a>']}, ['one'])).toBeNull();
+    });
+
     it('共享父级已判定后仍复核普通叶子和禁译元素，下一轮读取宿主变化', () => {
         const {document} = parseHTML('<html><body><p>Source <span>inline</span><code>code</code><span translate="no">label</span></p></body></html>');
         const owner = document.querySelector('p')!;

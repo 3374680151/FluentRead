@@ -270,6 +270,38 @@ describe('bounded model runtime and explicit downloads', () => {
         await value.runtime.prepare(); await flush(); expect(await value.runtime.status()).toMatchObject({downloaded: true}); await value.runtime.remove(); expect(value.store.remove).toHaveBeenCalledTimes(6); expect(await value.runtime.status()).toMatchObject({phase: 'absent'});
         value.store.remove.mockRejectedValueOnce(new Error('disk')); await expect(value.runtime.remove()).rejects.toThrow('disk'); expect(await value.runtime.status()).toMatchObject({phase: 'error', errorCode: 'INFORMATION_HIGHLIGHT_REMOVE_FAILED'});
     });
+    it('resumes after a paused download slowly drains and merges concurrent resume requests', async () => {
+        const value = fixture(false); let drain!: () => void, downloadSignal!: AbortSignal;
+        value.store.download.mockImplementationOnce((_file, signal) => new Promise((_resolve, reject) => {
+            downloadSignal = signal; drain = () => reject(new DOMException('cancelled stream drained', 'AbortError'));
+        }));
+        await value.runtime.prepare(); await flush(); await value.runtime.pause(); expect(downloadSignal.aborted).toBe(true);
+        const first = value.runtime.prepare(), second = value.runtime.prepare(); await flush();
+        expect(value.store.download).toHaveBeenCalledOnce(); drain(); await Promise.all([first, second]); await flush();
+        expect(value.store.download).toHaveBeenCalledTimes(7); expect(await value.runtime.status()).toMatchObject({downloaded: true, phase: 'ready'});
+        value.runtime.dispose();
+    });
+    it.each(['pause', 'remove', 'dispose'] as const)('does not resurrect an old resume after a later %s intent', async operation => {
+        const value = fixture(false); let drain!: () => void;
+        value.store.download.mockImplementationOnce(() => new Promise((_resolve, reject) => {drain = () => reject(new DOMException('cancelled stream drained', 'AbortError'));}));
+        await value.runtime.prepare(); await flush(); await value.runtime.pause();
+        const resume = value.runtime.prepare(), cancelled = expect(resume).rejects.toMatchObject({name: 'AbortError'}); await flush();
+        const management = value.runtime[operation](); drain(); await management; await cancelled; await flush();
+        expect(value.store.download).toHaveBeenCalledOnce();
+        if (operation === 'dispose') await expect(value.runtime.prepare()).rejects.toThrow('DISPOSED');
+        else {await value.runtime.prepare(); await flush(); expect(value.store.download).toHaveBeenCalledTimes(7);}
+        value.runtime.dispose();
+    });
+    it.each(['pause', 'releaseWorker'] as const)('respects a %s while preparation is still reading storage', async operation => {
+        const value = fixture(false); let complete!: (ready: boolean) => void;
+        value.store.complete.mockImplementationOnce(() => new Promise<boolean>(resolve => {complete = resolve;}));
+        const preparation = value.runtime.prepare();
+        const cancelled = operation === 'pause' ? expect(preparation).rejects.toMatchObject({name: 'AbortError'}) : undefined;
+        await flush(); const management = value.runtime[operation](); complete(false); await management;
+        if (cancelled) {await cancelled; expect(value.store.download).not.toHaveBeenCalled(); await value.runtime.prepare();}
+        else await preparation;
+        await flush(); expect(value.store.download).toHaveBeenCalledTimes(6); value.runtime.dispose();
+    });
     it('cancels immediately, lets a cooperative chunk drain, reuses warm worker and releases after idle', async () => {
         const {runtime, worker, createWorker, answer} = fixture(); const controller = new AbortController();
         const task = runtime.score('a', controller.signal); await flush(); expect(createWorker).toHaveBeenCalledOnce();

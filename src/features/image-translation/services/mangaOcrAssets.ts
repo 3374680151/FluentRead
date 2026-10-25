@@ -1,7 +1,7 @@
 /**
  * @file src/features/image-translation/services/mangaOcrAssets.ts
  * 文件职责：按固定上游版本加载并缓存本地漫画识别模型，不上传漫画图片。
- * 主要内容：固定模型版本、尺寸和 SHA-256，自动选择下载来源并在断流或损坏时切换已登记的备用来源，流式显示当前下载操作的进度，失败响应及缓存立即释放未读正文；缓存已完成文件，支持校验后导入离线模型、读取状态与清除，历史来源偏好不再影响下载；删除会话期间暂缓新推理任务入队，普通识别与修补仍各自并行排队。
+ * 主要内容：固定模型版本、尺寸和 SHA-256，自动选择下载来源并在断流或损坏时切换已登记的备用来源，流式显示当前下载操作的进度，失败或取消后迟到的缓存响应立即释放未读正文，复制后取消不再摘要且不误删有效缓存；缓存已完成文件，支持校验后导入离线模型、读取状态与清除，历史来源偏好不再影响下载；删除会话期间暂缓新推理任务入队，普通识别与修补仍各自并行排队。
  * 模块边界：只处理模型数据文件，不加载远程代码、不执行 OCR、不读取用户配置；仅下载 Apache-2.0 模型数据；镜像与离线文件必须通过相同完整性校验，来源偏好不包含用户凭据。
  */
 import {modelDownloadSources} from '@/src/platform/http/modelDownloads';
@@ -101,9 +101,12 @@ export async function importMangaModel(file:File):Promise<void> {
     }
 }
 
-async function verifiedBuffer(response: Response, asset: {bytes: number; sha256: string}): Promise<ArrayBuffer> {
+async function verifiedBuffer(response: Response, asset: {bytes: number; sha256: string}, signal?: AbortSignal): Promise<ArrayBuffer> {
+    if (signal?.aborted) {cancelUnreadResponseBody(response);assertMangaOcrActive(signal);}
     if (!response.ok) {cancelUnreadResponseBody(response);throw new Error(`漫画识别模型下载失败 (${response.status})`);}
-    return verifiedArrayBuffer(await response.arrayBuffer(),asset);
+    const buffer = await response.arrayBuffer();
+    assertMangaOcrActive(signal);
+    return verifiedArrayBuffer(buffer,asset);
 }
 
 async function verifiedArrayBuffer(buffer:ArrayBuffer,asset:{bytes:number;sha256:string}):Promise<ArrayBuffer> {
@@ -118,9 +121,10 @@ export async function loadMangaInpaintAsset(signal?: AbortSignal,onProgress?:(by
     assertMangaOcrActive(signal);
     const owner = ++nextDownloadRequest;
     const cache = await caches.open(MANGA_OCR_CACHE), asset = MANGA_INPAINT_ASSET;
+    assertMangaOcrActive(signal);
     const cached = await cache.match(asset.url);
     if (cached) {
-        try {const buffer = await verifiedBuffer(cached, asset); assertMangaOcrActive(signal); return buffer;}
+        try {const buffer = await verifiedBuffer(cached, asset, signal); assertMangaOcrActive(signal); return buffer;}
         catch (error) {assertMangaOcrActive(signal); await cache.delete(asset.url);}
     }
     const buffer = await downloadAsset(asset.url,asset,owner,signal,onProgress);
@@ -142,8 +146,8 @@ export async function loadMangaOcrAssets(signal?: AbortSignal, onProgress?: (per
         const cached = await cache.match(url);
         let buffer: ArrayBuffer | undefined;
         if (cached) {
-            try { buffer = await verifiedBuffer(cached, asset); }
-            catch { await cache.delete(url); }
+            try { buffer = await verifiedBuffer(cached, asset, signal); }
+            catch { assertMangaOcrActive(signal); await cache.delete(url); }
         }
         assertMangaOcrActive(signal);
         if (!buffer) {

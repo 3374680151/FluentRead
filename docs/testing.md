@@ -118,6 +118,8 @@ GitHub 仓库列表和 Issue 列表同时保留旧容器与当前结构的保护
 
 ## 网页个人校订
 
+`personalCorrectionUiRuntime` 还覆盖同一个译文节点反复失效与重译：旧观察器退出时必须释放节点身份，重新选中后继续观察原文变化，旧观察器的排队回调不能关闭新卡片。
+
 `personalCorrectionMemory`、`personalCorrectionDom`、`personalCorrectionTranslation`、`personalCorrectionComposition` 和三组 `personalCorrectionUi` 测试覆盖确认后保存、版本竞争、范围与语言隔离、近似候选、冲突拒绝自动复用、取消、节点归属、项目显式加入、编辑、删除与撤销；实际 Vue 模板检查语言信息归入页签栏、范围选择归入底部操作栏，以及范围帮助的悬停、键盘聚焦、Escape 收起与卸载清理。新增执行模块纳入严格四维覆盖率。
 
 生产 Chrome 扩展构建后运行 `node scripts/testing/run-personal-corrections-test.cjs --extension-dir .output/chrome-mv3 --playwright-root <捆绑 Node 包目录> --focus-safe-helper <focus-safe-browser.cjs 路径> --artifacts-dir <证据目录> --real-url https://example.com`。脚本使用第二屏临时 Edge 后台窗口和可信输入，翻译响应为确定性 Google 夹具；网页、双语渲染、后台消息和加密存储使用生产实现。验证原句重复复用时零额外 provider 请求、近似句只作草稿、两种语言与标题语境隔离、材料/项目范围、恢复重译、公共缓存隔离、页签栏右侧语言与底部紧凑范围的实际几何、范围帮助的真实悬停/焦点与 390px 提示边界、焦点恢复，保存 JSON、DOM 和截图。此证据不代表在线译文质量或 Firefox 实机验收。
@@ -127,6 +129,30 @@ GitHub 仓库列表和 Issue 列表同时保留旧容器与当前结构的保护
 播放器菜单和字幕外观设置共用 `videoSubtitleAppearance.bilingualOrder`，默认原文在上；切换只重排原文、读音和译文，读音始终紧跟原文，单语显示与字幕下载顺序保持各自语义。`videoSubtitleAppearance`、`videoSubtitleAppearanceSettingsLifecycle`、`videoUiI18n`、`videoSubtitleTrackPriorityRuntime`、`videoCaptionPlatformRuntime` 和 `videoNativeFullscreen` 覆盖归一化、持久化、即时更新、缓存/节点保留、单语和原生轨道选择。
 
 生产 Chrome 构建后，运行 `node scripts/testing/run-video-menu-ui-test.cjs --suite subtitle-order --extension-dir .output/chrome-mv3 --playwright-root <Node包目录> --focus-safe-helper scripts/testing/focus-safe-browser.cjs --runtime-diagnostics <浏览器测试技能>/scripts/runtime-diagnostics.cjs --artifacts-dir <证据目录>`。专项在第二屏临时 Edge 后台正常窗口中验证真实点击和键盘切换、字幕上下几何、无重复翻译请求、刷新后偏好、单语显示、390/320px 菜单与外部配置同步，并保存截图及运行时诊断。网页、媒体、原字幕和翻译响应使用确定性夹具，不代表原站、在线服务、Firefox 或 Safari 系统全屏实机验收。
+
+## 实现审计：取消、恢复与热路径
+
+`apiKeyRotation` 验证单密钥、无密钥和关闭轮询时的取消终态，凭据回显脱敏，以及无敏感元数据时保留原错误类和恢复标记。`informationHighlightArtifacts` 验证缓存命中期间取消、无视取消的连接或流读取、迟到响应释放和超时来源禁止回写；`documentHistory` 与 `documentHistoryCommitter` 验证 blocked/timeout 后的迟到连接释放、恢复连接与旧事件隔离。模型等待使用受控 transport，不能代替真实大文件或 CDN 下载验收。
+
+模型流的取消等待还覆盖 2,048 个连续数据块及 EOF：保留实际字节与 SHA-256 校验，确认不会让同一个未决取消 Promise 累积所有读取的回调；操作计数不能替代真实浏览器堆内存测量。`personalCorrectionMemory` 验证清理后的迟到广播、扩展运行时撤销后的安全注销、注册失败和注册期间取消，始终使用注册时的事件对象完成本地清理。
+
+`freeWebProviders` 与 `serializationPerformance` 验证七类免费适配器沿用原包槽位边界：原文中的字面标记、空槽和空白必须保留，译文注入活动标记则拒绝结果，不能重新猜测或更换命名空间。HTTP/SSE 响应使用受控夹具，不代表在线服务验收。`offscreenMessageRouter` 验证取消后不再读取、编码迟到音频或格式化迟到错误；正常响应仍按原协议结算一次。
+
+`informationHighlightBackend` 验证暂停后的立即恢复会等待旧下载排空，后续暂停、删除和销毁能撤销旧恢复意图。`informationHighlightContent` 验证同一 Text 节点的数据重分配、同值重写及改回原文后重建绘制位置，同时保留评分缓存和未变化滚动的 Range 身份；原生 Range 的真实变更另以临时 Edge 对照夹具验证。`documentAppLifecycle` 和 `pdfOcr` 验证混合 PDF 补入扫描段落后，按原页、块位置及原文迁移已有译文和人工确认；重复原句不能跨块误配，取消与识别失败保留原状态，明确重译才清空确认。
+
+`contentUiRuntime` 通过真实 feature registry 和悬浮球 runtime 验证宿主被页面移除后释放旧订阅并重建、旧排队回调隔离、停用后的迟到挂载移除与再次启用恢复；单纯替换 body 保留原实例。Shadow UI 工厂与组件端口在该测试中受控，不等于真实 Vue 挂载或网站验收。
+
+`popupBootstrap` 验证设置页等待配置及界面资源时的退出与水合状态复核；阻止迟到挂载后，启动失败仍须由真实入口消费拒绝并提供手动恢复提示，不能留下空白页。`pageDiscourseContext` 验证候选本身就是文章或正文根时不读取根外兄弟和文档标题；请求等待期间移入另一材料须拒绝旧依据，同一材料内的合法移动继续有效。
+
+`documentTextWrappedParagraphs` 验证补充平面汉字与普通汉字之间的固定宽度折行，覆盖 LF、CRLF、CR、边界空白及 Latin/emoji 对照，导出原文保持不变。`pdfReadingRegions` 与实际阅读计划消费者验证纯文本计划无保留区域时直接保留条目身份和顺序，不访问区域几何；操作计数只说明跳过的计算，不代表实际 PDF 渲染耗时。
+
+`materialSource` 验证主动收藏新材料时立即清理旧恢复失败提示。`translationStatsAggregation`、`modelUsageAggregation` 与 `usageDashboardLifecycle` 验证已有记录起点（含 null 和 0）不再触发额外全量起点扫描，缺省时逐项归约而不展开无界函数实参；稀疏直方图的零或负分位数也须返回有限下界。大数组属于纯聚合合同测试，不能据此声称正常有界存储曾发生界面崩溃。
+
+`vocabularyReencounterLifecycle` 通过真实 feature registry 验证消息订阅失败时回滚、恢复后重试、注册期间失效和卸载后的排队通知；扫描器和消息端口受控。`vocabularyTtsPageCancellationRuntime` 挂载真实收藏组件，验证停止后不解码等待恢复的音频、旧浏览器话语的开始事件不影响下一次朗读及超时保护；音频设备、浏览器语音与供应商仍是受控端口。
+
+`inputBox` 与 `inputTranslationContentFeature` 覆盖 fieldset 继承禁用、首个 legend 例外、响应前再次检查及提示定位的按帧合并与卸载清理。`videoCaptionPlatformRuntime` 保证失败句 A→B→A 在退避期内仍可手动重试；`videoPretranslationController` 检查换句不重绑原生字幕监听，轨道增删只操作变化项。`paragraphCopyCore` 验证复制代码时保留首行缩进及内部空行。
+
+`emojiLiterals` 对简单 emoji 检查零分段器构造，复杂字素每次扫描只构造一次；`harnessMemoryRecall` 用 200 条学习笔记检查无检索信息的查询不构建搜索投影，并保留偏好排序和每次重读。操作计数和 Node 微基准只证明所测计算减少，不代表页面帧率、输入延迟、实机内存或全项目无缺陷。函数索引、人工审查与实际行为验证须分别记录，未审函数不能因类型检查或测试总数而视为审查完成。
 
 ## 视频完整句学习
 

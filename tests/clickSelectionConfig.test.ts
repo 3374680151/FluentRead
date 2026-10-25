@@ -6,6 +6,7 @@ import {
     isClickSelectionAvailable,
     matchesClickSelectionShortcut,
     normalizeClickSelectionHotkey,
+    resolveReservedClickSelectionHotkey,
 } from '@/src/core/config/clickSelection';
 
 function enabled(): Config {
@@ -17,6 +18,16 @@ function keyboardEvent(extra: Record<string, unknown> = {}): KeyboardEvent {
 }
 
 describe('两点选取配置与快捷键归属', () => {
+    it('设置保留点选组合不随插件暂停释放，实际点选或划词停用才释放', () => {
+        const config = {...enabled(), on: false, selectionClickSelectHotkey: 'shift+alt+k'};
+        expect(resolveReservedClickSelectionHotkey(config)).toBe('Alt+Shift+K');
+        expect(isClickSelectionAvailable(config)).toBe(false);
+        expect(resolveReservedClickSelectionHotkey({...config, selectionClickSelectHotkey: undefined})).toBe(DEFAULT_CLICK_SELECTION_HOTKEY);
+        for (const patch of [{selectionClickSelectEnabled: false}, {selectionTranslatorMode: 'disabled'}, {disableSelectionTranslator: true}]) {
+            expect(resolveReservedClickSelectionHotkey({...config, ...patch})).toBe('');
+        }
+        expect(resolveReservedClickSelectionHotkey({})).toBe('');
+    });
     it('新用户与历史配置保持关闭，显式布尔开启和规范快捷键可往返', () => {
         expect(new Config().selectionClickSelectEnabled).toBe(false);
         expect(new Config().selectionClickSelectHotkey).toBe(DEFAULT_CLICK_SELECTION_HOTKEY);
@@ -62,11 +73,26 @@ describe('两点选取配置与快捷键归属', () => {
         ['圈选翻译', {selectionAreaEnabled: true, selectionAreaHotkey: 'custom', customSelectionAreaHotkey: 'Alt+Shift+S'}],
         ['段落复制', {paragraphCopyEnabled: true, paragraphCopyHotkey: 'custom', customParagraphCopyHotkey: 'Alt+Shift+S'}],
         ['局部翻译', {sectionTranslationHotkeyEnabled: true, sectionTranslationHotkey: 'custom', customSectionTranslationHotkey: 'Alt+Shift+S'}],
+        ['智能高亮', {informationHighlight: {hotkeyEnabled: true, hotkey: 'shift+alt+s'}}],
         ['额外翻译方案', {quickTranslationProfiles: [{enabled: true, hotkey: 'Alt+Shift+S'}]}],
     ] as const)('与%s冲突时不占用按键，导入配置也不会触发两种功能', (owner, patch) => {
         const config = {...enabled(), ...patch} as Config;
         expect(findClickSelectionHotkeyConflict(config, DEFAULT_CLICK_SELECTION_HOTKEY)).toBe(owner);
         expect(matchesClickSelectionShortcut(keyboardEvent(), config)).toBe(false);
+    });
+
+    it('智能高亮快捷键不依赖自动分析与全局暂停，停用快捷键的草稿不占用', () => {
+        const config = {...enabled(), on: false, informationHighlight: {enabled: false, hotkeyEnabled: true, hotkey: 'Alt+Shift+S'}};
+        expect(findClickSelectionHotkeyConflict(config, DEFAULT_CLICK_SELECTION_HOTKEY)).toBe('智能高亮');
+        expect(findClickSelectionHotkeyConflict({...config, informationHighlight: {...config.informationHighlight, hotkeyEnabled: false}}, DEFAULT_CLICK_SELECTION_HOTKEY)).toBe('');
+        expect(findClickSelectionHotkeyConflict({...config, informationHighlight: {hotkeyEnabled: true}}, DEFAULT_CLICK_SELECTION_HOTKEY)).toBe('');
+        expect(findClickSelectionHotkeyConflict({...config, informationHighlight: {}}, DEFAULT_CLICK_SELECTION_HOTKEY)).toBe('');
+    });
+
+    it.each([undefined, ''])('已启用但快捷键缺失（%s）的局部高亮配置不阻挡实际点选组合', hotkey => {
+        const config = {...enabled(), informationHighlight: {hotkeyEnabled: true, hotkey}};
+        expect(findClickSelectionHotkeyConflict(config, DEFAULT_CLICK_SELECTION_HOTKEY)).toBe('');
+        expect(matchesClickSelectionShortcut(keyboardEvent(), config)).toBe(true);
     });
 
     it('停用的旧快捷键不阻挡入口，输入翻译与缺失方案列表仍可安全判定', () => {

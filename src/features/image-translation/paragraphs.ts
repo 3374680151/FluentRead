@@ -1,7 +1,7 @@
 /**
  * @file src/features/image-translation/paragraphs.ts
  * 文件职责：将普通图片的 OCR 物理行恢复成可整段翻译与回填的文本区域。
- * 主要内容：按行距、字号、对齐和遮挡关系合并连续正文，按纵向邻域扫描候选并增量维护对齐范围；大输入首次尝试合段时建立有界深度的遮挡索引，暂时排除当前段成员并在结束后恢复，跳过无关区域及成员子树；保留标题、列表、栏位及竖排边界、原始擦除框与字号上限。
+ * 主要内容：按行距、字号、对齐和遮挡关系合并连续正文，按纵向邻域扫描候选并增量维护对齐范围；大输入首次尝试合段时建立有界深度的遮挡索引，暂时排除当前段成员并在结束后恢复，跳过无关区域及成员子树；保留标题、列表、栏位及竖排边界、原始擦除框与字号上限，并按完整 Unicode 码点衔接两侧 CJK 续行。
  * 模块边界：只处理原图坐标与识别文本，不运行 OCR、不调用翻译或 Canvas；漫画仍使用其气泡分组策略。
  */
 import type {OcrLine} from '@/src/shared/image/types';
@@ -71,7 +71,7 @@ function joinLines(previous: string, next: string): string {
     // 硬连字符可能属于复合词，保留它；只有明确的软连字符才可删除。
     if (/\p{L}-$/u.test(previous) && /^\p{L}/u.test(next))
         return previous + next;
-    const cjk = /[\u2e80-\u9fff\uac00-\ud7af]$/u.test(previous) && /^[\u2e80-\u9fff\uac00-\ud7af]/u.test(next);
+    const cjk = /[\p{Script=Han}\u2e80-\u9fff\uac00-\ud7af]$/u.test(previous) && /^[\p{Script=Han}\u2e80-\u9fff\uac00-\ud7af]/u.test(next);
     const punctuation = /^[,.;:!?%。，、！？：；)\]}’”]/u.test(next) || /[([{‘“]$/u.test(previous);
     return previous + (cjk || punctuation ? '' : ' ') + next;
 }

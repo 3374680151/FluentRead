@@ -1,12 +1,13 @@
 /**
  * @file src/features/image-translation/content/mangaCanvas.ts
  * 文件职责：把可读正文画布、背景图片和长图分段快照接入既有漫画识别与局部译图合成，保留宿主正文及翻页交互。
- * 主要内容：小尺寸像素指纹识别画布重绘，任务使用独立快照并异步无损编码；注入正文锚点、绘制范围及核心裁切支持背景与分段；会话端口负责串行调度，编码后复核所有权，暂停、来源变化和卸载取消旧结果；隔离译图跟随原正文与祖先裁切，缓存只保留有界压缩图块。
+ * 主要内容：自动布局以小尺寸指纹提示重绘，显式操作先隐藏旧译层并以完整 PNG 摘要验证来源；任务复用独立快照编码，合成后复核完整来源再发布；注入正文锚点、绘制范围及核心裁切支持背景与分段；会话端口串行调度，暂停、来源变化和卸载取消旧结果，缓存只保留有界压缩图块。最后捕获之后的无事件重绘不作逐帧一致性承诺。
  * 模块边界：只读取公开 DOM 画布或注入的已展示正文快照，不访问站点接口、不读取受污染像素、不更改原画布或宿主样式；识别和翻译由注入的现有图片客户端完成。
  */
 import {compressMangaPage, createMangaLightCache, type MangaCompressedPage, type MangaPatchPacket} from '../mangaPatchResult';
 import {encodeImageCanvas} from '../services/imageEncoding';
 import {composeMangaPage} from './mangaCompositor';
+import {sha256Hex} from '@/src/shared/function/sha256';
 
 interface CanvasState {
     identity: string;
@@ -15,6 +16,21 @@ interface CanvasState {
     completed: boolean;
     failed: boolean;
     showing: boolean;
+    validationPending: boolean;
+    contentKey?: string;
+}
+
+/** HTTPS 复用异步原生摘要；HTTP 内容环境沿用项目已有的本地 SHA-256。 */
+async function imageDigest(image: string): Promise<string> {
+    const subtle = globalThis.crypto?.subtle;
+    if (!subtle) return sha256Hex(image);
+    const digest = await subtle.digest('SHA-256', new TextEncoder().encode(image));
+    return Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, '0')).join('');
+}
+
+function releaseSurface(surface: HTMLCanvasElement | null): void {
+    surface?.remove();
+    if (surface) surface.width = surface.height = 0;
 }
 
 export function createMangaCanvas<T extends object = HTMLCanvasElement>(ports: {
@@ -34,6 +50,7 @@ export function createMangaCanvas<T extends object = HTMLCanvasElement>(ports: {
 }) {
     const states = new Map<T, CanvasState>();
     const ids = new WeakMap<T, number>();
+    const revisions = new WeakMap<T, number>();
     const lightCache = createMangaLightCache();
     let sequence = 0;
     let sample: HTMLCanvasElement | null = null;
@@ -76,8 +93,7 @@ export function createMangaCanvas<T extends object = HTMLCanvasElement>(ports: {
         const state = states.get(canvas);
         if (!state) return;
         state.controller?.abort();
-        state.surface?.remove();
-        if (state.surface) state.surface.width = state.surface.height = 0;
+        releaseSurface(state.surface);
         states.delete(canvas);
     }
 
@@ -90,7 +106,7 @@ export function createMangaCanvas<T extends object = HTMLCanvasElement>(ports: {
             const rect = ports.source ? ports.source.bounds(canvas) : element.getBoundingClientRect();
             let left = Math.max(0, rect.left), right = Math.min(window.innerWidth, rect.right);
             let top = Math.max(0, rect.top), bottom = Math.min(window.innerHeight, rect.bottom);
-            let visible = state.showing && ports.enabled() && !document.hidden && rect.width > 0 && rect.height > 0;
+            let visible = state.showing && !state.validationPending && ports.enabled() && !document.hidden && rect.width > 0 && rect.height > 0;
             for (let parent: Element | null = element; parent; parent = parent.parentElement) {
                 const style = getComputedStyle(parent);
                 if (style.display === 'none' || style.visibility === 'hidden' || style.visibility === 'collapse' || style.opacity === '0') visible = false;
@@ -125,35 +141,60 @@ export function createMangaCanvas<T extends object = HTMLCanvasElement>(ports: {
 
     function reuse(canvas: T): boolean {
         const state = states.get(canvas);
-        if (!state?.completed || state.failed || state.identity !== identity(canvas) || !ports.enabled()) return false;
+        if (!state?.completed || state.failed || state.validationPending || state.identity !== identity(canvas) || !ports.enabled()) return false;
         show(state);return true;
+    }
+
+    function invalidate(canvas: T): void {
+        if (disposed || ports.source) return;
+        revisions.set(canvas, (revisions.get(canvas) ?? 0) + 1);
+        const state = states.get(canvas);
+        if (state) {state.controller?.abort();state.validationPending = true;state.showing = false;state.surface?.remove();}
+    }
+
+    function captureNative(canvas: T, target: HTMLCanvasElement): void {
+        const source = canvas as unknown as HTMLCanvasElement;
+        target.width = source.width;target.height = source.height;
+        const context = target.getContext('2d');
+        if (!context) throw new Error('浏览器不支持图片处理');
+        context.drawImage(source, 0, 0);
     }
 
     async function translate(canvas: T): Promise<void> {
         if (reuse(canvas)) return;
         const owner = identity(canvas);
         if (!owner || !ports.enabled() || !anchor(canvas).isConnected) return;
-        release(canvas);
+        const previous = states.get(canvas);
+        const retained = !ports.source && previous?.completed && !previous.failed ? previous : undefined;
+        if (retained) retained.surface?.remove();
+        else release(canvas);
         const controller = new AbortController();
-        const state: CanvasState = {identity: owner, controller, surface: null, completed: false, failed: false, showing: true};
+        const revision = revisions.get(canvas) ?? 0;
+        const state: CanvasState = {identity: owner, controller, surface: retained?.surface ?? null, completed: false, failed: false, showing: true, validationPending: !ports.source};
         states.set(canvas, state);
         const original = document.createElement('canvas');
+        let surface: HTMLCanvasElement | null = null;
         const current = () => !disposed && !controller.signal.aborted && states.get(canvas) === state
-            && anchor(canvas).isConnected && ports.enabled() && identity(canvas) === owner;
+            && (revisions.get(canvas) ?? 0) === revision && anchor(canvas).isConnected && ports.enabled() && identity(canvas) === owner;
         try {
             if (ports.source) {
                 await ports.source.capture(canvas, original, controller.signal);
                 if (!current()) return;
-            } else {
-                const source = canvas as unknown as HTMLCanvasElement;
-                original.width = source.width;original.height = source.height;
-                const context = original.getContext('2d');
-                if (!context) throw new Error('浏览器不支持图片处理');
-                context.drawImage(source, 0, 0);
+            } else captureNative(canvas, original);
+            let key = owner, image: string | undefined;
+            if (!ports.source) {
+                image = await encodeImageCanvas(original, controller.signal);
+                if (!current()) return;
+                key = `${owner}:${await imageDigest(image)}`;
+                if (!current()) return;
+                if (retained?.contentKey === key) {
+                    state.contentKey = key;state.completed = true;state.validationPending = false;show(state);return;
+                }
+                releaseSurface(state.surface);state.surface = null;
             }
-            let page = ports.cacheEnabled() ? lightCache.get(owner) : undefined;
+            let page = ports.cacheEnabled() ? lightCache.get(key) : undefined;
             if (!page) {
-                const image = await encodeImageCanvas(original, controller.signal);
+                image ??= await encodeImageCanvas(original, controller.signal);
                 if (!current()) return;
                 const result = await ports.translate(image, controller.signal);
                 if (!current()) return;
@@ -162,10 +203,20 @@ export function createMangaCanvas<T extends object = HTMLCanvasElement>(ports: {
                     if (!result.mangaPatches) throw new Error('漫画译图数据无效');
                     page = compressMangaPage(result.mangaPatches, result.lines);
                 }
-                if (ports.cacheEnabled()) lightCache.put(owner, page);
+                if (ports.source && ports.cacheEnabled()) lightCache.put(key, page);
             }
-            let surface = page.patches.length ? await composeMangaPage(original, page, controller.signal) : null;
-            if (!current()) {if (surface) surface.width = surface.height = 0;return;}
+            surface = page.patches.length ? await composeMangaPage(original, page, controller.signal) : null;
+            if (!current()) return;
+            if (!ports.source) {
+                // 合成已读完初始快照；复用同一画布重新捕获，避免额外保留整页像素。
+                captureNative(canvas, original);
+                const latest = await encodeImageCanvas(original, controller.signal);
+                if (!current()) return;
+                const latestKey = `${owner}:${await imageDigest(latest)}`;
+                if (!current()) return;
+                if (latestKey !== key) throw new Error('画布内容已变化，请重试');
+                if (ports.cacheEnabled()) lightCache.put(key, page);
+            }
             if (surface && ports.source?.viewport) {
                 const viewport = ports.source.viewport(canvas);
                 const cropped = document.createElement('canvas');
@@ -178,10 +229,11 @@ export function createMangaCanvas<T extends object = HTMLCanvasElement>(ports: {
                 finally {surface.width = surface.height = 0;}
                 surface = cropped;
             }
-            state.surface = surface;state.completed = true;show(state);
+            state.surface = surface;surface = null;state.contentKey = key;state.completed = true;state.validationPending = false;show(state);
         } catch (error) {
-            if (current()) {state.failed = true;throw error;}
+            if (current()) {state.failed = true;releaseSurface(state.surface);state.surface = null;throw error;}
         } finally {
+            releaseSurface(surface);
             original.width = original.height = 0;
             if (states.get(canvas) === state) state.controller = null;
         }
@@ -189,7 +241,7 @@ export function createMangaCanvas<T extends object = HTMLCanvasElement>(ports: {
 
     const clear = () => {Array.from(states.keys()).forEach(release);lightCache.clear();};
     return {
-        identity, translate, reuse, release, update,
+        identity, translate, reuse, release, update, invalidate,
         failed: (canvas: T) => states.get(canvas)?.failed === true,
         restore(canvas: T) {
             const state = states.get(canvas);

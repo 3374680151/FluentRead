@@ -707,6 +707,68 @@ describe('Offscreen 本地模型可取消请求', () => {
         }
     });
 
+    it.each(['resolve', 'reject'] as const)('本地 TTS 取消后跳过迟到 %s 的音频或错误序列化', async outcome => {
+        const pending = deferred<LocalTtsAudio>();
+        const synthesize = vi.fn(() => pending.promise);
+        const handler = createOffscreenMessageListener({...base, localTts: {
+            synthesize, prepare: vi.fn(), status: vi.fn(), removeModel: vi.fn(),
+        }});
+        const response = vi.fn();
+        handler({...ttsRequest, target: 'offscreen'}, {}, response);
+        await vi.waitFor(() => expect(synthesize).toHaveBeenCalledOnce());
+        await dispatch({type: OFFSCREEN_CANCEL_LOCAL_TTS_MESSAGE_TYPE, requestId: ttsRequest.requestId}, handler);
+        expect(response).toHaveBeenCalledOnce();
+        expect(response).toHaveBeenCalledWith({success: false, cancelled: true, requestId: 'tts-1', error: '本地 TTS 请求已取消'});
+        const readAudio = vi.fn(() => new Uint8Array(1024 * 1024).buffer);
+        const readError = vi.fn(() => 'late failure');
+        const audio = {get audio() {return readAudio();}, contentType: 'audio/wav' as const, voice: 'auto'};
+        const error = Object.defineProperty(new Error(), 'message', {get: readError});
+        const encode = vi.spyOn(globalThis, 'btoa');
+        try {
+            if (outcome === 'resolve') pending.resolve(audio); else pending.reject(error);
+            // Drain both the operation reaction and its failure serialization catch.
+            for (let index = 0; index < 6; index += 1) await Promise.resolve();
+            expect(readAudio).not.toHaveBeenCalled();
+            expect(readError).not.toHaveBeenCalled();
+            expect(encode).not.toHaveBeenCalled();
+            expect(response).toHaveBeenCalledOnce();
+        } finally {encode.mockRestore();}
+    });
+
+    it('回复端口抛错后不再格式化失败或重复回复', async () => {
+        const readError = vi.fn(() => 'closed response port');
+        const error = Object.defineProperty(new Error(), 'message', {get: readError});
+        const handler = createOffscreenMessageListener({...base, localTts: {
+            synthesize: vi.fn(async () => ({audio: new Uint8Array([82, 73, 70, 70]).buffer, contentType: 'audio/wav' as const, voice: 'auto'})),
+            prepare: vi.fn(), status: vi.fn(), removeModel: vi.fn(),
+        }});
+        const response = vi.fn(() => {throw error;});
+        handler({...ttsRequest, target: 'offscreen'}, {}, response);
+        for (let index = 0; index < 8; index += 1) await Promise.resolve();
+        expect(response).toHaveBeenCalledOnce();
+        expect(response).toHaveBeenCalledWith(expect.objectContaining({success: true, audioBase64: 'UklGRg=='}));
+        expect(readError).not.toHaveBeenCalled();
+    });
+
+    it('结果序列化期间同步取消仍只提交取消回复', async () => {
+        let cancelled = false;
+        const handler = createOffscreenMessageListener({...base, localTts: {
+            synthesize: vi.fn(async () => ({get audio() {
+                if (!cancelled) {
+                    cancelled = true;
+                    handler({type: OFFSCREEN_CANCEL_LOCAL_TTS_MESSAGE_TYPE, target: 'offscreen', requestId: ttsRequest.requestId}, {}, vi.fn());
+                }
+                return new Uint8Array([82, 73, 70, 70]).buffer;
+            }, contentType: 'audio/wav' as const, voice: 'auto'})), prepare: vi.fn(), status: vi.fn(), removeModel: vi.fn(),
+        }});
+        const response = vi.fn();
+        handler({...ttsRequest, target: 'offscreen'}, {}, response);
+        for (let index = 0; index < 8; index += 1) await Promise.resolve();
+        expect(cancelled).toBe(true);
+        expect(response).toHaveBeenCalledOnce();
+        expect(response).toHaveBeenCalledWith(expect.objectContaining({success: false, cancelled: true}));
+    });
+
     it('本地 TTS 模型管理透传结果并校验结果形状', async () => {
         const localTts = {
             synthesize: vi.fn(), prepare: vi.fn(async () => ({warm: true})),

@@ -11,6 +11,21 @@ afterEach(() => vi.unstubAllGlobals());
 const symbols = ['🚚', '👩🏽‍🔬', '🇫🇷', '1️⃣', '#️⃣', '♥️', '✋🏿', '©︎', '🏴\u{E0067}\u{E0062}\u{E007F}'];
 
 describe('complete translation emoji literals', () => {
+    it('avoids native segmenter construction for complete single-codepoint emoji and shares one within a complex scan', () => {
+        const NativeSegmenter = Intl.Segmenter;
+        const construct = vi.fn(function(...args: ConstructorParameters<typeof Intl.Segmenter>) {
+            return new NativeSegmenter(...args);
+        });
+        vi.stubGlobal('Intl', Object.create(Intl, {Segmenter: {value: construct}}));
+        for (let index = 0; index < 1000; index++) {
+            const text = `Read 🚚 😀 © on page ${index}.`;
+            expect(findEmojiLiteralRanges(text).map(({start, end}) => text.slice(start, end))).toEqual(['🚚', '😀', '©']);
+        }
+        expect(construct.mock.calls.length).toBe(0);
+        const complex = 'Keep 👩🏽‍🔬, 1️⃣ and 🇫🇷 together.';
+        expect(findEmojiLiteralRanges(complex).map(({start, end}) => complex.slice(start, end))).toEqual(['👩🏽‍🔬', '1️⃣', '🇫🇷']);
+        expect(construct).toHaveBeenCalledOnce();
+    });
     it('direct provider identity retains its endpoint and isolates only emoji source inputs', () => {
         const config = createTranslationProviderConfigSnapshot(Object.assign(new Config(), {deeplx:'https://fixture.invalid/translate'}));
         const policy = createTranslationIdentityPolicy({resolveConfiguredModel,serviceTypes:servicesType,

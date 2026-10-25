@@ -433,6 +433,30 @@ describe('personal correction client and scoped runtime', () => {
         client.subscribe(listener)(); expect(port.onMessage.removeListener).toHaveBeenCalledTimes(2);
         const unavailable = createPersonalCorrectionsClient(() => {throw new Error('not extension');}); unavailable.subscribe(listener)();
     });
+    it('ignores queued invalidations after cleanup even when runtime removal has been revoked', () => {
+        for (const revoked of [false, true]) {
+            const port = runtime(), abort = new AbortController(), listener = vi.fn();
+            const removeAbort = vi.spyOn(abort.signal, 'removeEventListener');
+            const cleanup = createPersonalCorrectionsClient(() => port).subscribe(listener, abort.signal);
+            const receive = port.onMessage.addListener.mock.calls[0][0] as (message: unknown) => void;
+            if (revoked) port.onMessage.removeListener.mockImplementation(() => {throw new Error('Extension context invalidated');});
+            expect(() => cleanup()).not.toThrow(); cleanup();
+            receive({type: PERSONAL_CORRECTIONS_CHANGED});
+            expect(listener).not.toHaveBeenCalled();
+            expect(port.onMessage.removeListener).toHaveBeenCalledOnce();
+            expect(removeAbort).toHaveBeenCalledWith('abort', cleanup);
+        }
+    });
+    it('treats revoked registration as unavailable and releases a subscription canceled while registering', () => {
+        const revoked = runtime(); revoked.onMessage.addListener.mockImplementation(() => {throw new Error('Extension context invalidated');});
+        expect(() => createPersonalCorrectionsClient(() => revoked).subscribe(vi.fn())()).not.toThrow();
+        const port = runtime(), abort = new AbortController(), listener = vi.fn();
+        port.onMessage.addListener.mockImplementation(() => abort.abort());
+        const cleanup = createPersonalCorrectionsClient(() => port).subscribe(listener, abort.signal);
+        const receive = port.onMessage.addListener.mock.calls[0][0] as (message: unknown) => void;
+        receive({type: PERSONAL_CORRECTIONS_CHANGED}); cleanup();
+        expect(listener).not.toHaveBeenCalled(); expect(port.onMessage.removeListener).toHaveBeenCalledOnce();
+    });
     function background() {
         const {service, store} = setup();
         const dependencies = {service, extensionId: 'ext', isExtensionUrl: (url: string) => url.startsWith('chrome-extension://ext/'), privateContext: vi.fn(() => false), enabled: vi.fn(() => true), changed: vi.fn(async () => undefined)};

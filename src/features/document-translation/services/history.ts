@@ -2,7 +2,7 @@
  * @file src/features/document-translation/services/history.ts
  * 文件职责：在浏览器本地保存最近翻译过的文档及其译文，使文档翻译首页可以列出记录并一键恢复阅读。
  * 主要内容：以文件内容摘要为稳定标识，在独立的 IndexedDB 库中保存原始文件字节、解析结果快照、译文、进度与设置指纹；解析规则变化后按原文与双向唯一的原生位置或邻文恢复未变化片段的独立校订，歧义校订独立保留，复用同文件中页号、展示尺寸与旋转一致的已识别扫描页；原文件、逐行及逐项稳定几何均一致时，保留因字体指标修正而合并的连续普通文字段，使用新字形重建边界而不拼接译文；其余文字页保持新解析结果，统一重编号全文片段；本次复用的旧索引保留独立校订与空槽并从原文匹配池排除，不写入解析快照；列表与淘汰使用游标逐条提取摘要和原始字节数，不聚合持有所有原文件及解析快照，再按最近更新时间排序；超过条数或总字节上限时淘汰最旧的记录；数据库不可用、被其他标签页占用而超时或读写失败时安静降级为“没有记录”，并在其他标签页需要升级或删除时让出连接，不影响打开和翻译文档。
- * 保存生命周期：超时撤销后续写入资格并取消活跃写事务，只有真实事务提交后才确认保存成功，避免迟到打开数据库的旧修订覆盖新校订；重译跳过缓存只接受并保存显式 true，刷新后继续当前重译不会恢复旧缓存。
+ * 保存生命周期：超时撤销后续写入资格并取消活跃写事务，只有真实事务提交后才确认保存成功；放弃的数据库打开请求迟到成功时关闭旧连接，旧连接事件不能重置已恢复连接；重译跳过缓存只接受并保存显式 true，刷新后继续当前重译不会恢复旧缓存。
  * 模块边界：只负责本地存取与已有译文匹配，不解析文档、不发起翻译、不读取配置，也不把任何内容发送到网络；页面状态、解析版本与何时保存由文档页面组合根决定。
  */
 import {documentSourceLocators, matchDocumentSourceLocators} from '../core/materialLocator';
@@ -283,26 +283,47 @@ function normalizeDocumentHistoryCachePolicy(record: DocumentHistoryRecord): Doc
 
 export function createDocumentHistory(factory: IDBFactory | undefined = globalThis.indexedDB, timeoutMs = 3000): DocumentHistory {
     let opening: Promise<IDBDatabase> | undefined;
-    const open = () => opening ??= new Promise<IDBDatabase>((resolve, reject) => {
-        const opened = factory!.open(DATABASE, 1);
-        opened.onupgradeneeded = () => {opened.result.createObjectStore(STORE, {keyPath: 'id'});};
-        opened.onsuccess = () => {
-            const database = opened.result;
-            // 其他标签页要升级或删除这个库时主动让出连接，下次使用再重新打开。
-            database.onversionchange = () => {database.close(); opening = undefined;};
-            resolve(database);
-        };
-        opened.onerror = () => reject(opened.error);
-        opened.onblocked = () => reject(new Error('blocked'));
-    }).catch(error => {opening = undefined; throw error;});
+    let connection: IDBDatabase | undefined;
+    let openingGeneration = 0;
+    const openingOwners = new WeakMap<AbortSignal, number>();
+    const releaseOpening = () => {
+        openingGeneration++;
+        opening = undefined;
+        connection?.close();
+        connection = undefined;
+    };
+    const open = (signal: AbortSignal) => {
+        signal.throwIfAborted();
+        if (opening) {openingOwners.set(signal, openingGeneration); return opening;}
+        const generation = ++openingGeneration;
+        openingOwners.set(signal, generation);
+        return opening = new Promise<IDBDatabase>((resolve, reject) => {
+            const opened = factory!.open(DATABASE, 1);
+            opened.onupgradeneeded = () => {opened.result.createObjectStore(STORE, {keyPath: 'id'});};
+            opened.onsuccess = () => {
+                const database = opened.result;
+                if (generation !== openingGeneration) {
+                    database.close();
+                    reject(new Error('文档历史数据库打开请求已失效'));
+                    return;
+                }
+                connection = database;
+                // 其他标签页要升级或删除这个库时主动让出连接，下次使用再重新打开。
+                database.onversionchange = () => {if (generation === openingGeneration) releaseOpening(); else database.close();};
+                resolve(database);
+            };
+            opened.onerror = () => reject(opened.error);
+            opened.onblocked = () => reject(new Error('blocked'));
+        }).catch(error => {if (generation === openingGeneration) releaseOpening(); throw error;});
+    };
     const readStore = async (signal: AbortSignal) => {
-        const database = await open();
+        const database = await open(signal);
         signal.throwIfAborted();
         return database.transaction(STORE, 'readonly').objectStore(STORE);
     };
     /** 撤销资格贯穿数据库打开等待与真实事务；请求成功还不代表事务已经提交。 */
     const write = async (signal: AbortSignal, enqueue: (target: IDBObjectStore) => void): Promise<void> => {
-        const database = await open();
+        const database = await open(signal);
         signal.throwIfAborted();
         const transaction = database.transaction(STORE, 'readwrite');
         const settled = new Promise<void>((resolve, reject) => {
@@ -324,7 +345,12 @@ export function createDocumentHistory(factory: IDBFactory | undefined = globalTh
         // 被其他标签页占用的数据库可能迟迟不响应；超过时限同样按“没有记录”处理，不能卡住打开文件。
         const controller = new AbortController();
         let timer: ReturnType<typeof setTimeout> | undefined;
-        const expired = new Promise<T>(resolve => {timer = setTimeout(() => {controller.abort(); opening = undefined; resolve(fallback);}, timeoutMs);});
+        const expired = new Promise<T>(resolve => {timer = setTimeout(() => {
+            const generation = openingOwners.get(controller.signal);
+            controller.abort();
+            if (generation === openingGeneration) releaseOpening();
+            resolve(fallback);
+        }, timeoutMs);});
         const result = await Promise.race([work(controller.signal).catch(() => fallback), expired]);
         clearTimeout(timer);
         return result;

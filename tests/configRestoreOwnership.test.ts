@@ -36,7 +36,7 @@ const dom = await vi.hoisted(async () => {
 const ports = vi.hoisted(() => ({
   history: {} as ConfigHistoryState, backups: {} as ConfigAutoBackupState,
   historyListeners: new Set<(value: ConfigHistoryState) => void>(), backupListeners: new Set<(value: ConfigAutoBackupState) => void>(),
-  send: vi.fn(), messages: vi.fn(), globalConfirm: vi.fn(), globalClose: vi.fn(),
+  send: vi.fn(), messages: vi.fn(), globalConfirm: vi.fn(), globalClose: vi.fn(), diff: vi.fn(),
   delayClosed: false, closing: new Set<() => void>(),
   installedConfig: null as unknown,
   installedHistory: null as ConfigHistoryState | null,
@@ -48,6 +48,12 @@ vi.mock('vue', async importOriginal => {
   return {...actual, nextTick: () => ports.focusTick?.promise ?? actual.nextTick()};
 });
 vi.mock('webextension-polyfill', () => ({default:{runtime:{sendMessage:(...args:unknown[])=>ports.send(...args)}}}));
+vi.mock('@/src/core/config/diff', async original => {
+  const actual = await original<typeof import('@/src/core/config/diff')>();
+  return {...actual, buildConfigDiff: (...args: Parameters<typeof actual.buildConfigDiff>) => {
+    ports.diff(...args);return actual.buildConfigDiff(...args);
+  }};
+});
 vi.mock('@/src/ui/i18n', async () => {
   const {ref}=await import('vue');
   return {useUiI18n:()=>({language:ref('zh-CN'),t:(key:string)=>key,translateLegacy:(text:string)=>text})};
@@ -104,6 +110,7 @@ const Button = runtime.defineComponent({props: ['disabled', 'loading', 'type'], 
 
 beforeEach(() => {
   ports.send.mockReset();ports.messages.mockReset();ports.globalConfirm.mockReset();ports.globalClose.mockReset();
+  ports.diff.mockClear();
   ports.delayClosed = false;ports.installedConfig = null;ports.installedHistory = null;
   ports.focusTick = null;ports.defaultFocus = false;
   Object.defineProperty(dom.document, 'visibilityState', {configurable: true, writable: true, value: 'visible'});
@@ -126,10 +133,10 @@ afterAll(() => {
   for (const [key, descriptor] of dom.originals) {if (descriptor) Object.defineProperty(globalThis, key, descriptor);else Reflect.deleteProperty(globalThis, key);}
 });
 
-async function mount() {
+async function mount(options: {activePanel?: string} = {activePanel: 'history'}) {
   const config = runtime.reactive(normalizeConfig({on: true, count: 73, apiKeys: {openai: ['current-fixture-key']}}));
   const initialConfig = normalizeConfig({...config});
-  const props = runtime.shallowReactive({active: true, activePanel: 'history', config}), shown = runtime.ref(true);
+  const props = runtime.shallowReactive({active: true, activePanel: options.activePanel, config}), shown = runtime.ref(true);
   const host = dom.document.createElement('div');dom.document.body.append(host);
   let app: import('vue').App;
   const actions: Record<string, () => void> = {
@@ -208,6 +215,32 @@ function restoredReceipt(kind: Kind, config: unknown) {
   const history = appendConfigHistorySnapshot(ports.history, config)!;
   return kind === 'history' ? history : {history, backups: structuredClone(ports.backups)};
 }
+
+describe('history list visibility cost through the actual component', () => {
+  it.each(['panel', 'active', 'cached'] as const)('[history-lazy] %s inactivity avoids hidden diff work and reveals the current snapshots', async boundary => {
+    ports.backups = {...ports.backups, nextVersion: 11, entries: Array.from({length: 10}, (_, index) => ({
+      version: index + 1, savedAt: '2026-10-07T00:00:00Z', config: toRestorableConfig(normalizeConfig({to: 'en'})),
+    }))};
+    const {host, config} = await mount();await navigate(host, boundary);ports.diff.mockClear();
+    for (const to of ['fr', 'de', 'ja', 'es', 'ko']) {config.to = to;await settle();}
+    expect.soft(ports.diff).not.toHaveBeenCalled();
+    expect.soft(host.querySelectorAll('.version-entry')).toHaveLength(0);
+    const latest = {...ports.backups, nextVersion: 12, entries: [...ports.backups.entries.slice(1), {...ports.backups.entries[0], version: 11}]};
+    for (const listener of ports.backupListeners) listener(latest);await settle();
+    expect.soft(ports.diff).not.toHaveBeenCalled();
+    ports.diff.mockClear();await navigate(host, 'back');
+    expect(host.querySelectorAll('.version-badge.backup')).toHaveLength(10);
+    expect(versionLabels(host)).toContain('b11');expect(versionLabels(host)).not.toContain('b1');
+    expect(ports.diff.mock.calls.filter(([current]) => current.to === 'ko')).toHaveLength(10);
+    await open(host, 'backup', 11);expect(button(preview(host), '恢复此版本').disabled).toBe(false);
+    expect(preview(host).textContent).toContain('目标语言');
+  });
+  it('[history-lazy] initially hidden history stays lazy, while omitted panel selection still renders history', async () => {
+    const hidden = await mount({activePanel: 'backup'});expect.soft(hidden.host.querySelectorAll('.version-entry')).toHaveLength(0);
+    await navigate(hidden.host, 'back');expect(hidden.host.querySelectorAll('.version-badge.backup')).toHaveLength(2);
+    const allPanels = await mount({});expect(allPanels.host.querySelectorAll('.version-badge.backup')).toHaveLength(2);
+  });
+});
 
 describe.each(kinds)('%s 恢复的公开组件归属', kind => {
   it.each(['cancel', 'escape'] as const)('%s 的实际 close-auto-focus hook 等待 DOM 更新后归还原按钮，且可重试再 Escape', async action => {

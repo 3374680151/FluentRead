@@ -399,6 +399,50 @@ describe('input translation content feature', () => {
         expect(view.removeEventListener).toHaveBeenCalledWith('resize', position);
     });
 
+    it('同帧的滚动与可见视口事件只测量一次，旧提示和卸载后的排队帧不再测量', async () => {
+        const harness = mountHarness();
+        const frames = new Map<number, FrameRequestCallback>();
+        let nextFrame = 0;
+        const viewport = Object.assign(viewportEventTarget(), {width: 390, height: 600, offsetLeft: 0, offsetTop: 0});
+        const view = Object.assign(viewportEventTarget(), {
+            innerWidth: 390, innerHeight: 600, visualViewport: viewport,
+            requestAnimationFrame: vi.fn((callback: FrameRequestCallback) => {frames.set(++nextFrame, callback); return nextFrame;}),
+            cancelAnimationFrame: vi.fn((id: number) => {frames.delete(id);}),
+        });
+        (harness.fakeDocument as any).defaultView = view;
+        const input = fakeElement('textarea');input.value = 'Hello';harness.fakeDocument.activeElement = input;
+        await harness.fakeDocument.emit('keydown', trustedKey({key: 'Enter', ctrlKey: true}));
+        const tooltip = harness.tooltipRecords.at(-1).ui.mounted;
+        input.getBoundingClientRect.mockClear();tooltip.getBoundingClientRect.mockClear();
+        for (let index = 0; index < 20; index++) {
+            view.emit('scroll');view.emit('resize');viewport.emit('scroll');viewport.emit('resize');
+        }
+        expect(input.getBoundingClientRect).not.toHaveBeenCalled();
+        expect(tooltip.getBoundingClientRect).not.toHaveBeenCalled();
+        expect(frames.size).toBe(1);
+        input.getBoundingClientRect.mockReturnValue({left: 0, width: 80, top: 100, bottom: 130});
+        const [id, callback] = [...frames][0];frames.delete(id);callback(16);
+        expect(input.getBoundingClientRect).toHaveBeenCalledOnce();
+        expect(tooltip.getBoundingClientRect).toHaveBeenCalledOnce();
+        expect(tooltip.style).toMatchObject({left: '12px', top: '142px'});
+        view.emit('scroll');
+        const oldCallback = [...frames.values()][0];
+        input.value = 'New draft';await harness.fakeDocument.emit('input', {target: input});
+        expect(frames.size).toBe(0);
+        oldCallback(32);
+        expect(input.getBoundingClientRect).toHaveBeenCalledOnce();
+        await harness.fakeDocument.emit('keydown', trustedKey({key: 'Enter', ctrlKey: true}));
+        view.emit('scroll');
+        const unmountedCallback = [...frames.values()][0];
+        const measurements = input.getBoundingClientRect.mock.calls.length;
+        harness.controller.abort();
+        expect(frames.size).toBe(0);
+        unmountedCallback(48);
+        view.emit('scroll');viewport.emit('resize');
+        expect(input.getBoundingClientRect).toHaveBeenCalledTimes(measurements);
+        expect(harness.logger.error).not.toHaveBeenCalled();
+    });
+
     it('键盘缩小与平移可见视口时重新夹边，卸载移除全部定位监听且不滚动宿主页', async () => {
         const records: any[] = [];
         const base = createUiFactory(records);
@@ -1113,6 +1157,7 @@ describe('input translation content feature', () => {
     it.each([
         ['password', (element: any) => { element.type = 'password'; }],
         ['readonly', (element: any) => { element.readOnly = true; }],
+        ['disabled fieldset', (element: any) => { element.matches = (selector: string) => selector === ':disabled'; }],
     ])('请求启动后变为 %s 时，即使提示仍在创建也不写回', async (_label, mutate) => {
         let releaseTooltip!: () => void;
         const tooltipBarrier = new Promise<void>((resolve) => { releaseTooltip = resolve; });

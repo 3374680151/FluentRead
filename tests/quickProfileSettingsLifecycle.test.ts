@@ -70,6 +70,32 @@ async function mountQuick(config=runtime.reactive(new Config()),profiles:QuickTr
 }
 function latest():QuickTranslationProfile[] {return updates.mock.calls.at(-1)?.[0] || props.profiles}
 function invalidate(reason:string) {if(reason==='hidden')props.active=false;if(reason==='cached')shown.value=false;if(reason==='unmount')app.unmount();if(reason==='config')props.config=runtime.reactive(new Config());if(reason==='action')props.action='full-page'}
+describe('快捷方案保留已开启的两点选取组合',()=>{
+  it('真实录制模板随点选启停显示冲突并阻止确认，解除后可保存',async()=>{
+    recorderPort.actual=true;const cfg=runtime.reactive(new Config());Object.assign(cfg,{on:false,selectionTranslatorMode:'bilingual',disableSelectionTranslator:false,selectionClickSelectHotkey:'Alt+D'});
+    await mountQuick(cfg,[]);(document.querySelector('.add-button') as HTMLElement).click();
+    for(let i=0;i<60&&!document.querySelector('.custom-hotkey-dialog');i++){await settle();await new Promise(resolve=>setTimeout(resolve,5))}
+    expect(document.querySelector('.custom-hotkey-dialog')).not.toBeNull();
+    (document.querySelector('.preset-button[aria-label="Alt+D"]') as HTMLElement).click();await settle();expect(document.querySelector('.hotkey-status[role="alert"]')).toBeNull();
+    cfg.selectionClickSelectEnabled=true;await settle();expect(document.querySelector('.hotkey-status[role="alert"]')?.textContent).toContain('quickTranslation.legacyConflictEdit');
+    expect(document.querySelector('.custom-hotkey-dialog .primary-button')?.hasAttribute('disabled')).toBe(true);expect(updates).not.toHaveBeenCalled();
+    cfg.selectionClickSelectEnabled=false;await settle();expect(document.querySelector('.hotkey-status[role="alert"]')).toBeNull();
+    (document.querySelector('.custom-hotkey-dialog .primary-button') as HTMLElement).click();await settle();expect(latest()[0]).toMatchObject({hotkey:'Alt+D',enabled:true});
+  })
+  for(const action of ['hover','full-page','section'] as const){
+    it.each(['enable','record'] as const)(`${action} %s 不得静默抢占两点选取`,async operation=>{
+      const cfg=runtime.reactive(new Config());Object.assign(cfg,{on:false,selectionTranslatorMode:'bilingual',disableSelectionTranslator:false,selectionClickSelectEnabled:true,selectionClickSelectHotkey:'Alt+Shift+S'});
+      await mountQuick(cfg,operation==='enable'?[p({action,enabled:false,hotkey:'Alt+Shift+S'})]:[],action);
+      if(operation==='enable')eventOf(card().querySelector('input.profile-switch')!)(true);
+      else {await record();expect.soft(state.recorderActions.validate('alt+shift+s')).toBeTruthy();eventOf(recorder(),'onConfirm')('Alt+Shift+S')}
+      expect(updates).not.toHaveBeenCalled();expect(warning).toHaveBeenCalled();expect(cfg.selectionClickSelectEnabled).toBe(true);
+    })
+  }
+  it.each([{selectionClickSelectEnabled:false},{selectionTranslatorMode:'disabled'},{disableSelectionTranslator:true}])('已停用的点选入口不阻止录制：%j',async patch=>{
+    const cfg=runtime.reactive(new Config());Object.assign(cfg,{selectionTranslatorMode:'bilingual',disableSelectionTranslator:false,selectionClickSelectEnabled:true},patch);
+    await mountQuick(cfg,[]);await record();eventOf(recorder(),'onConfirm')('Alt+Shift+S');expect(latest()[0]).toMatchObject({hotkey:'Alt+Shift+S',enabled:true});
+  })
+})
 describe('实际快捷方案缓存模板与最新草稿',()=>{
   it('八个编辑器重复取得语言选项时共享同一个已翻译目录',async()=>{
     await mountQuick(undefined,Array.from({length:8},(_,i)=>p({id:`quick-${i+1}`,hotkey:`Alt+Shift+${String.fromCharCode(65+i)}`})));const before=props.profiles.map((profile:QuickTranslationProfile)=>state.languageOptions(profile))

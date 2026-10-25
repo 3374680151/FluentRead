@@ -1,4 +1,5 @@
 import {afterEach, beforeEach, describe, expect, it, vi} from 'vitest';
+import {createHash} from 'node:crypto';
 import {parseHTML} from 'linkedom';
 import {toRaw} from 'vue';
 
@@ -1506,6 +1507,15 @@ describe('视频预览不自动显示图片翻译', () => {
     }
     function canvasChapter() {
         const env = readerPage();
+        // 该 DOM 夹具以微任务驱动编码；原生摘要需要宿主事件循环，故仅在此控制异步端口。
+        // 仍对完整 BufferSource 求真实 SHA-256，并保留子视图范围及独立的 32 字节结果。
+        vi.stubGlobal('crypto', {subtle: {digest: vi.fn(async (algorithm: AlgorithmIdentifier, data: BufferSource) => {
+            expect(algorithm).toBe('SHA-256');
+            const bytes = ArrayBuffer.isView(data)
+                ? new Uint8Array(data.buffer, data.byteOffset, data.byteLength)
+                : new Uint8Array(data);
+            return Uint8Array.from(createHash('sha256').update(bytes).digest()).buffer;
+        })}});
         Object.assign(env.windowObject, {location: {href: 'https://manga.bilibili.com/mc123/456', origin: 'https://manga.bilibili.com'}});
         env.parent.innerHTML = '<div class="images-container"><div class="view-container"><div class="image-container"><div class="bullet-screen"><div class="bullet-container"></div></div></div></div></div>';
         const page = document.createElement('canvas'); page.width = 400; page.height = 200; page.getBoundingClientRect = env.image.getBoundingClientRect;

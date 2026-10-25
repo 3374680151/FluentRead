@@ -1,7 +1,7 @@
 /**
  * @file src/core/translation/emojiLiterals.ts
  * 文件职责：识别翻译正文中必须逐字保留的完整 emoji 字素范围。
- * 主要内容：普通文字快速跳过；有图形字素时沿 Intl.Segmenter 边界保留肤色、ZWJ、旗帜、键帽和变体选择符，旧环境使用相同 emoji 结构的 Unicode 后备扫描。
+ * 主要内容：普通文字快速跳过，单码点 emoji 直接返回范围；首次遇到复杂图形字素时才构造分段器，同次扫描复用 Intl.Segmenter 边界保留肤色、ZWJ、旗帜、键帽和变体选择符，旧环境使用相同 emoji 结构的 Unicode 后备扫描。
  * 模块边界：纯文本范围算法，偏移使用原文 UTF-16，不改写 Unicode、不访问配置或服务；保护与供应商预算由调用方处理。
  */
 
@@ -44,7 +44,7 @@ function fallbackRanges(value: string): EmojiLiteralRange[] {
 export function findEmojiLiteralRanges(text: string): EmojiLiteralRange[] {
     if (!emojiSignal.test(text)) return [];
     const result: EmojiLiteralRange[] = [];
-    const segmenter = typeof Intl.Segmenter === 'function' ? new Intl.Segmenter(undefined, {granularity: 'grapheme'}) : undefined;
+    let segmenter: Intl.Segmenter | undefined;
     // 先扫描可能含 emoji 的局部范围，避免原生分段器为长正文每个字符反复处理整篇字符串。
     // 单码点原子已是完整字素；复杂候选再由原生边界核对，旧环境沿完整后备范围处理。
     for (const match of text.matchAll(fallbackPattern)) {
@@ -52,6 +52,7 @@ export function findEmojiLiteralRanges(text: string): EmojiLiteralRange[] {
             result.push({start: match.index, end: match.index + match[0].length});
             continue;
         }
+        if (typeof Intl.Segmenter === 'function') segmenter ??= new Intl.Segmenter(undefined, {granularity: 'grapheme'});
         const ranges = segmenter ? Array.from(segmenter.segment(match[0]), ({segment, index}) => ({start: index, end: index + segment.length}))
             : fallbackRanges(match[0]);
         for (const range of ranges) {

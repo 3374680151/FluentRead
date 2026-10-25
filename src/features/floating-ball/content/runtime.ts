@@ -1,7 +1,7 @@
 /**
  * @file src/features/floating-ball/content/runtime.ts
  * 文件职责：协调悬浮球组件在网页中的创建、恢复位置、显隐、全屏避让、高级外观同步、权威翻译状态同步和卸载，并向组件注入全文翻译、漫画连续翻译切换与打开扩展快捷面板的动作。
- * 主要内容：维护单例 Shadow UI、迟到挂载 requestId、站点名单守卫、页面全屏显隐监听、响应式展示契约与配置订阅、全文活动及结果状态和漫画会话订阅，并将拖动后的停靠侧和纵向比例作为同一配置补丁保存；卸载入口只释放自身 UI，不恢复独立的全文会话。
+ * 主要内容：维护单例 Shadow UI 与迟到挂载 requestId，宿主被站点移除后先释放旧实例再允许重建；管理站点名单、全屏显隐、展示配置、全文与漫画状态订阅，并将拖动坐标作为同一配置补丁保存；卸载入口只释放自身 UI，不恢复独立的全文会话。
  * 模块边界：运行时只拥有挂载和桥接职责，不实现拖拽视觉、外观归一化或全文翻译算法；FloatingBall.vue 负责交互，core/config 负责字段归一化，full-page feature 提供翻译动作，配置持久化通过 services/config 完成。
  */
 import FloatingBall from '@/src/features/floating-ball/ui/FloatingBall.vue';
@@ -93,8 +93,6 @@ function openPopup(event: MouseEvent): void {
 
 /** 仅视频全屏时隐藏 Shadow 内的组件容器；宿主的 display 被基础样式锁定。 */
 function subscribeFullscreenVisibility(ui: ShadowRootContentScriptUi<VueShadowMount>): () => void {
-    if (typeof document === 'undefined') return () => {};
-
     const syncVisibility = () => {
         const fullscreenElement = document.fullscreenElement;
         const isVideoFullscreen = fullscreenElement != null
@@ -117,6 +115,8 @@ function subscribeFullscreenVisibility(ui: ShadowRootContentScriptUi<VueShadowMo
 /** 创建并挂载悬浮球 */
 export function mountFloatingBall(ctx?: ContentScriptContext) {
   if (ctx) contentScriptContext = ctx;
+  // DOM 就绪查询会触发恢复；先撤销已断开实例的监听和订阅，不能让缓存句柄拦住新挂载。
+  if (floatingBallUi && !floatingBallUi.shadowHost.isConnected) unmountFloatingBall();
 
   // 配置禁用悬浮球、当前站点在悬浮球禁用名单中，或已存在实例时都不创建
   if (config.disableFloatingBall || !isFloatingBallAllowedOnPage()
@@ -124,7 +124,7 @@ export function mountFloatingBall(ctx?: ContentScriptContext) {
     return mountingPromise;
   }
 
-  if (!contentScriptContext) return;
+  if (!contentScriptContext || contentScriptContext.isInvalid) return;
 
   const ballPosition = config.floatingBallPosition || 'right';
   const requestId = ++mountRequestId;
@@ -181,10 +181,9 @@ export function mountFloatingBall(ctx?: ContentScriptContext) {
     }
 
     floatingBallUi = ui;
-    removeFullscreenListener?.();
+    // 单例门禁保证没有活动实例；重建前的统一卸载已经释放所有旧订阅。
     removeFullscreenListener = subscribeFullscreenVisibility(ui);
     // 订阅只服务当前实例；迟到的旧订阅不得继续写回已被替换的展示契约。
-    unsubscribePresentationConfig?.();
     let previousPosition = import.meta.env.BROWSER === 'userscript' ? []
       : [config.floatingBallPosition, config.floatingBallVerticalPosition, config.floatingBallCompact];
     unsubscribePresentationConfig = subscribeConfig((nextConfig) => {
@@ -201,7 +200,6 @@ export function mountFloatingBall(ctx?: ContentScriptContext) {
     floatingBallInstance = (ui.mounted?.instance as FloatingBallExposed | null | undefined) ?? null;
     if (floatingBallInstance) {
       const instance = floatingBallInstance;
-      unsubscribeFullPageTranslationProgress?.();
       unsubscribeFullPageTranslationProgress = subscribeFullPageTranslationProgress((progress) => {
         if (floatingBallInstance === instance) instance.setTranslationState(progress.active);
       });
