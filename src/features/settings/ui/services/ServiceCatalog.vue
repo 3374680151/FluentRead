@@ -568,7 +568,7 @@ watch(() => props.service, (service) => {
 .service-description { max-width: 760px; margin: 0 0 12px; color: var(--muted, #737c8f); font-size: 12px; line-height: 1.65; }
 .service-website-link { display: inline-flex; align-items: center; gap: 4px; color: var(--brand-strong); font-size: 12px; font-weight: 550; text-decoration: none; }
 .service-website-link:hover { color: var(--brand-strong, #bd2853); text-decoration: underline; }
-.model-section { display: grid; grid-template-columns: 140px minmax(0, 1fr); align-items: center; gap: 16px; padding: 0 0 12px; margin: 0 0 12px; border: 0; border-bottom: 1px solid var(--line); border-radius: 0; flex-shrink: 0; }
+.model-section { display: grid; grid-template-columns: var(--fr-service-label-width, 140px) minmax(0, 1fr); align-items: center; gap: var(--fr-service-column-gap, 16px); padding: 0 0 12px; margin: 0 0 12px; border: 0; border-bottom: 1px solid var(--line); border-radius: 0; flex-shrink: 0; }
 .model-section > :deep(.model-picker) { width: 100%; max-width: 640px; justify-self: start; }
 .model-heading strong { font-size: 13px; font-weight: 550; }
 .service-configuration-slot { flex-shrink: 0; padding-bottom: 12px; }

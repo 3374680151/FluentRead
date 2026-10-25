@@ -1372,18 +1372,18 @@ watch(serviceActionOpen, open => {if (!open) pendingServiceAction.value = null},
 .configuration-group-heading { margin-bottom: 8px; }
 .configuration-group-heading h5 { margin: 0; color: var(--ink); font-size: 14px; font-weight: 650; line-height: 1.5; }
 .configuration-group-heading p { margin: 5px 0 0; color: var(--muted); font-size: 12px; line-height: 1.6; }
-.connection-field { display: grid; grid-template-columns: 140px minmax(0, 1fr); align-items: start; gap: 16px; padding: 14px 0; }
+.connection-field { display: grid; grid-template-columns: var(--fr-service-label-width, 140px) minmax(0, 1fr); align-items: start; gap: var(--fr-service-column-gap, 16px); padding: var(--fr-settings-row-padding-block, 14px) 0; }
 .connection-field + .connection-field { border-top: 1px solid var(--line, #e4e7ef); }
-.connection-field-label { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; min-width: 0; min-height: 38px; }
+.connection-field-label { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; min-width: 0; min-height: var(--fr-service-control-height, 40px); }
 .connection-field-label small { flex-basis: 100%; }
 .connection-field-label strong { color: var(--ink); font-size: 13px; font-weight: 550; line-height: 1.5; }
 .connection-field-label small, .provider-field-help, .custom-headers-help, .model-thinking-setting > small, .model-vision-setting > small { color: var(--muted); font-size: 12px; line-height: 1.6; overflow-wrap: anywhere; }
-.connection-field-control { display: flex; flex-direction: column; align-items: stretch; justify-self: start; width: 100%; max-width: 640px; min-width: 0; }
+.connection-field-control { display: flex; flex-direction: column; align-items: stretch; justify-self: start; width: 100%; max-width: var(--fr-service-control-width, 640px); min-width: 0; }
 .connection-field-control :deep(.el-input), .connection-field-control :deep(.el-select), .connection-field-control :deep(.el-textarea) { width: 100% !important; max-width: 640px !important; }
 .connection-field-control :deep(.el-select) { max-width: 360px !important; }
-.service-connection-section :deep(.el-input__wrapper), .service-connection-section :deep(.el-select:not(.fluentread-select) .el-select__wrapper) { min-height: 38px; padding: 0 11px; border-radius: 10px; background: var(--surface, #fff); border-color: var(--line); }
+.service-connection-section :deep(.el-input__wrapper), .service-connection-section :deep(.el-select:not(.fluentread-select) .el-select__wrapper) { min-height: var(--fr-service-control-height, 40px); padding: 0 11px; border-radius: 8px; background: var(--surface, #fff); border-color: var(--line); }
 .service-connection-section :deep(.el-input__inner), .service-connection-section :deep(.el-select__selected-item) { font-size: 13px; }
-.service-connection-section :deep(.el-textarea__inner) { border-radius: 10px; background: var(--surface); font-size: 13px; padding: 10px 12px; }
+.service-connection-section :deep(.el-textarea__inner) { border-radius: 8px; background: var(--surface); font-size: 13px; padding: 10px 12px; }
 .service-connection-section :deep(.el-switch) { --el-switch-on-color: var(--brand, #ef4776); }
 .provider-field-help, .custom-headers-help { display: block; align-self: stretch; margin: 7px 0 0; }
 .provider-field-help code { font-size: 11px; }
