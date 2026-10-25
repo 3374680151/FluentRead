@@ -7,8 +7,682 @@ import {parseHTML} from 'linkedom';
 import {describe, expect, it, vi} from 'vitest';
 import cases from './browser-translation-cases.json';
 import establishedFixtures from '../scripts/site-translation/site-adaptation-established-fixtures.json';
+import type {YoutubeFetchPort} from '../src/features/video-subtitle/content/youtubeTimedTextBridgeCore';
 
 const require = createRequire(import.meta.url);
+
+describe('X request-level runtime attribution', () => {
+  const {POLICY, explicitArguments, classifyRequest, createXRuntimeDiagnostics} =
+    require('../scripts/testing/x-runtime-diagnostics.cjs');
+  const extensionId = 'fixture-extension';
+  const initiator = () => ({type: 'script', stack: {callFrames: POLICY.frames.map((frame: {
+    bridge?: boolean; url?: string; functionName: string; lineNumber: number; columnNumber: number;
+  }) => ({functionName: frame.functionName,
+    url: frame.bridge ? `chrome-extension://${extensionId}/${POLICY.bridgePath}` : frame.url,
+    lineNumber: frame.lineNumber, columnNumber: frame.columnNumber, scriptId: 'opaque-runtime-id'}))}});
+  function facts() {
+    return {extensionId, artifactHash: POLICY.bridgeSha256,
+      entry: {id: 7, ownership: 'unattributed', type: 'browser-log', browserSource: 'network',
+        targetType: 'page', level: 'error', targetUrl: POLICY.pageUrl, sourceUrl: POLICY.requestUrl,
+        message: 'Failed to load resource: the server responded with a status of 404 ()',
+        contextOrigin: '', contextName: '', stack: []},
+      binding: {networkRequestId: 'request-1', entryIds: [7], targetId: 'target-1', sessionKey: 'session-1',
+        loaderId: 'loader-1', frameId: 'frame-1', pageUrl: POLICY.pageUrl},
+      request: {requestId: 'request-1', targetId: 'target-1', sessionKey: 'session-1', loaderId: 'loader-1',
+        frameId: 'frame-1', pageUrl: POLICY.pageUrl, documentURL: POLICY.pageUrl,
+        requestCount: 1, responseCount: 1, finishCount: 1, logCount: 1,
+        method: 'GET', url: POLICY.requestUrl, responseUrl: POLICY.requestUrl, status: 404,
+        type: 'Fetch', initiator: initiator()},
+    };
+  }
+  type Facts = ReturnType<typeof facts>;
+
+  it('accepts only the saved four-frame native startup chain through the reviewed transparent forwarder', () => {
+    expect(classifyRequest(facts())).toMatchObject({matched: true, policyId: POLICY.id, requestId: 'request-1'});
+  });
+
+  it.each<[string, (value: Facts) => void]>([
+    ['network destination without a request binding', value => {value.binding.networkRequestId = '';}],
+    ['a changed native page', value => {value.entry.targetUrl = 'https://x.com/other/status/1';}],
+    ['a different API origin', value => {value.request.url = POLICY.requestUrl.replace('api.x.com', 'provider.test');}],
+    ['a different endpoint', value => {value.request.url = POLICY.requestUrl.replace('/2/guide.json', '/2/timeline.json');}],
+    ['additional request parameters', value => {value.request.url += '&unexpected=1';}],
+    ['a POST to the same URL', value => {value.request.method = 'POST';}],
+    ['request data on GET', value => {Object.assign(value.request, {hasPostData: true});}],
+    ['a different response URL', value => {value.request.responseUrl = 'https://api.x.com/redirected';}],
+    ['a different response status', value => {value.request.status = 500;}],
+    ['a preflight response', value => {value.request.type = 'Preflight';}],
+    ['a redirected request reusing an ID', value => {Object.assign(value.request, {redirected: true});}],
+    ['a failed/CORS request', value => {Object.assign(value.request, {failed: true});}],
+    ['a service-worker response', value => {Object.assign(value.request, {fromServiceWorker: true});}],
+    ['a second request sharing the ID', value => {value.request.requestCount = 2;}],
+    ['duplicate responses', value => {value.request.responseCount = 2;}],
+    ['an unfinished request', value => {value.request.finishCount = 0;}],
+    ['two logs associated with one request', value => {value.request.logCount = 2;}],
+    ['an ambiguous new-entry set', value => {value.binding.entryIds.push(8);}],
+    ['the wrong actual entry ID', value => {value.binding.entryIds = [8];}],
+    ['the wrong target', value => {value.binding.targetId = 'other-target';}],
+    ['another CDP session', value => {value.binding.sessionKey = 'other-session';}],
+    ['a previous loader', value => {value.binding.loaderId = 'previous-loader';}],
+    ['another frame', value => {value.binding.frameId = 'child-frame';}],
+    ['a different document URL', value => {value.request.documentURL = 'https://x.com/home';}],
+    ['an unknown bridge build', value => {value.artifactHash = 'unreviewed';}],
+    ['the same file in another extension', value => {value.request.initiator.stack.callFrames[0].url = 'chrome-extension://other/content-scripts/xVideoBridge.js';}],
+    ['a changed bridge call position', value => {value.request.initiator.stack.callFrames[0].columnNumber += 1;}],
+    ['an extension-initiated request with no native caller', value => {value.request.initiator.stack.callFrames.splice(1);}],
+    ['another native script with a similar name', value => {value.request.initiator.stack.callFrames[1].url += '.unknown';}],
+    ['reordered native startup frames', value => {value.request.initiator.stack.callFrames.reverse();}],
+    ['an extra extension frame', value => {value.request.initiator.stack.callFrames.push(value.request.initiator.stack.callFrames[0]);}],
+    ['an unknown asynchronous initiator parent', value => {Object.assign(value.request.initiator.stack, {parent: {callFrames: []}});}],
+    ['a known FluentRead error', value => {value.entry.ownership = 'fluentread';}],
+    ['a console error with the same words', value => {value.entry.type = 'console';}],
+    ['an exception with the same words', value => {value.entry.type = 'exception';}],
+    ['a background error', value => {value.entry.targetType = 'service_worker';}],
+    ['an isolated-world context', value => {value.entry.contextName = 'FluentRead';}],
+    ['an explicit extension stack', value => {Object.assign(value.entry, {stack: [{url: 'chrome-extension://fixture-extension/content.js'}]});}],
+  ])('keeps %s blocking', (_name, mutate) => {
+    const value = facts(); mutate(value);
+    expect(classifyRequest(value).matched).toBe(false);
+  });
+
+  async function fixture(options: {networkUnavailable?: boolean; artifactHash?: string;
+    extraEntries?: boolean; rawVerdictError?: string; snapshotFault?: boolean;
+    rawPassedOverride?: boolean; rawVerdictSucceeds?: boolean; stopError?: string;
+    redact?: (value: unknown) => string} = {}) {
+    const entries: Record<string, unknown>[] = [];
+    const coverage = {pages: [{status: 'listening'}], workers: [{attached: true}], failures: [] as unknown[], limitations: ['original limitation']};
+    const originalCalls: {receiver: unknown; params: unknown}[] = [];
+    const session = new EventEmitter() as EventEmitter & {
+      send: ReturnType<typeof vi.fn>; detach: ReturnType<typeof vi.fn>;
+    };
+    session.send = vi.fn(async (method: string) => {
+      if (method === 'Network.enable' && options.networkUnavailable) throw new Error('Network domain unavailable');
+      if (method === 'Target.getTargetInfo') return {targetInfo: {targetId: 'target-1', type: 'page'}};
+      if (method === 'Page.getFrameTree') return {frameTree: {frame: {id: 'frame-1', loaderId: 'loader-1', url: POLICY.pageUrl}}};
+      return {};
+    });
+    session.detach = vi.fn(async () => session.removeAllListeners());
+    const page = {url: () => POLICY.pageUrl};
+    const context = {newCDPSession: vi.fn(async (_page: unknown) => session)};
+    let sequence = 0, phase = 'bootstrap', workerObserved = true, snapshotReads = 0;
+    const rawSnapshot = () => {
+      if (options.snapshotFault && ++snapshotReads === 1) throw new Error('Binding snapshot unavailable');
+      const blockers = entries.filter(entry => ['fluentread', 'unattributed'].includes(String(entry.ownership)));
+      return {entries: structuredClone(entries), coverage: structuredClone(coverage), completeCoverage: false,
+        coverageScope: 'original scope', counts: {errors: blockers.filter(entry => entry.level === 'error').length,
+          warnings: blockers.filter(entry => entry.level === 'warning').length, expected: 0,
+          site: entries.filter(entry => entry.ownership === 'site').length},
+        workerObserved, passed: options.rawPassedOverride ?? (!blockers.length && !coverage.failures.length && workerObserved),
+        blockerIds: blockers.map(entry => entry.id)};
+    };
+    const base = {
+      async start(wrappedContext: typeof context) {
+        const sameSession = await wrappedContext.newCDPSession(page);
+        sameSession.on('Log.entryAdded', function (this: unknown, params: {entry: {
+          level: string; source: string; text: string; url?: string; timestamp: number;
+        }}) {
+          originalCalls.push({receiver: this, params});
+          const log = params.entry;
+          if (!['warning', 'error'].includes(log.level)) return;
+          entries.push({id: ++sequence, phase, surface: 'translation-page', targetType: 'page', type: 'browser-log',
+            level: log.level, message: log.text, sourceUrl: log.url || '', stack: [], browserSource: log.source,
+            contextOrigin: '', contextName: '', targetUrl: page.url(), protocolTimestamp: log.timestamp,
+            ownership: log.source === 'network' ? 'unattributed' : 'fluentread'});
+          if (options.extraEntries) entries.push({...entries.at(-1), id: ++sequence});
+        });
+        await sameSession.send('Runtime.enable'); await sameSession.send('Log.enable');
+      },
+      attachPage: vi.fn(async () => {}), setExtensionId: vi.fn(), setPhase(value: string) {phase = value;},
+      flush: vi.fn(async () => {}), snapshot: rawSnapshot,
+      assertClean() {
+        if (options.rawVerdictError) throw new Error(options.rawVerdictError);
+        if (options.rawVerdictSucceeds) return;
+        const raw = rawSnapshot();
+        if (!raw.passed) throw new Error(`运行时诊断未通过：${raw.counts.errors} 个错误、${raw.counts.warnings} 个告警、${raw.coverage.failures.length} 个采集失败，后台采集${raw.workerObserved ? '已连接' : '未连接'}；见 runtime-diagnostics.json`);
+      },
+      stop: vi.fn(async () => {await session.detach(); if (options.stopError) throw new Error(options.stopError);}),
+    };
+    const readArtifactHash = vi.fn(() => options.artifactHash || POLICY.bridgeSha256);
+    const diagnostics = createXRuntimeDiagnostics({rawHelper: {createRuntimeDiagnostics: () => base, redact: options.redact ?? String},
+      extensionDir: '/explicit/test-build', readArtifactHash});
+    await diagnostics.start(context); diagnostics.setExtensionId(extensionId); diagnostics.setPhase('full/restore');
+    const request = (overrides = {}) => session.emit('Network.requestWillBeSent', {
+      requestId: 'request-1', frameId: 'frame-1', loaderId: 'loader-1', documentURL: POLICY.pageUrl,
+      request: {url: POLICY.requestUrl, method: 'GET'}, initiator: initiator(), ...overrides,
+    });
+    const response = (overrides = {}) => session.emit('Network.responseReceived', {
+      requestId: 'request-1', frameId: 'frame-1', loaderId: 'loader-1', type: 'Fetch',
+      response: {url: POLICY.requestUrl, status: 404, fromServiceWorker: false}, ...overrides,
+    });
+    const log = (overrides = {}) => {
+      const params = {entry: {level: 'error', source: 'network', timestamp: 12345,
+        text: 'Failed to load resource: the server responded with a status of 404 ()',
+        url: POLICY.requestUrl, networkRequestId: 'request-1', ...overrides}};
+      session.emit('Log.entryAdded', params); return params;
+    };
+    const finish = () => session.emit('Network.loadingFinished', {requestId: 'request-1'});
+    return {diagnostics, base, entries, coverage, session, context, originalCalls, rawSnapshot,
+      request, response, log, finish, readArtifactHash,
+      loseWorker() {workerObserved = false;}};
+  }
+
+  it('uses the exact original session and callback, binds actual IDs, retains raw failure and audits derived counts', async () => {
+    const f = await fixture();
+    f.request(); f.response(); const params = f.log(); f.finish();
+    expect(f.context.newCDPSession).toHaveBeenCalledTimes(1);
+    expect(f.originalCalls).toEqual([{receiver: f.session, params}]);
+    expect(f.originalCalls[0].params).toBe(params);
+    expect(f.session.send.mock.calls.map(call => call[0])).toEqual([
+      'Network.enable', 'Page.enable', 'Target.getTargetInfo', 'Page.getFrameTree', 'Runtime.enable', 'Log.enable',
+    ]);
+    expect(f.readArtifactHash).toHaveBeenCalledWith('/explicit/test-build/content-scripts/xVideoBridge.js');
+    expect(() => f.base.assertClean()).toThrow('运行时诊断未通过');
+    expect(() => f.diagnostics.assertClean()).not.toThrow();
+    const report = f.diagnostics.snapshot();
+    expect(report.rawDiagnostics).toEqual(f.rawSnapshot());
+    expect(report.rawDiagnostics).toMatchObject({passed: false, blockerIds: [1], counts: {errors: 1, site: 0}});
+    expect(report.rawVerdict).toMatchObject({observed: true, passed: false});
+    expect(report).toMatchObject({passed: true, blockerIds: [], counts: {errors: 0, warnings: 0, site: 1},
+      completeCoverage: false, coverage: {limitations: ['original limitation']}});
+    expect(report.requestOwnership.adjustments).toHaveLength(1);
+    expect(report.requestOwnership.adjustments[0]).toMatchObject({entryId: 1, evidence: {requestId: 'request-1'}});
+    await f.diagnostics.stop();
+    expect(f.base.stop).toHaveBeenCalledOnce(); expect(f.session.listenerCount('Network.requestWillBeSent')).toBe(0);
+  });
+
+  it.each(['missing-id', 'missing-request', 'missing-response', 'missing-finish', 'duplicate-log',
+    'duplicate-entry', 'changed-loader', 'response-from-other-frame', 'failed-request', 'unreviewed-build', 'network-gap'])(
+    'keeps actual event-stream %s blocking without URL/timestamp reconstruction', async problem => {
+      const f = await fixture({extraEntries: problem === 'duplicate-entry',
+        artifactHash: problem === 'unreviewed-build' ? 'other-build' : undefined,
+        networkUnavailable: problem === 'network-gap'});
+      if (problem !== 'missing-request') f.request();
+      if (problem !== 'missing-response') f.response(problem === 'response-from-other-frame' ? {frameId: 'child'} : {});
+      if (problem === 'changed-loader') f.session.emit('Page.frameNavigated', {frame: {id: 'frame-1', loaderId: 'later-loader', url: POLICY.pageUrl}});
+      f.log(problem === 'missing-id' ? {networkRequestId: undefined} : {});
+      if (problem === 'duplicate-log') f.log();
+      if (problem !== 'missing-finish') f.finish();
+      if (problem === 'failed-request') f.session.emit('Network.loadingFailed', {requestId: 'request-1', errorText: 'blocked'});
+      expect(() => f.diagnostics.assertClean()).toThrow();
+      expect(f.diagnostics.snapshot().passed).toBe(false);
+      expect(f.diagnostics.snapshot().requestOwnership.adjustments).toEqual([]);
+      expect(f.originalCalls.length).toBe(problem === 'duplicate-log' ? 2 : 1);
+      await f.diagnostics.stop();
+    });
+
+  it.each(['extension-error', 'extension-warning', 'coverage-gap', 'worker-gap', 'unknown-network', 'extra-raw-verdict'])(
+    'never releases a separate %s alongside an evidenced native 404', async problem => {
+      const f = await fixture({rawVerdictError: problem === 'extra-raw-verdict' ? 'Additional raw verifier failure' : undefined});
+      f.request(); f.response(); f.log(); f.finish();
+      if (problem.startsWith('extension-')) f.log({source: 'javascript', text: 'Extension failed', level: problem.endsWith('warning') ? 'warning' : 'error'});
+      if (problem === 'unknown-network') f.log({url: 'https://provider.test/translate', networkRequestId: 'unobserved'});
+      if (problem === 'coverage-gap') f.coverage.failures.push({surface: 'worker', message: 'attach failed'});
+      if (problem === 'worker-gap') f.loseWorker();
+      expect(() => f.diagnostics.assertClean()).toThrow();
+      const report = f.diagnostics.snapshot();
+      expect(report.passed).toBe(false);
+      expect(report.rawDiagnostics.passed).toBe(false);
+      expect(report.rawVerdict.passed).toBe(false);
+      await f.diagnostics.stop();
+    });
+
+  it('still invokes the original callback when observing its before-snapshot fails', async () => {
+    const f = await fixture({snapshotFault: true});
+    f.request(); f.response(); f.log(); f.finish();
+    expect(f.originalCalls).toHaveLength(1); expect(f.entries).toHaveLength(1);
+    expect(() => f.diagnostics.assertClean()).toThrow();
+    expect(f.diagnostics.snapshot().requestOwnership.failures).toContainEqual({surface: 'entry-binding-before', message: 'Binding snapshot unavailable'});
+    await f.diagnostics.stop();
+  });
+
+  it('cannot skip original collector cleanup when removing a diagnostic listener fails', async () => {
+    const f = await fixture();
+    vi.spyOn(f.session, 'off').mockImplementation(() => {throw new Error('Listener cleanup failed');});
+    await expect(f.diagnostics.stop()).rejects.toThrow('Listener cleanup failed');
+    expect(f.base.stop).toHaveBeenCalledOnce(); expect(f.session.detach).toHaveBeenCalledOnce();
+    expect(f.diagnostics.snapshot().passed).toBe(false);
+  });
+
+  it.each([false, true])('rejects contradictory raw snapshot passed=%s even when all eligible requests are proven', async rawPassedOverride => {
+    const f = await fixture({rawPassedOverride});
+    if (rawPassedOverride) {f.request(); f.response(); f.log(); f.finish();}
+    // false + no blockers and true + an original blocker both contradict the original documented predicate.
+    expect(f.diagnostics.snapshot().requestOwnership.rawSnapshotConsistent).toBe(false);
+    expect(() => f.diagnostics.assertClean()).toThrow();
+    const report = f.diagnostics.snapshot();
+    expect(report.passed).toBe(false); expect(report.rawDiagnostics.passed).toBe(rawPassedOverride);
+    await f.diagnostics.stop();
+  });
+
+  it('rejects an original verifier that returns success despite a raw blocker', async () => {
+    const f = await fixture({rawVerdictSucceeds: true});
+    f.request(); f.response(); f.log(); f.finish();
+    expect(() => f.diagnostics.assertClean()).toThrow();
+    const report = f.diagnostics.snapshot();
+    expect(report).toMatchObject({passed: false, rawVerdict: {observed: true, passed: true}, rawDiagnostics: {passed: false}});
+    expect(report.requestOwnership.failures).toContainEqual({surface: 'raw-verdict', message: 'Raw verdict disagrees with its snapshot'});
+    await f.diagnostics.stop();
+  });
+
+  it('retains an additional original verifier error even when its raw snapshot has no blockers', async () => {
+    const f = await fixture({rawVerdictError: 'Additional raw verifier failure'});
+    expect(() => f.diagnostics.assertClean()).toThrow('Additional raw verifier failure');
+    expect(f.diagnostics.snapshot()).toMatchObject({passed: false, rawDiagnostics: {passed: true},
+      rawVerdict: {observed: true, passed: false, message: 'Additional raw verifier failure'}});
+    await f.diagnostics.stop();
+  });
+
+  it.each([false, true])('retains original collector stop failure alongside observer failure=%s', async observerFailure => {
+    const f = await fixture({stopError: 'Original collector stop failed'});
+    if (observerFailure) vi.spyOn(f.session, 'off').mockImplementation(() => {throw new Error('Listener cleanup failed');});
+    await expect(f.diagnostics.stop()).rejects.toThrow(observerFailure ? 'Listener cleanup failed' : 'Original collector stop failed');
+    expect(f.base.stop).toHaveBeenCalledOnce(); expect(f.session.detach).toHaveBeenCalledOnce();
+    const report = f.diagnostics.snapshot();
+    expect(report.passed).toBe(false);
+    expect(report.requestOwnership.failures).toContainEqual({surface: 'raw-stop', message: 'Original collector stop failed'});
+    if (observerFailure) expect(report.requestOwnership.failures).toContainEqual({surface: 'listener-cleanup', message: 'Listener cleanup failed'});
+  });
+
+  it('records a failed blob request as unknown evidence without changing the raw verdict or granting site ownership', async () => {
+    const f = await fixture();
+    const blobUrl = 'blob:https://x.com/native-player-resource';
+    f.request({request: {url: blobUrl, method: 'GET'}, initiator: {type: 'other'}});
+    f.session.emit('Network.loadingFailed', {requestId: 'request-1', errorText: 'net::ERR_FILE_NOT_FOUND',
+      type: 'Media', canceled: false});
+    f.log({url: blobUrl, text: 'Failed to load resource: net::ERR_FILE_NOT_FOUND'});
+    expect(() => f.diagnostics.assertClean()).toThrow();
+    const report = f.diagnostics.snapshot();
+    expect(report.rawDiagnostics).toEqual(f.rawSnapshot());
+    expect(report).toMatchObject({passed: false, blockerIds: [1], counts: {errors: 1, site: 0}});
+    expect(report.requestOwnership.adjustments).toEqual([]);
+    expect(report.requestOwnership.unclassifiedEntries).toMatchObject([{entryId: 1, reason: 'different-log',
+      binding: {networkRequestId: 'request-1', targetId: 'target-1', loaderId: 'loader-1'},
+      request: {url: blobUrl, method: 'GET', requestCount: 1, responseCount: 0, finishCount: 0,
+        failed: true, failure: {errorText: 'net::ERR_FILE_NOT_FOUND', type: 'Media', canceled: false},
+        initiator: {type: 'other'}}}]);
+    await f.diagnostics.stop();
+  });
+
+  it('redacts unknown request URLs and stacks while never recording headers or request bodies', async () => {
+    const f = await fixture({redact: value => String(value).replaceAll('fixture-private', '[REDACTED]')});
+    f.request({request: {url: POLICY.requestUrl + '&token=fixture-private', method: 'GET',
+      headers: {authorization: 'fixture-private'}, postData: 'fixture-private-body'},
+    initiator: {type: 'script', stack: {callFrames: [{url: 'https://native.test/script.js?token=fixture-private'}]}}});
+    f.response(); f.log(); f.finish();
+    expect(() => f.diagnostics.assertClean()).toThrow();
+    const report = f.diagnostics.snapshot();
+    const observation = report.requestOwnership.unclassifiedEntries[0];
+    expect(observation.request.url).toContain('token=[REDACTED]');
+    expect(observation.request.initiator.stack.callFrames[0].url).toContain('token=[REDACTED]');
+    expect(JSON.stringify(observation)).not.toContain('fixture-private');
+    expect(observation.request).not.toHaveProperty('headers');
+    expect(observation.request).not.toHaveProperty('postData');
+    expect(report.rawDiagnostics).toEqual(f.rawSnapshot());
+    expect(report.passed).toBe(false);
+    await f.diagnostics.stop();
+  });
+
+  it('keeps a missing request ID explicit instead of reconstructing unknown evidence from its URL', async () => {
+    const f = await fixture(); f.request(); f.response(); f.finish();
+    f.log({networkRequestId: undefined});
+    const report = f.diagnostics.snapshot();
+    expect(report.requestOwnership.unclassifiedEntries).toMatchObject([{entryId: 1,
+      reason: 'missing-or-ambiguous-entry-binding', binding: {networkRequestId: null}, request: null}]);
+    expect(report.passed).toBe(false);
+    await f.diagnostics.stop();
+  });
+
+  it('requires explicit nonduplicate base-helper and extension paths without a machine-specific default', () => {
+    expect(explicitArguments(['--raw-runtime-diagnostics-helper', '/approved/raw.cjs', '--extension-dir', '/build']))
+      .toEqual({rawHelperPath: '/approved/raw.cjs', extensionDir: '/build'});
+    for (const argv of [[], ['--extension-dir', '/build'], ['--raw-runtime-diagnostics-helper', '/raw', '--extension-dir'],
+      ['--raw-runtime-diagnostics-helper', '/raw', '--raw-runtime-diagnostics-helper', '/other', '--extension-dir', '/build']]) {
+      expect(() => explicitArguments(argv)).toThrow('explicit');
+    }
+  });
+
+  it('the actual bridge preserves guide input/init/receiver and the exact 404 response without clone or publication', async () => {
+    const {installYoutubeTimedTextBridgeCore} = await import('../src/features/video-subtitle/content/youtubeTimedTextBridgeCore');
+    const {isXVideoBridgeResourceUrl, createXVideoBridgeResourcePayload} = await import('../src/features/video-subtitle/content/xVideoSubtitleData');
+    const response = {status: 404, clone: vi.fn(() => ({text: async () => 'should not read'}))};
+    const original = vi.fn(async (_input: unknown, _init?: unknown) => response);
+    let current: YoutubeFetchPort = original;
+    const postMessage = vi.fn();
+    const port = {get: () => current, set: (next: YoutubeFetchPort) => {current = next;}};
+    const events = {addEventListener: vi.fn(), removeEventListener: vi.fn()};
+    const xhr = {get: () => function () {}, set: vi.fn()};
+    const dispose = installYoutubeTimedTextBridgeCore({stateHost: {}, fetch: port, xhrOpen: xhr, xhrSend: xhr,
+      pageEvents: events, documentEvents: events, getHref: () => POLICY.pageUrl,
+      getOrigin: () => 'https://x.com', postMessage,
+      resourcePolicy: {matches: isXVideoBridgeResourceUrl, payload: createXVideoBridgeResourcePayload}});
+    const receiver = {}, input = new Request(POLICY.requestUrl), init = {headers: {fixture: 'unchanged'}, credentials: 'include', signal: new AbortController().signal};
+    expect(isXVideoBridgeResourceUrl(POLICY.requestUrl, POLICY.pageUrl)).toBe(false);
+    expect(await current.call(receiver, input, init)).toBe(response);
+    expect(original).toHaveBeenCalledTimes(1);
+    expect(original.mock.contexts[0]).toBe(receiver);
+    expect(original.mock.calls[0][0]).toBe(input); expect(original.mock.calls[0][1]).toBe(init);
+    expect(response.clone).not.toHaveBeenCalled(); expect(postMessage).not.toHaveBeenCalled();
+    dispose(); expect(current).toBe(original);
+  });
+});
+
+describe('dismissible public promotion preparation', () => {
+  const {prepareDismissiblePromotion} = require('../scripts/run-site-translation-test.cjs');
+  const {normalizeDismissiblePromotion, normalizeCaseConfig, collectBaseCaseConfigErrors} =
+    require('../scripts/site-translation/case-config.cjs');
+  const config = {
+    dialogSelector: '[role="dialog"][aria-modal="true"][aria-labelledby="base-contextual-sign-in-modal-modal-header"]',
+    buttonSelector: 'button.contextual-sign-in-modal__modal-dismiss[data-tracking-control-name="pulse-article_contextual-sign-in-modal_modal_dismiss"]',
+    contentSelector: 'article.article-main',
+  };
+  const publicUrl = 'https://www.linkedin.com/pulse/independently-authored-public-article';
+  const html = '<main aria-hidden="true"><article class="article-main"><h1>A public article title</h1>' +
+    '<p>The complete public paragraph is present before dismissing the promotion.</p></article></main>' +
+    '<section role="dialog" aria-modal="true" aria-labelledby="base-contextual-sign-in-modal-modal-header">' +
+    '<button class="contextual-sign-in-modal__modal-dismiss" data-tracking-control-name="pulse-article_contextual-sign-in-modal_modal_dismiss">Dismiss</button>' +
+    '<form><input name="session_key"><button type="submit">Sign in</button></form></section>';
+  type Fixture = {
+    document: Document;
+    page: {url: () => string; locator: (selector: string) => {click: ReturnType<typeof vi.fn>};
+      evaluate: (fn: (input: unknown) => unknown, input: unknown) => Promise<unknown>;
+      waitForFunction: ReturnType<typeof vi.fn>};
+    nativeClick: ReturnType<typeof vi.fn>;
+    location: {href: string; pathname: string};
+  };
+  async function withPromotion(run: (fixture: Fixture) => Promise<void>,
+    options: {afterClick?: (fixture: Pick<Fixture, 'document' | 'location'>) => void;
+      beforePoll?: (fixture: Pick<Fixture, 'document' | 'location'>) => void} = {}) {
+    const parsed = parseHTML(`<html><body>${html}</body></html>`);
+    const document = parsed.document as unknown as Document;
+    Object.defineProperty(parsed.window.HTMLElement.prototype, 'getBoundingClientRect', {configurable: true,
+      value: () => ({width: 400, height: 100})});
+    const location = {href: publicUrl, pathname: new URL(publicUrl).pathname};
+    const globals = {document, location, getComputedStyle: (node: HTMLElement) => ({
+      display: node.style.display || 'block', visibility: node.style.visibility || 'visible', opacity: node.style.opacity || '1',
+    })};
+    const previous = new Map<string, PropertyDescriptor | undefined>();
+    for (const [name, value] of Object.entries(globals)) {
+      previous.set(name, Object.getOwnPropertyDescriptor(globalThis, name));
+      Object.defineProperty(globalThis, name, {configurable: true, writable: true, value});
+    }
+    const nativeClick = vi.fn(async () => {
+      // This is the authored site's native handler, not an action performed by the helper's page predicate.
+      expect(document.querySelector('main')!.getAttribute('aria-hidden')).toBe('true');
+      if (options.afterClick) options.afterClick({document, location});
+      else {
+        document.querySelector(config.dialogSelector)!.setAttribute('hidden', '');
+        document.querySelector('main')!.removeAttribute('aria-hidden');
+      }
+    });
+    const page = {url: () => location.href,
+      locator: (selector: string) => {expect(selector).toBe(config.buttonSelector); return {click: nativeClick};},
+      evaluate: async (fn: (input: unknown) => unknown, input: unknown) => fn(input),
+      waitForFunction: vi.fn(async (fn: (input: unknown) => unknown, input: unknown) => {
+        options.beforePoll?.({document, location});
+        if (!fn(input)) throw new Error('promotion/public content did not become readable');
+        return {dispose: vi.fn(async () => undefined)};
+      })};
+    try {await run({document, page, nativeClick, location});}
+    finally {for (const [name, descriptor] of previous) {
+      if (descriptor) Object.defineProperty(globalThis, name, descriptor);
+      else Reflect.deleteProperty(globalThis, name);
+    }}
+  }
+
+  it('normalizes only three explicit selectors and keeps the feature optional', () => {
+    expect(normalizeDismissiblePromotion(undefined)).toBeUndefined();
+    expect(normalizeDismissiblePromotion(Object.fromEntries(Object.entries(config).map(([key, value]) => [key, ` ${value} `])))).toEqual(config);
+    const base = Object.values(cases)[0];
+    expect(normalizeCaseConfig('public-promo', {...base, prepareDismissiblePromotion: config}).prepareDismissiblePromotion).toEqual(config);
+    expect(normalizeCaseConfig('ordinary', base)).not.toHaveProperty('prepareDismissiblePromotion');
+    expect(collectBaseCaseConfigErrors('public-promo', {...base, prepareDismissiblePromotion: config, prepareClickText: 'Any other action'}))
+      .toContain('public-promo 的 prepareDismissiblePromotion 不得与 prepareClickText 同时使用');
+  });
+
+  it.each([null, false, true, 1, 'click', [], {}, {...config, contentSelector: undefined},
+    {...config, dialogSelector: ''}, {...config, buttonSelector: '  '}, {...config, contentSelector: ['article']},
+    {...config, action: 'remove'}, {...config, url: '/login'}, {...config, clicks: 2}])('rejects malformed or additional action configuration %#', value => {
+    expect(() => normalizeDismissiblePromotion(value)).toThrow('prepareDismissiblePromotion');
+    expect(() => normalizeCaseConfig('invalid-promo', {...Object.values(cases)[0], prepareDismissiblePromotion: value})).toThrow('prepareDismissiblePromotion');
+  });
+
+  it.each([undefined, 'button'])('uses one native click for an unassociated safe button type %s', async type => {
+    await withPromotion(async ({document, page, nativeClick}) => {
+      if (type) document.querySelector(config.buttonSelector)!.setAttribute('type', type);
+      const before = document.querySelector('article')!.outerHTML;
+      await expect(prepareDismissiblePromotion(page, config, publicUrl, 1000)).resolves.toMatchObject({status: 'dismissed', nativeClicks: 1});
+      expect(nativeClick).toHaveBeenCalledTimes(1);
+      expect(page.waitForFunction).toHaveBeenCalledOnce();
+      expect(document.querySelector('article')!.outerHTML).toBe(before);
+      expect(document.querySelector('input')!.getAttribute('value')).toBeNull();
+    });
+  });
+
+  it.each(['absent', 'hidden'])('allows an already readable public article when the promotion is %s', async state => {
+    await withPromotion(async ({document, page, nativeClick}) => {
+      const dialog = document.querySelector(config.dialogSelector)!;
+      if (state === 'absent') dialog.remove(); else dialog.setAttribute('hidden', '');
+      document.querySelector('main')!.removeAttribute('aria-hidden');
+      const before = document.body.innerHTML;
+      await expect(prepareDismissiblePromotion(page, config, publicUrl, 1000)).resolves.toMatchObject({status: 'not-present', nativeClicks: 0});
+      expect(nativeClick).not.toHaveBeenCalled();
+      expect(document.body.innerHTML).toBe(before);
+    });
+  });
+
+  it('waits within one deadline for a unique safe button to become painted, then rechecks before clicking', async () => {
+    await withPromotion(async ({document, page, nativeClick}) => {
+      document.querySelector<HTMLElement>(config.buttonSelector)!.style.visibility = 'hidden';
+      await expect(prepareDismissiblePromotion(page, config, publicUrl, 1000)).resolves.toMatchObject({status: 'dismissed', nativeClicks: 1});
+      expect(page.waitForFunction).toHaveBeenCalledTimes(2);
+      expect(nativeClick).toHaveBeenCalledOnce();
+      for (const call of page.waitForFunction.mock.calls) expect((call[2] as {timeout?: number} | undefined)?.timeout ?? 0).toBeLessThanOrEqual(1000);
+    }, {beforePoll: ({document}) => {document.querySelector<HTMLElement>(config.buttonSelector)!.style.visibility = 'visible';}});
+  });
+
+  it('rejects a form association introduced while waiting and records its exact preconditions without clicking', async () => {
+    await withPromotion(async ({document, page, nativeClick}) => {
+      document.querySelector(config.buttonSelector)!.setAttribute('hidden', '');
+      const error = await prepareDismissiblePromotion(page, config, publicUrl, 1000).catch((value: Error) => value);
+      expect(error.message).toContain('belongs to a form');
+      expect(error.promotionDiagnostic.button).toMatchObject({count: 1, ancestorForm: true, insideDialog: true, painted: true});
+      expect(nativeClick).not.toHaveBeenCalled();
+      expect(page.waitForFunction).toHaveBeenCalledOnce();
+    }, {beforePoll: ({document}) => {
+      const button = document.querySelector(config.buttonSelector)!;
+      button.removeAttribute('hidden');
+      document.querySelector('form')!.appendChild(button);
+    }});
+  });
+
+  function inactiveOverlay(document: Document) {
+    const dialog = document.querySelector(config.dialogSelector)!;
+    const overlay = document.createElement('div');
+    overlay.className = 'modal__overlay';
+    overlay.setAttribute('aria-hidden', 'true');
+    dialog.replaceWith(overlay);
+    overlay.appendChild(dialog);
+    document.querySelector('main')!.removeAttribute('aria-hidden');
+    return overlay;
+  }
+
+  it('waits for an inactive known promotion to activate before its one native click', async () => {
+    await withPromotion(async ({document, page, nativeClick}) => {
+      inactiveOverlay(document);
+      await expect(prepareDismissiblePromotion(page, config, publicUrl, 1000)).resolves.toMatchObject({status: 'dismissed', nativeClicks: 1});
+      expect(nativeClick).toHaveBeenCalledOnce();
+      expect(page.waitForFunction).toHaveBeenCalledTimes(2);
+    }, {beforePoll: ({document}) => {
+      const overlay = document.querySelector('.modal__overlay')!;
+      if (overlay.getAttribute('aria-hidden') === 'true') {
+        overlay.setAttribute('aria-hidden', 'false');
+        document.querySelector('main')!.setAttribute('aria-hidden', 'true');
+      }
+    }});
+  });
+
+  it('allows an inactive known promotion to become visually hidden with readable public content and zero clicks', async () => {
+    await withPromotion(async ({document, page, nativeClick}) => {
+      inactiveOverlay(document);
+      await expect(prepareDismissiblePromotion(page, config, publicUrl, 1000)).resolves.toMatchObject({status: 'not-present', nativeClicks: 0});
+      expect(nativeClick).not.toHaveBeenCalled();
+      expect(page.waitForFunction).toHaveBeenCalledOnce();
+    }, {beforePoll: ({document}) => {document.querySelector<HTMLElement>('.modal__overlay')!.style.visibility = 'hidden';}});
+  });
+
+  it('times out with zero clicks when an inactive known promotion stays painted', async () => {
+    await withPromotion(async ({document, page, nativeClick}) => {
+      inactiveOverlay(document);
+      const before = document.body.innerHTML;
+      const error = await prepareDismissiblePromotion(page, config, publicUrl, 1000).catch((value: Error) => value);
+      expect(error.promotionDiagnostic.button).toMatchObject({inactiveKnownPromotionAncestor: true, inaccessibleAncestor: true, painted: true});
+      expect(nativeClick).not.toHaveBeenCalled();
+      expect(page.waitForFunction).toHaveBeenCalledOnce();
+      expect(document.body.innerHTML).toBe(before);
+    });
+  });
+
+  it.each(['inner aria-hidden', 'inert overlay'])('still refuses %s immediately even inside a known inactive promotion', async state => {
+    await withPromotion(async ({document, page, nativeClick}) => {
+      const overlay = inactiveOverlay(document);
+      if (state === 'inner aria-hidden') document.querySelector(config.buttonSelector)!.setAttribute('aria-hidden', 'true');
+      else overlay.setAttribute('inert', '');
+      await expect(prepareDismissiblePromotion(page, config, publicUrl, 1000)).rejects.toThrow('preparation refused');
+      expect(nativeClick).not.toHaveBeenCalled();
+      expect(page.waitForFunction).not.toHaveBeenCalled();
+    });
+  });
+
+  const invalid: Array<[string, (document: Document) => void]> = [
+    ['duplicate dialog', document => document.body.appendChild(document.querySelector(config.dialogSelector)!.cloneNode(true))],
+    ['duplicate button', document => document.querySelector(config.dialogSelector)!.appendChild(document.querySelector(config.buttonSelector)!.cloneNode(true))],
+    ['outside button', document => document.body.appendChild(document.querySelector(config.buttonSelector)!)],
+    ['missing content', document => document.querySelector('article')!.remove()],
+    ['ambiguous content', document => document.querySelector('main')!.appendChild(document.querySelector('article')!.cloneNode(true))],
+    ['content inside dialog', document => document.querySelector(config.dialogSelector)!.appendChild(document.querySelector('article')!)],
+    ['unrendered content', document => document.querySelector<HTMLElement>('article')!.style.display = 'none'],
+    ['hidden button', document => document.querySelector(config.buttonSelector)!.setAttribute('hidden', '')],
+    ['disabled button', document => document.querySelector(config.buttonSelector)!.setAttribute('disabled', '')],
+    ['inert button', document => document.querySelector(config.buttonSelector)!.setAttribute('inert', '')],
+    ['aria hidden button', document => document.querySelector(config.buttonSelector)!.setAttribute('aria-hidden', 'true')],
+    ['submit button', document => document.querySelector(config.buttonSelector)!.setAttribute('type', 'submit')],
+    ['reset button', document => document.querySelector(config.buttonSelector)!.setAttribute('type', 'reset')],
+    ['form attribute', document => document.querySelector(config.buttonSelector)!.setAttribute('form', 'login-form')],
+    ['submit override', document => document.querySelector(config.buttonSelector)!.setAttribute('formaction', '/login')],
+    ['ancestor form', document => document.querySelector('form')!.appendChild(document.querySelector(config.buttonSelector)!)],
+    ['associated form property', document => Object.defineProperty(document.querySelector(config.buttonSelector)!, 'form', {value: document.querySelector('form')})],
+    ['unrecognized blocking dialog', document => document.body.insertAdjacentHTML('beforeend', '<div role="dialog" aria-modal="true">Authentication required</div>')],
+    ['nonmodal known element', document => document.querySelector(config.dialogSelector)!.removeAttribute('aria-modal')],
+    ['hidden content with no promotion', document => document.querySelector(config.dialogSelector)!.remove()],
+  ];
+  it.each(invalid)('refuses %s before any native action', async (_name, alter) => {
+    await withPromotion(async ({document, page, nativeClick}) => {
+      alter(document);
+      const before = document.body.innerHTML;
+      await expect(prepareDismissiblePromotion(page, config, publicUrl, 1000)).rejects.toThrow('preparation refused');
+      expect(nativeClick).not.toHaveBeenCalled();
+      if (_name !== 'hidden button') expect(page.waitForFunction).not.toHaveBeenCalled();
+      expect(document.body.innerHTML).toBe(before);
+    });
+  });
+
+  it.each(['/authwall', '/checkpoint/challenge', '/login', '/signup/cold-join'])('stops an authentication or challenge path %s even with article DOM', async pathname => {
+    await withPromotion(async ({page, nativeClick, location}) => {
+      location.href = 'https://www.linkedin.com' + pathname;
+      location.pathname = pathname;
+      await expect(prepareDismissiblePromotion(page, config, location.href, 1000)).rejects.toThrow('authentication or challenge path');
+      expect(nativeClick).not.toHaveBeenCalled();
+    });
+  });
+
+  it.each(['URL change', 'promotion remains', 'main remains hidden', 'main remains inert', 'new blocking dialog'])
+    ('refuses incomplete native dismissal: %s', async mode => {
+      await withPromotion(async ({page, nativeClick}) => {
+        await expect(prepareDismissiblePromotion(page, config, publicUrl, 1000)).rejects.toThrow();
+        expect(nativeClick).toHaveBeenCalledTimes(1);
+      }, {afterClick: ({document, location}) => {
+        if (mode === 'URL change') {location.href = 'https://www.linkedin.com/login'; location.pathname = '/login'; return;}
+        if (mode === 'promotion remains') return;
+        document.querySelector(config.dialogSelector)!.setAttribute('hidden', '');
+        if (mode === 'main remains hidden') return;
+        document.querySelector('main')!.removeAttribute('aria-hidden');
+        if (mode === 'main remains inert') document.querySelector('main')!.setAttribute('inert', '');
+        if (mode === 'new blocking dialog') document.body.insertAdjacentHTML('beforeend', '<div role="alertdialog">Authentication required</div>');
+      }});
+    });
+});
+
+describe('coverage readiness failure diagnostics', () => {
+  const {waitForCoverageReady, readSanitizedFailureDomInPage} = require('../scripts/run-site-translation-test.cjs');
+  it('preserves raw counts and the original error while the same predicate reports each eligibility rejection', async () => {
+    const {document, window} = parseHTML('<html><body><main>' +
+      '<p id="good">A complete natural paragraph remains an eligible target.</p>' +
+      '<p id="tags">#LinkedInArticles #LinkedInMarketing #SocialMediaMarketing #JDRGroup</p>' +
+      '<div aria-hidden="true"><p id="excluded">A hidden paragraph has readable words.</p></div>' +
+      '<p id="no-rect" data-zero>A paragraph without layout still has words.</p>' +
+      '<p id="style" style="display:none">A hidden style paragraph has readable words.</p>' +
+      '<p id="natural">这段中文不属于英语正文。</p><p id="protected"><code>ORIGINAL_CODE</code></p>' +
+      '<p id="short">Short text</p></main><div id="single">Introduction</div></body></html>');
+    Object.defineProperty(window.HTMLElement.prototype, 'getBoundingClientRect', {configurable: true,
+      value(this: Element) {return {width: this.hasAttribute('data-zero') ? 0 : 400, height: 40};}});
+    const globals = {document, HTMLElement: window.HTMLElement, getComputedStyle: (node: HTMLElement) => ({
+      display: node.style.display || 'block', visibility: node.style.visibility || 'visible',
+    })};
+    const previous = new Map<string, PropertyDescriptor | undefined>();
+    for (const [name, value] of Object.entries(globals)) {
+      previous.set(name, Object.getOwnPropertyDescriptor(globalThis, name));
+      Object.defineProperty(globalThis, name, {configurable: true, writable: true, value});
+    }
+    const originalError = new Error('raw readiness timeout');
+    const page = {evaluate: vi.fn(async (fn: (input: unknown) => unknown, input: unknown) => fn(input)),
+      waitForFunction: vi.fn(async (fn: (input: unknown) => unknown, input: unknown) => {
+        expect(fn(input)).toBe(false); throw originalError;
+      })};
+    try {
+      const rules = [
+        {name: 'paragraphs', selector: 'main p', minInitial: 3, minTextLength: 15, sourceIncludes: []},
+        {name: 'fragment', selector: '#good', minInitial: 1, sourceIncludes: ['Absent required fragment']},
+        {name: 'phrase', selector: '#single', minInitial: 1, sourceIncludes: [], requiresPhrase: true},
+      ];
+      const error = await waitForCoverageReady(page, rules, 100).catch((value: Error) => value);
+      expect(error.cause).toBe(originalError);
+      expect(error.message).toContain('raw readiness timeout');
+      expect(page.waitForFunction.mock.calls[0][0]).toBe(page.evaluate.mock.calls[0][0]);
+      const [paragraphs, fragment, phrase] = error.readinessDiagnostic;
+      expect(paragraphs).toMatchObject({count: 8, eligibleCount: 2, minInitial: 3, ready: false});
+      expect(paragraphs.samples).toHaveLength(8);
+      expect(paragraphs.eligibleSamples.map((node: {index: number}) => node.index)).toEqual([0, 1]);
+      for (const [id, reason] of [['excluded', 'excluded-ancestor'], ['no-rect', 'no-rect'], ['style', 'hidden-style'],
+        ['natural', 'natural-language-false'], ['protected', 'protected-source-empty'], ['short', 'min-text-length']]) {
+        expect(paragraphs.rejected.find((node: {id: string}) => node.id === id).reasons).toContain(reason);
+      }
+      expect(fragment).toMatchObject({count: 1, eligibleCount: 1, ready: false,
+        missingSourceIncludes: ['Absent required fragment'], ruleRejections: ['source-fragment-missing'], rejected: []});
+      expect(phrase.rejected[0].reasons).toContain('requires-phrase');
+    } finally {for (const [name, descriptor] of previous) {
+      if (descriptor) Object.defineProperty(globalThis, name, descriptor); else Reflect.deleteProperty(globalThis, name);
+    }}
+  });
+
+  it('captures failure markup with native visibility intact but no form values, scripts or token attributes', () => {
+    const {document} = parseHTML('<html nonce="private-nonce"><head><script>private-script</script><style>private-style</style></head>' +
+      '<body><main aria-hidden="true"><article class="article-main"><p>Public source<br>and complete last line.</p></article></main>' +
+      '<section role="dialog" aria-modal="true"><button data-csrf="private-csrf">Dismiss</button>' +
+      '<form><input name="session_key" value="private-value"><textarea>private-textarea</textarea></form></section></body></html>');
+    const previous = Object.getOwnPropertyDescriptor(globalThis, 'document');
+    Object.defineProperty(globalThis, 'document', {configurable: true, value: document});
+    const before = document.documentElement.outerHTML;
+    try {
+      const html = readSanitizedFailureDomInPage();
+      for (const secret of ['private-nonce', 'private-script', 'private-style', 'private-csrf', 'private-value', 'private-textarea']) expect(html).not.toContain(secret);
+      expect(html).toContain('aria-hidden="true"');
+      expect(html).toContain('role="dialog"');
+      expect(html).toContain('Public source<br>and complete last line.');
+      expect(document.documentElement.outerHTML).toBe(before);
+    } finally {if (previous) Object.defineProperty(globalThis, 'document', previous); else Reflect.deleteProperty(globalThis, 'document');}
+  });
+});
+
 const {inspectFixtureTranslationParts} = require('../scripts/site-translation/fixture-translation-parts.cjs');
 const {
   COVERAGE_EXCLUDED_ANCESTORS,
@@ -49,7 +723,7 @@ const {
   assertFreshProductionExtension: (extensionDir: string, projectRoot: string) => unknown;
   waitForHostMathRendering: (page: unknown, timeout: number) => Promise<unknown>;
   waitForStableTarget: (page: unknown, selector: string, timeout: number) => Promise<void>;
-  findHoverTextPointInPage: (target: {selector: string; index: number}) => {x: number; y: number; text: string} | null;
+  findHoverTextPointInPage: (target: {selector: string; index: number; textIncludes?: string[]}) => {x: number; y: number; text: string} | null;
   toggleHover: (page: unknown, target: unknown, config: {selector: string; index: number}, count: number, timeout: number,
     attempt?: number, prepareClickText?: string) => Promise<void>;
   assertPageContract: (
@@ -96,15 +770,18 @@ const {
     requiresPhrase?: boolean;
     minTextLength?: number;
     sourceIncludes: string[];
+    sourcePartition?: {excludeSelectors: string[]};
   }>;
   normalizeHoverTargets: (targets: unknown[], options?: string | {
     fallbackSelector?: string;
-    coverageRules?: Array<{name: string; selector: string; sourceIncludes: string[]}>;
+    coverageRules?: Array<{name: string; selector: string; sourceIncludes: string[]; sourcePartition?: {excludeSelectors: string[]}}>;
   }) => Array<{
     name: string;
     selector: string;
     index: number;
     sourceIncludes: string[];
+    textIncludes?: string[];
+    sourcePartition?: {excludeSelectors: string[]};
   }>;
   normalizeInteractionScenarios: (scenarios: unknown[]) => Array<{
     name: string;
@@ -1327,6 +2004,168 @@ describe('site translation coverage contract', () => {
     }
   });
 
+  it('targets the explicit original body Text instead of a descendant H2 and rechecks changed text', () => {
+    const {document} = parseHTML('<html><body><div id="body"><h2>About This Game</h2><strong>Many ways to play.</strong><br><span id="prose">When it comes to diversity of heroes, every player can find a role.</span></div></body></html>');
+    let textParent: Element | null = null;
+    Object.defineProperty(document, 'createRange', {value: () => ({
+      selectNodeContents(node: Node) {textParent = node.parentElement;},
+      getClientRects: () => [{left: 20, right: 220, top: 140, bottom: 160, width: 200, height: 20}],
+    })});
+    Object.defineProperty(document, 'elementFromPoint', {value: () => textParent});
+    vi.stubGlobal('document', document);vi.stubGlobal('window', {innerWidth: 1280, innerHeight: 900});
+    vi.stubGlobal('getComputedStyle', () => ({display: 'inline', visibility: 'visible'}));
+    try {
+      expect(findHoverTextPointInPage({selector: '#body', index: 0})?.text).toBe('About This Game');
+      const config = {selector: '#body', index: 0, textIncludes: ['When it comes to diversity of heroes']};
+      expect(findHoverTextPointInPage(config)?.text).toBe('When it comes to diversity of heroes, every player can find a role.');
+      document.querySelector('#prose')!.textContent = 'A different source replaced the intended body.';
+      expect(findHoverTextPointInPage(config)).toBeNull();
+      document.querySelector('#body')!.innerHTML = '<h2>About This Game</h2>';
+      expect(findHoverTextPointInPage(config)).toBeNull();
+    } finally {vi.unstubAllGlobals();}
+  });
+
+  function googleNewsHoverFixture(mode = 'transparent') {
+    const {document} = parseHTML('<html><body><main><section>' +
+      '<div id="card"><div id="stretch"><a id="news-overlay" href="./read/fixture-story?hl=en-US" target="_blank" aria-hidden="true" tabindex="-1"></a></div>' +
+      '<div>Fixture publisher</div><a id="headline" href="./read/fixture-story?hl=en-US" target="_blank">A readable headline from the current card</a><time>2 hours ago</time></div>' +
+      '<div><div id="other-stretch"><a id="other-news-overlay" href="./read/fixture-story?hl=en-US" target="_blank" aria-hidden="true" tabindex="-1"></a></div><a href="./read/fixture-story?hl=en-US" target="_blank">A different card</a></div>' +
+      '</section></main><div id="news-dialog" role="dialog">Sign in</div><div id="other-mask"></div></body></html>');
+    const target = document.querySelector('#headline')!;
+    const overlay = document.querySelector('#news-overlay')!;
+    const wrapper = document.querySelector('#stretch')!;
+    const card = document.querySelector('#card')!;
+    const dialog = document.querySelector('#news-dialog')!;
+    const mask = document.querySelector('#other-mask')!;
+    let covered = mode === 'dialog';
+    if (mode === 'text-in-overlay') overlay.textContent = 'A covering label';
+    if (mode === 'child-in-overlay') overlay.innerHTML = '<span></span>';
+    if (mode === 'extra-wrapper-text') wrapper.append(' ');
+    if (mode === 'extra-wrapper-node') wrapper.append(document.createElement('span'));
+    if (mode === 'different-href') overlay.setAttribute('href', './read/different-story?hl=en-US');
+    if (mode === 'different-query') overlay.setAttribute('href', './read/fixture-story?hl=fr');
+    if (mode === 'different-target') overlay.setAttribute('target', '_self');
+    if (mode === 'missing-target') target.removeAttribute('target');
+    if (mode === 'wrong-tabindex') overlay.setAttribute('tabindex', '0');
+    if (mode === 'missing-aria-hidden') overlay.removeAttribute('aria-hidden');
+    if (mode === 'topic-link') {target.setAttribute('href', './topics/fixture'); overlay.setAttribute('href', './topics/fixture');}
+    if (mode === 'nested-title') target.innerHTML = '<span>A readable headline from the current card</span>';
+    if (mode === 'dialog-ancestor') card.setAttribute('role', 'dialog');
+    if (mode === 'editor-ancestor') card.setAttribute('contenteditable', 'true');
+    if (mode === 'textbox-ancestor') card.setAttribute('role', 'textbox');
+    if (mode === 'button-wrapper') wrapper.setAttribute('role', 'button');
+    if (mode === 'hidden-ancestor') card.setAttribute('aria-hidden', 'true');
+    if (mode === 'hidden-overlay') overlay.setAttribute('hidden', '');
+    if (mode === 'inert-overlay') overlay.setAttribute('inert', '');
+    if (mode === 'owned-overlay') overlay.setAttribute('data-fr-translation-owned', 'true');
+    if (mode === 'not-first-wrapper') card.prepend(document.createElement('span'));
+    const candidateOverlay = mode === 'cross-card' ? document.querySelector('#other-news-overlay')! : overlay;
+    const stack = () => covered ? [dialog, overlay, wrapper, target] :
+      mode === 'intervening-mask' ? [candidateOverlay, mask, wrapper, target] :
+        mode === 'missing-headline' ? [candidateOverlay, wrapper, card] :
+          mode === 'stack-disagrees' ? [mask, candidateOverlay, wrapper, target] : [candidateOverlay, candidateOverlay.parentElement, target, card];
+    Object.defineProperty(document, 'createRange', {value: () => ({
+      selectNodeContents: vi.fn(),
+      getClientRects: () => [{left: 20, right: 220, top: 140, bottom: 160, width: 200, height: 20}],
+    })});
+    Object.defineProperty(document, 'elementFromPoint', {value: () => mode === 'stack-disagrees' ? candidateOverlay : stack()[0]});
+    Object.defineProperty(document, 'elementsFromPoint', {value: stack});
+    Object.defineProperty(target, 'getBoundingClientRect', {value: () => ({
+      x: 20, y: 140, left: 20, right: 220, top: 140, bottom: 160, width: 200, height: 20,
+    })});
+    vi.stubGlobal('document', document);
+    vi.stubGlobal('window', {innerWidth: 1280, innerHeight: 900});
+    vi.stubGlobal('innerWidth', 1280);
+    vi.stubGlobal('innerHeight', 900);
+    vi.stubGlobal('location', new URL(mode === 'other-host' ? 'https://example.com/home' :
+      mode === 'other-subdomain' ? 'https://www.news.google.com/home' :
+        mode === 'search-path' ? 'https://news.google.com/search' :
+          mode === 'article-path' ? 'https://news.google.com/read/fixture-story' : 'https://news.google.com/home?hl=en-US'));
+    vi.stubGlobal('getComputedStyle', (element: Element, pseudo?: string) => pseudo ? {
+      content: mode === 'overlay-pseudo' && element === overlay || mode === 'wrapper-pseudo' && element === wrapper ||
+        mode === 'headline-pseudo' && element === target || mode === 'card-pseudo' && element === card ? '""' : 'none',
+    } : {
+      display: 'block', visibility: 'visible', opacity: '1',
+      position: mode === 'static-overlay' && element === overlay || mode === 'static-wrapper' && element === wrapper ? 'static' : 'absolute',
+      left: mode === 'offset-overlay' && element === overlay ? '1px' : '0px', right: '0px', top: '0px', bottom: '0px',
+      backgroundColor: mode === 'opaque-overlay' && element === overlay || mode === 'opaque-wrapper' && element === wrapper ? 'rgb(255, 255, 255)' : 'rgba(0, 0, 0, 0)',
+      backgroundImage: mode === 'background-image' && element === overlay ? 'url("cover.png")' : 'none',
+      boxShadow: mode === 'shadow' && element === wrapper ? '0 0 4px black' : 'none',
+      filter: mode === 'filter' && element === wrapper ? 'blur(1px)' : 'none',
+      backdropFilter: mode === 'backdrop' && element === overlay ? 'blur(1px)' : 'none',
+      borderTopWidth: mode === 'border' && element === overlay ? '1px' : '0px',
+      borderRightWidth: '0px', borderBottomWidth: '0px', borderLeftWidth: '0px',
+      outlineWidth: mode === 'outline' && element === wrapper ? '1px' : '0px',
+    });
+    return {document, cover: () => {covered = true;}, changeDestination: () => {overlay.setAttribute('href', './read/changed-after-pointer');}};
+  }
+
+  function hoverScrollTarget() {
+    return {
+      scrollIntoViewIfNeeded: async () => undefined,
+      evaluate: async (fn: (node: {scrollIntoView: (options: unknown) => void}) => unknown) =>
+        fn({scrollIntoView: () => undefined}),
+    };
+  }
+
+  it('uses only the observed Google News empty same-destination link stack, preserving host DOM and 200ms stability', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    const {document} = googleNewsHoverFixture();
+    const html = document.body.innerHTML;
+    const page = {
+      evaluate: async (fn: (arg: unknown) => unknown, arg: unknown) => fn(arg),
+      mouse: {move: vi.fn()}, keyboard: {down: vi.fn(), up: vi.fn()},
+      waitForTimeout: async (ms: number) => {vi.advanceTimersByTime(ms);}, waitForFunction: vi.fn(),
+    };
+    try {
+      expect(findHoverTextPointInPage({selector: '#headline', index: 0})).toMatchObject({
+        x: 90, y: 150, text: 'A readable headline from the current card',
+        hitPolicy: 'google-news-stretched-link:["./read/fixture-story?hl=en-US","_blank"]',
+      });
+      await toggleHover(page, hoverScrollTarget(), {selector: '#headline', index: 0}, 1, 500);
+      expect(Date.now()).toBeGreaterThanOrEqual(200);
+      expect(page.keyboard.down.mock.calls).toEqual([['Control']]);
+      expect(page.keyboard.up.mock.calls).toEqual([['Control']]);
+      expect(document.body.innerHTML).toBe(html);
+    } finally {vi.unstubAllGlobals(); vi.useRealTimers();}
+  });
+
+  it.each(['text-in-overlay', 'child-in-overlay', 'extra-wrapper-text', 'extra-wrapper-node', 'different-href',
+    'different-query', 'different-target', 'missing-target', 'wrong-tabindex', 'missing-aria-hidden', 'topic-link',
+    'nested-title', 'dialog', 'dialog-ancestor', 'editor-ancestor', 'textbox-ancestor', 'button-wrapper',
+    'hidden-ancestor', 'hidden-overlay', 'inert-overlay', 'owned-overlay', 'not-first-wrapper', 'cross-card',
+    'intervening-mask', 'missing-headline', 'stack-disagrees', 'other-host', 'other-subdomain', 'search-path', 'article-path',
+    'opaque-overlay', 'opaque-wrapper', 'static-overlay', 'static-wrapper', 'offset-overlay', 'background-image',
+    'shadow', 'filter', 'backdrop', 'border', 'outline', 'overlay-pseudo', 'wrapper-pseudo', 'headline-pseudo', 'card-pseudo'])
+  ('rejects the Google News stretched-link exception for %s', mode => {
+    const {document} = googleNewsHoverFixture(mode);
+    const html = document.body.innerHTML;
+    try {
+      expect(findHoverTextPointInPage({selector: '#headline', index: 0})).toBeNull();
+      expect(document.body.innerHTML).toBe(html);
+    } finally {vi.unstubAllGlobals();}
+  });
+
+  it.each(['cover', 'changeDestination'] as const)
+  ('rechecks Google News after pointer movement and sends zero hotkeys for %s', async action => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    const fixture = googleNewsHoverFixture();
+    const page = {
+      evaluate: async (fn: (arg: unknown) => unknown, arg: unknown) => fn(arg),
+      mouse: {move: vi.fn(async () => {fixture[action]();})}, keyboard: {down: vi.fn(), up: vi.fn()},
+      waitForTimeout: async (ms: number) => {vi.advanceTimersByTime(ms);},
+    };
+    try {
+      await expect(toggleHover(page, hoverScrollTarget(),
+        {selector: '#headline', index: 0}, 1, 300)).rejects.toThrow('悬浮原文没有稳定且可命中的位置');
+      expect(page.mouse.move).toHaveBeenCalledOnce();
+      expect(page.keyboard.down).not.toHaveBeenCalled();
+      expect(page.keyboard.up).not.toHaveBeenCalled();
+    } finally {vi.unstubAllGlobals(); vi.useRealTimers();}
+  });
+
   function productHuntHoverFixture(mode = 'transparent') {
     const {document} = parseHTML('<html><body><main><div data-test="homepage-section-today">' +
       '<section data-container><div><span><a href="/products/first"><span id="overlay" data-target="true"></span>1. First Product</a></span>' +
@@ -1389,7 +2228,7 @@ describe('site translation coverage contract', () => {
       expect(findHoverTextPointInPage({selector: '#tagline', index: 0})).toMatchObject({
         x: 90, y: 150, text: 'Build useful tools with your team.', hitPolicy: 'product-hunt-stretched-link',
       });
-      await toggleHover(page, {scrollIntoViewIfNeeded: async () => undefined}, {selector: '#tagline', index: 0}, 1, 500);
+      await toggleHover(page, hoverScrollTarget(), {selector: '#tagline', index: 0}, 1, 500);
       expect(page.keyboard.down.mock.calls).toEqual([['Control']]);
       expect(page.keyboard.up.mock.calls).toEqual([['Control']]);
       expect(document.body.innerHTML).toBe(html);
@@ -1423,7 +2262,7 @@ describe('site translation coverage contract', () => {
       waitForTimeout: async (ms: number) => {vi.advanceTimersByTime(ms);},
     };
     try {
-      await expect(toggleHover(page, {scrollIntoViewIfNeeded: async () => undefined},
+      await expect(toggleHover(page, hoverScrollTarget(),
         {selector: '#tagline', index: 0}, 1, 300)).rejects.toThrow('悬浮原文没有稳定且可命中的位置');
       expect(page.mouse.move).toHaveBeenCalledOnce();
       expect(page.keyboard.down).not.toHaveBeenCalled();
@@ -1473,7 +2312,7 @@ describe('site translation coverage contract', () => {
       // 实际诊断只检测 H2 宽外框的 35% 点；该点在遮挡文字的面板右侧。
       expect(document.elementFromPoint(169 + 934 * 0.35, 548 + 37.2890625 / 2)).toBe(source);
       expect(findHoverTextPointInPage({selector: 'main h2', index: 0})).toBeNull();
-      const error = await toggleHover(page, {scrollIntoViewIfNeeded: async () => undefined},
+      const error = await toggleHover(page, hoverScrollTarget(),
         {selector: 'main h2', index: 0}, 1, 200, 1).catch((failure: Error) => failure);
       expect(error).toBeInstanceOf(Error);
       const diagnostics = JSON.parse((error as Error).message.split('：')[1]);
@@ -1517,7 +2356,7 @@ describe('site translation coverage contract', () => {
         vi.advanceTimersByTime(10);
       }),
     };
-    const target = {scrollIntoViewIfNeeded: vi.fn(async () => undefined)};
+    const target = {...hoverScrollTarget(), scrollIntoViewIfNeeded: vi.fn(async () => undefined)};
     const down = vi.fn(async () => { expect(Date.now()).toBeGreaterThanOrEqual(370); });
     const page = {
       evaluate: vi.fn(async () => Date.now() >= 100 && !dismissed ? null : point),
@@ -1568,7 +2407,7 @@ describe('site translation coverage contract', () => {
       mouse: {move: vi.fn()}, keyboard: {down: vi.fn(), up: vi.fn()},
       waitForFunction: vi.fn(), waitForTimeout: async (ms: number) => {vi.advanceTimersByTime(ms);}};
     try {
-      await toggleHover(page, {scrollIntoViewIfNeeded: async () => undefined}, {selector: 'main h2', index: 0}, 1, 1000, 1, 'Reject All');
+      await toggleHover(page, hoverScrollTarget(), {selector: 'main h2', index: 0}, 1, 1000, 1, 'Reject All');
       expect(clicked).toEqual([visible]);expect(hidden.hasAttribute('hidden')).toBe(true);
       expect(page.keyboard.down.mock.calls).toEqual([['Control']]);
       expect(page.keyboard.up.mock.calls).toEqual([['Control']]);
@@ -1604,7 +2443,7 @@ describe('site translation coverage contract', () => {
       waitForFunction: vi.fn(),
     };
     try {
-      await expect(toggleHover(page, {scrollIntoViewIfNeeded: async () => undefined},
+      await expect(toggleHover(page, hoverScrollTarget(),
         {selector: 'main h2', index: 0}, 1, 1000, 1, 'Reject All'))
         .rejects.toThrow('悬浮原文没有稳定且可命中的位置');
       expect(button.click).toHaveBeenCalledOnce();
@@ -1615,6 +2454,51 @@ describe('site translation coverage contract', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it.each([false, true])('centers native text under a sticky title and keeps persistent occlusion blocking (%s)', async staysCovered => {
+    vi.useFakeTimers();vi.setSystemTime(0);
+    const {document, window} = parseHTML('<html><body><header id="sticky">Native sticky title</header><main><p>Run using <code>npm run serve</code></p></main></body></html>');
+    const original = document.body.innerHTML;
+    const paragraph = document.querySelector('p')!;
+    const sticky = document.querySelector('header')!;
+    let top = 17;
+    const rect = () => ({left: 69, right: 140, top, bottom: top + 17, width: 71, height: 17});
+    Object.defineProperty(paragraph, 'getBoundingClientRect', {value: rect});
+    Object.defineProperty(document, 'createRange', {value: () => ({selectNodeContents: () => undefined, getClientRects: () => [rect()]})});
+    Object.defineProperty(document, 'elementFromPoint', {value: (_x: number, y: number) => y < 60 ? sticky : paragraph});
+    Object.defineProperty(document, 'elementsFromPoint', {value: (_x: number, y: number) => [y < 60 ? sticky : paragraph]});
+    for (const [key, value] of Object.entries({window, document, HTMLElement: window.HTMLElement,
+      innerWidth: 1272, innerHeight: 816, getComputedStyle: () => ({display: 'block', visibility: 'visible'})})) vi.stubGlobal(key, value);
+    Object.defineProperty(window, 'innerWidth', {configurable: true, value: 1272});
+    Object.defineProperty(window, 'innerHeight', {configurable: true, value: 816});
+    const center = vi.fn((options: unknown) => {
+      expect(options).toEqual({block: 'center', inline: 'nearest', behavior: 'instant'});
+      if (!staysCovered) top = 390;
+    });
+    const target = {scrollIntoViewIfNeeded: vi.fn(async () => undefined),
+      evaluate: async (fn: (node: {scrollIntoView: typeof center}) => unknown) => fn({scrollIntoView: center})};
+    const page = {evaluate: async (fn: (arg: unknown) => unknown, arg: unknown) => fn(arg),
+      mouse: {move: vi.fn()}, keyboard: {down: vi.fn(), up: vi.fn()}, waitForFunction: vi.fn(),
+      waitForTimeout: async (ms: number) => {vi.advanceTimersByTime(ms);}};
+    try {
+      expect(findHoverTextPointInPage({selector: 'main p', index: 0})).toBeNull();
+      const run = toggleHover(page, target, {selector: 'main p', index: 0}, 1, 500);
+      if (staysCovered) {
+        await expect(run).rejects.toThrow('悬浮原文没有稳定且可命中的位置');
+        expect(page.keyboard.down).not.toHaveBeenCalled();
+        expect(page.waitForFunction).not.toHaveBeenCalled();
+      } else {
+        await run;
+        expect(Date.now()).toBeGreaterThanOrEqual(200);
+        expect(page.mouse.move.mock.calls).toEqual([[93.85, 398.5]]);
+        expect(page.keyboard.down.mock.calls).toEqual([['Control']]);
+        expect(page.keyboard.up.mock.calls).toEqual([['Control']]);
+      }
+      expect(center).toHaveBeenCalledOnce();
+      expect(target.scrollIntoViewIfNeeded).toHaveBeenCalledOnce();
+      expect(document.body.innerHTML).toBe(original);
+    } finally {vi.unstubAllGlobals();vi.useRealTimers();}
   });
 
   it('waits through post-restore movement and temporary occlusion before sending one trusted hotkey', async () => {
@@ -1635,7 +2519,7 @@ describe('site translation coverage contract', () => {
       waitForFunction: vi.fn(async () => undefined),
     };
     try {
-      await toggleHover(page, {scrollIntoViewIfNeeded: async () => undefined}, {selector: 'h1', index: 0}, 1, 1000);
+      await toggleHover(page, hoverScrollTarget(), {selector: 'h1', index: 0}, 1, 1000);
       expect(move.mock.calls).toEqual([[90, 100], [90, 130], [90, 180]]);
       expect(down.mock.calls).toEqual([['Control']]);
       expect(up.mock.calls).toEqual([['Control']]);
@@ -1656,7 +2540,7 @@ describe('site translation coverage contract', () => {
       waitForTimeout: async (ms: number) => { vi.advanceTimersByTime(ms); },
     };
     try {
-      await expect(toggleHover(page, {scrollIntoViewIfNeeded: async () => undefined}, {selector: 'h1', index: 0}, 1, 200))
+      await expect(toggleHover(page, hoverScrollTarget(), {selector: 'h1', index: 0}, 1, 200))
         .rejects.toThrow('悬浮原文没有稳定且可命中的位置');
       expect(down).not.toHaveBeenCalled();
       expect(page.mouse.move).not.toHaveBeenCalled();
@@ -1804,6 +2688,32 @@ describe('site translation coverage contract', () => {
       count: 1,
     })).toContain('可选 forbidden DOM 在静态 contract 后出现');
   });
+
+  it.each(['changed-duplicate', 'clean-appended-node', 'owned-original'])(
+    'preserves every duplicate dynamic forbidden occurrence for %s', async mode => {
+      const {document, window} = parseHTML('<html><body><main><time>2 hours ago</time><time>2 hours ago</time></main></body></html>');
+      const url = 'https://news.google.com/home';
+      vi.stubGlobal('document', document);vi.stubGlobal('Node', window.Node);vi.stubGlobal('location', new URL(url));
+      const page = {
+        evaluate: async (fn: (argument: unknown) => unknown, argument: unknown) => fn(argument),
+        url: () => url,
+      };
+      try {
+        const baseline = await capturePageContract(page, [], ['main time'], [], ['main time'], []);
+        expect(baseline.forbiddenState[0].signatures).toHaveLength(2);
+        const second = document.querySelectorAll('time')[1]!;
+        if (mode === 'changed-duplicate') second.textContent = 'A damaged relative timestamp';
+        if (mode === 'clean-appended-node') {
+          const appended = document.createElement('time');appended.textContent = '5 hours ago';
+          document.querySelector('main')!.append(appended);
+        }
+        if (mode === 'owned-original') second.setAttribute('data-fr-translation-owned', 'true');
+        const check = assertPageContract(page, baseline, [], url, mode);
+        if (mode === 'clean-appended-node') await expect(check).resolves.toBeDefined();
+        else await expect(check).rejects.toThrow(mode === 'owned-original'
+          ? 'forbidden DOM 出现译文' : '动态 forbidden DOM 基线丢失');
+      } finally {vi.unstubAllGlobals();}
+    });
 
   it('allows only explicitly mutable dynamic forbidden roots to finish host rendering', () => {
     const mutable = {
@@ -2278,6 +3188,153 @@ describe('site translation coverage contract', () => {
       selector: 'main h1',
       sourceIncludes: ['Expected title', 'Second page sample'],
     }], {coverageRules})[0].sourceIncludes).toEqual(['Expected title', 'Second page sample']);
+  });
+
+  it('inherits a fixed sourcePartition into its hover target and keeps Text-range targeting separate', () => {
+    const coverageRules = normalizeCoverageRules([{name: 'body', selector: '#body', kind: 'content',
+      sourceIncludes: ['An entire body fragment'], sourcePartition: {excludeSelectors: ['h2']}}]);
+    const targets = normalizeHoverTargets([{name: 'body', selector: '#body', textIncludes: [' Actual text line ']}], {coverageRules});
+    expect(targets[0]).toMatchObject({sourceIncludes: ['An entire body fragment'], textIncludes: ['Actual text line'],
+      sourcePartition: {excludeSelectors: ['h2']}});
+    expect(validateCoverageRules('dynamic-partition', normalizeCoverageRules([{name: 'body', selector: '#body',
+      kind: 'content', trackDynamic: true, sourcePartition: {excludeSelectors: ['h2']}}])))
+      .toContain('dynamic-partition.coverageRules[0] sourcePartition 固定基线不得启用 trackDynamic');
+    for (const sourcePartition of [null, true, {}, {excludeSelectors: 'h2'}, {excludeSelectors: ['']},
+      {excludeSelectors: ['h2'], ignoreEverything: true}]) {
+      expect(() => normalizeCoverageRules([{name: 'body', selector: '#body', sourcePartition}])).toThrow('sourcePartition');
+    }
+    for (const textIncludes of [[], [''], true, 'A line']) {
+      expect(() => normalizeHoverTargets([{name: 'body', selector: '#body', textIncludes}])).toThrow('textIncludes');
+    }
+  });
+
+  it.each(['hover', 'full'])('fails fast for the Steam %s partition contract without a controlled provider', mode => {
+    const {parseArgs} = require('../scripts/run-site-translation-test.cjs');
+    const args = ['--case', 'steam-dota2-product', '--mode', mode, '--extension-dir', '/isolated/extension',
+      '--playwright-root', '/isolated/deps', '--runtime-diagnostics-helper', '/isolated/diagnostics.cjs', '--allow-network'];
+    expect(() => parseArgs(args)).toThrow('sourcePartition 完整正文契约必须使用 --controlled-provider');
+    const config = parseArgs([...args, '--controlled-provider']);
+    expect(config.coverageRules.find((rule: {name: string}) => rule.name === 'game-body').sourcePartition)
+      .toEqual({excludeSelectors: ['h2']});
+    expect(config.hoverTargets.find((target: {name: string}) => target.name === 'game-body')).toMatchObject({
+      textIncludes: ['When it comes to diversity of heroes'], sourcePartition: {excludeSelectors: ['h2']},
+    });
+  });
+
+  it('requires a real partition ledger and carries the same baseline through translate, restore and retranslate', async () => {
+    const {captureSourcePartitionLedger, verifySourcePartitionLedger} = require('../scripts/run-site-translation-test.cjs');
+    const page = {}, ledger = Object.freeze({});
+    const configs = [{name: 'body', selector: '#body', sourcePartition: {excludeSelectors: ['h2']}}];
+    await expect(captureSourcePartitionLedger(page, [], undefined)).resolves.toBeNull();
+    await expect(captureSourcePartitionLedger(page, configs, undefined)).rejects.toThrow('--controlled-provider');
+    const provider = {captureSourcePartitions: vi.fn(async () => ledger), assertSourcePartitions: vi.fn(async () => [])};
+    expect(await captureSourcePartitionLedger(page, configs, provider)).toBe(ledger);
+    for (const [phase, restored] of [['first', false], ['restore', true], ['second', false]] as const) {
+      await verifySourcePartitionLedger(page, ledger, provider, phase, restored);
+    }
+    expect(provider.captureSourcePartitions).toHaveBeenCalledOnce();
+    expect(provider.assertSourcePartitions.mock.calls).toEqual([
+      [page, ledger, 'first', {restored: false}], [page, ledger, 'restore', {restored: true}],
+      [page, ledger, 'second', {restored: false}],
+    ]);
+    await expect(captureSourcePartitionLedger(page, configs, {...provider, captureSourcePartitions: async () => null}))
+      .rejects.toThrow('原生正文基线 ledger');
+    await expect(verifySourcePartitionLedger(page, undefined, provider, 'lost-baseline')).rejects.toThrow('ledger');
+  });
+
+  it('binds an indexed hover partition only to the resolved native root through restore and retranslation', async () => {
+    const {captureSourcePartitions, assertSourcePartitions, encodeControlledTranslation} = require('../scripts/site-translation/controlled-provider.cjs');
+    const {document} = parseHTML('<html><body><div class="reply">First independent native reply.</div><div class="reply">Second independent native reply.</div></body></html>');
+    const page = {evaluate: async (fn: (value: unknown) => unknown, value: unknown) => fn(value)};
+    const roots = [...document.querySelectorAll('.reply')];
+    const append = (root: Element) => {
+      const wrapper = document.createElement('span');
+      wrapper.className = 'fluent-read-bilingual-content';
+      wrapper.setAttribute('data-fr-translation-owned', 'true');
+      wrapper.textContent = encodeControlledTranslation(root.textContent);
+      root.append(wrapper);
+      return wrapper;
+    };
+    vi.stubGlobal('document', document);
+    try {
+      const ledger = await captureSourcePartitions(page, [{name: 'reply', selector: '.reply', index: 1,
+        sourcePartition: {excludeSelectors: []}}]);
+      let wrapper = append(roots[1]);
+      expect(await assertSourcePartitions(page, ledger, 'second-hover')).toMatchObject([{
+        selector: '.reply', index: 1, expectedSource: 'Second independent native reply.', ownerCount: 1,
+      }]);
+      expect(roots[0].querySelectorAll('.fluent-read-bilingual-content')).toHaveLength(0);
+      wrapper.remove();
+      expect(await assertSourcePartitions(page, ledger, 'second-restored', {restored: true}))
+        .toMatchObject([{index: 1, ownerCount: 0, restored: true}]);
+      wrapper = append(roots[1]);
+      expect(await assertSourcePartitions(page, ledger, 'second-retranslated')).toMatchObject([{index: 1, ownerCount: 1}]);
+      wrapper.remove();
+      roots[1].replaceWith(roots[1].cloneNode(true));
+      await expect(assertSourcePartitions(page, ledger, 'replaced-selected-root', {restored: true}))
+        .rejects.toThrow('native container changed: .reply/1');
+      const firstLedger = await captureSourcePartitions(page, [{name: 'first-reply', selector: '.reply', index: 0,
+        sourcePartition: {excludeSelectors: []}}]);
+      append(roots[0]);
+      expect(await assertSourcePartitions(page, firstLedger, 'explicit-zero-index'))
+        .toMatchObject([{index: 0, expectedSource: 'First independent native reply.', ownerCount: 1}]);
+    } finally {
+      delete (globalThis as Record<string, unknown>).__fluentReadControlledSourcePartitionsV1;
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it.each([-1, 0.5, '1', null, undefined, NaN, Infinity, Number.MAX_SAFE_INTEGER + 1])(
+    'rejects an explicitly invalid source partition index %s instead of silently capturing every root', async index => {
+      const {captureSourcePartitions} = require('../scripts/site-translation/controlled-provider.cjs');
+      const {document} = parseHTML('<html><body><div class="reply">A complete native reply.</div></body></html>');
+      vi.stubGlobal('document', document);
+      try {
+        const page = {evaluate: async (fn: (value: unknown) => unknown, value: unknown) => fn(value)};
+        await expect(captureSourcePartitions(page, [{selector: '.reply', index, sourcePartition: {excludeSelectors: []}}]))
+          .rejects.toThrow('index must be a non-negative safe integer');
+      } finally {
+        delete (globalThis as Record<string, unknown>).__fluentReadControlledSourcePartitionsV1;
+        vi.unstubAllGlobals();
+      }
+    });
+
+  it('keeps all native roots mandatory for an unindexed full partition and rejects missing or out-of-range targets', async () => {
+    const {captureSourcePartitions, assertSourcePartitions, encodeControlledTranslation} = require('../scripts/site-translation/controlled-provider.cjs');
+    const {document} = parseHTML('<html><body><div class="reply">First independent native reply.</div><div class="reply">Second independent native reply.</div></body></html>');
+    const page = {evaluate: async (fn: (value: unknown) => unknown, value: unknown) => fn(value)};
+    vi.stubGlobal('document', document);
+    try {
+      for (const index of [2, Number.MAX_SAFE_INTEGER]) {
+        await expect(captureSourcePartitions(page, [{selector: '.reply', index, sourcePartition: {excludeSelectors: []}}]))
+          .rejects.toThrow('index out of range');
+      }
+      await expect(captureSourcePartitions(page, [{selector: '.missing', index: 0, sourcePartition: {excludeSelectors: []}}]))
+        .rejects.toThrow('container missing');
+      const ledger = await captureSourcePartitions(page, [{name: 'all-replies', selector: '.reply',
+        sourcePartition: {excludeSelectors: []}}]);
+      const roots = [...document.querySelectorAll('.reply')];
+      const append = (root: Element) => {
+        const wrapper = document.createElement('span');
+        wrapper.className = 'fluent-read-bilingual-content';
+        wrapper.setAttribute('data-fr-translation-owned', 'true');
+        wrapper.textContent = encodeControlledTranslation(root.textContent);
+        root.append(wrapper);
+      };
+      append(roots[0]);
+      await expect(assertSourcePartitions(page, ledger, 'missing-second-reply')).rejects.toThrow('owners missing');
+      append(roots[1]);
+      expect(await assertSourcePartitions(page, ledger, 'all-replies')).toMatchObject([
+        {index: 0, expectedSource: 'First independent native reply.', ownerCount: 1},
+        {index: 1, expectedSource: 'Second independent native reply.', ownerCount: 1},
+      ]);
+      document.querySelectorAll('.fluent-read-bilingual-content').forEach(wrapper => wrapper.remove());
+      expect(await assertSourcePartitions(page, ledger, 'all-restored', {restored: true}))
+        .toMatchObject([{index: 0, restored: true}, {index: 1, restored: true}]);
+    } finally {
+      delete (globalThis as Record<string, unknown>).__fluentReadControlledSourcePartitionsV1;
+      vi.unstubAllGlobals();
+    }
   });
 
   it('counts late dynamic nodes and fails if any observed node is untranslated', () => {
@@ -2845,7 +3902,7 @@ describe('real-site translation matrix gates', () => {
       expect.objectContaining({
         triggerSelector: "button[aria-haspopup='dialog'][aria-label*='search' i]",
         openKey: 'click',
-        dialogSelector: "[role='dialog'][aria-modal='true']",
+        dialogSelector: "[role='dialog'][aria-modal='true']:has([role='combobox'])",
         comboboxSelector: "[role='combobox']",
         listboxSelector: "[role='listbox']",
         inputText: 'issues',
@@ -4450,5 +5507,152 @@ describe('geometry-bounded long-page scrolling',()=>{
   });
   it('retains an absolute work cap for an infinitely growing page',async()=>{
     const fixture=await scrollFixture({extent:30000,endless:true});await expect(fixture.run()).rejects.toThrow('2048');expect(fixture.moves).toBeLessThanOrEqual(2050);
+  });
+});
+
+describe('Steam discussion pinned-label source projection', () => {
+  const {encodeControlledTranslation, readControlledPageEvidenceInPage, assertControlledPageEvidence,
+    captureSourcePartitions, assertSourcePartitions} = require('../scripts/site-translation/controlled-provider.cjs');
+  const title = 'A complete title explains stable behavior.\nThe final title words remain required.';
+  const nativeTitle = '<div id="title" class="forum_topic_name"><span class="forum_topic_label sticky_label">PINNED:</span>' +
+    'A complete title explains stable behavior.<br><strong>The final title words remain required.</strong></div>';
+  const nativeContainer = `<div id="AppHubContent"><div class="forum_topics">${nativeTitle}</div></div>`;
+  const withDom = async (url: string, html: string, run: (document: Document) => unknown) => {
+    const document = parseHTML(`<html><body>${html}</body></html>`).document as unknown as Document;
+    vi.stubGlobal('document', document);
+    vi.stubGlobal('location', new URL(url));
+    try {await run(document);} finally {
+      delete (globalThis as Record<string, unknown>).__fluentReadControlledSourcePartitionsV1;
+      vi.unstubAllGlobals();
+    }
+  };
+  const appendOutput = (document: Document, text: string) => {
+    const wrapper = document.createElement('span');
+    wrapper.className = 'fluent-read-bilingual-content';
+    wrapper.setAttribute('data-fr-translation-owned', 'true');
+    wrapper.textContent = encodeControlledTranslation(text);
+    document.querySelector('#title')!.append(wrapper);
+    return wrapper;
+  };
+
+  it.each([
+    'https://steamcommunity.com/app/570/discussions/',
+    'https://steamcommunity.com/app/570/discussions/0/123456/',
+    'http://steamcommunity.com/app/42/discussions/',
+  ])('omits only the native label from complete source on %s and preserves the actual DOM', async url => {
+    await withDom(url, nativeContainer, async document => {
+      const page = {evaluate: async (fn: (value: unknown) => unknown, value: unknown) => fn(value)};
+      const ledger = await captureSourcePartitions(page, [{selector: '#title', index: 0, sourcePartition: {excludeSelectors: []}}]);
+      const label = document.querySelector('.forum_topic_label')!.outerHTML;
+      const wrapper = appendOutput(document, title), rendered = document.body.innerHTML;
+      const evidence = readControlledPageEvidenceInPage();
+      expect(assertControlledPageEvidence(evidence, 'native-pinned')).toMatchObject({owners: 1});
+      expect(evidence[0].source).toBe(title);
+      expect(evidence[0].omittedParts).toContainEqual({tag: 'span', text: 'PINNED:', reason: 'site-rule-omission'});
+      expect(await assertSourcePartitions(page, ledger, 'complete-pinned')).toMatchObject([{
+        expectedSource: title, ownerCount: 1, completeSourceMatched: true,
+      }]);
+      expect(document.body.innerHTML).toBe(rendered);
+      expect(document.querySelector('.forum_topic_label')!.outerHTML).toBe(label);
+      wrapper.remove();
+      expect(await assertSourcePartitions(page, ledger, 'restored-pinned', {restored: true})).toMatchObject([{restored: true}]);
+    });
+  });
+
+  it('projects the actual observed Chinese pinned label while requiring the entire title', async () => {
+    await withDom('https://steamcommunity.com/app/570/discussions/', nativeContainer.replace('PINNED:', '置顶：'), document => {
+      appendOutput(document, title);
+      const evidence = readControlledPageEvidenceInPage();
+      expect(assertControlledPageEvidence(evidence, 'observed-chinese-label')).toMatchObject({owners: 1});
+      expect(evidence[0].source).toBe(title);
+      expect(evidence[0].omittedParts).toContainEqual({tag: 'span', text: '置顶：', reason: 'site-rule-omission'});
+      expect(document.querySelector('.forum_topic_label')!.textContent).toBe('置顶：');
+    });
+  });
+
+  it.each([
+    'https://example.test/app/570/discussions/',
+    'https://steamcommunity.com.evil.test/app/570/discussions/',
+    'https://www.steamcommunity.com/app/570/discussions/',
+    'https://steamcommunity.com/app/570/reviews/',
+    'https://steamcommunity.com/app/not-numeric/discussions/',
+    'https://steamcommunity.com/app/570/discussions',
+    'https://steamcommunity.com/app/570/discussions-other/',
+    'ftp://steamcommunity.com/app/570/discussions/',
+  ])('keeps the same label as required source outside the exact native host/path %s', async url => {
+    await withDom(url, nativeContainer, document => {
+      appendOutput(document, title);
+      const evidence = readControlledPageEvidenceInPage();
+      expect(evidence[0].source).toContain('PINNED:');
+      expect(evidence[0].omittedParts).not.toContainEqual(expect.objectContaining({reason: 'site-rule-omission'}));
+      expect(() => assertControlledPageEvidence(evidence, 'wrong-site')).toThrow('complete source');
+    });
+  });
+
+  it.each([
+    `<div class="forum_topics">${nativeTitle}</div>`,
+    `<div id="AppHubContent">${nativeTitle}</div>`,
+    `<div id="AppHubContent"><div class="forum_topics">${nativeTitle.replace('forum_topic_name', 'commentthread_comment_text')}</div></div>`,
+    nativeContainer.replace('forum_topic_label sticky_label', 'ordinary-title-word'),
+  ])('does not omit an external or lookalike label merely because its text or class is familiar', async html => {
+    await withDom('https://steamcommunity.com/app/570/discussions/', html, document => {
+      appendOutput(document, title);
+      const evidence = readControlledPageEvidenceInPage();
+      expect(evidence[0].source).toContain('PINNED:');
+      expect(() => assertControlledPageEvidence(evidence, 'wrong-container')).toThrow('complete source');
+    });
+  });
+
+  it.each([
+    ['missing body suffix', 'A complete title explains stable behavior.'],
+    ['wrong encoded body', 'A different title explains stable behavior.\nThe final title words remain required.'],
+    ['extra encoded label', 'PINNED:' + title],
+    ['duplicated title', title + '\n' + title],
+  ])('rejects %s even after the exact source metadata omission', async (_name, output) => {
+    await withDom('https://steamcommunity.com/app/570/discussions/', nativeContainer, document => {
+      appendOutput(document, output);
+      expect(() => assertControlledPageEvidence(readControlledPageEvidenceInPage(), 'bad-output')).toThrow('complete source');
+    });
+  });
+
+  it('never removes a literal or encoded label from actual translation output', async () => {
+    await withDom('https://steamcommunity.com/app/570/discussions/', nativeContainer, document => {
+      const wrapper = appendOutput(document, title);
+      const label = document.createElement('span');
+      label.className = 'forum_topic_label';
+      label.textContent = 'PINNED:';
+      wrapper.prepend(label);
+      const literalHtml = wrapper.outerHTML;
+      expect(() => assertControlledPageEvidence(readControlledPageEvidenceInPage(), 'literal-output-label')).toThrow('complete source');
+      expect(wrapper.outerHTML).toBe(literalHtml);
+      label.textContent = encodeControlledTranslation('PINNED:');
+      const encodedHtml = wrapper.outerHTML;
+      expect(() => assertControlledPageEvidence(readControlledPageEvidenceInPage(), 'encoded-output-label')).toThrow('complete source');
+      expect(wrapper.outerHTML).toBe(encodedHtml);
+    });
+  });
+});
+
+describe('Bing native search redirect equivalence', () => {
+  const {interactionHrefsEquivalent} = require('../scripts/site-translation/interaction-url.cjs');
+  const page = 'https://www.bing.com/search?q=machine+translation';
+  const target = 'https://www.machinetranslation.com/';
+  const redirect = `https://www.bing.com/ck/a?p=tracking&u=a1${Buffer.from(target).toString('base64url')}&ntb=1`;
+
+  it('keeps the same destination when Bing changes an observed tracking URL to a direct result link', () => {
+    expect(interactionHrefsEquivalent(redirect, target, page)).toBe(true);
+    expect(interactionHrefsEquivalent(target, target, 'https://example.com')).toBe(true);
+  });
+
+  it('still rejects a different destination, protocol, foreign redirect host, page or malformed payload', () => {
+    for (const [before, after, url] of [
+      [redirect, 'https://other.example/', page],
+      [redirect, 'http://www.machinetranslation.com/', page],
+      [redirect.replace('www.bing.com', 'www.bing.com.evil.test'), target, page],
+      [redirect, target, 'https://www.bing.com/images/search'],
+      [redirect, target, 'https://example.com/search'],
+      ['https://www.bing.com/ck/a?u=a1!!invalid', target, page],
+      [`https://www.bing.com/ck/a?u=a1${Buffer.from('javascript:alert(1)').toString('base64')}`, 'javascript:alert(1)', page],
+    ]) expect(interactionHrefsEquivalent(before, after, url)).toBe(false);
   });
 });

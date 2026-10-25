@@ -183,6 +183,51 @@ describe('full page modal priority', () => {
         rect(alert); expect(findActiveTranslationModal([window.document])).toBe(alert);
     });
 
+    it.each(['hidden', 'inert', 'aria-hidden'])('skips style reads inside an explicitly %s subtree until it is exposed', (attribute) => {
+        const window = dom('<html><body><section id="ancestor"><div id="modal" role="dialog" aria-modal="true">x</div></section></body></html>');
+        const ancestor = window.document.querySelector('#ancestor') as HTMLElement;
+        const modal = window.document.querySelector('#modal') as HTMLElement;
+        rect(modal);
+        ancestor.setAttribute(attribute, attribute === 'aria-hidden' ? 'true' : '');
+        const original = window.getComputedStyle;
+        const reads: Element[] = [];
+        window.getComputedStyle = ((element: Element) => {
+            reads.push(element);
+            return original(element);
+        }) as typeof window.getComputedStyle;
+        expect(findActiveTranslationModal([window.document])).toBeNull();
+        expect(reads).toEqual([]);
+        ancestor.removeAttribute(attribute);
+        expect(findActiveTranslationModal([window.document])).toBe(modal);
+        expect(reads).toContain(modal);
+    });
+
+    it('rejects explicit hidden state on the dialog before reading its styles', () => {
+        const window = dom('<html><body><div id="modal" role="dialog" aria-modal="true" hidden>x</div></body></html>');
+        const modal = window.document.querySelector('#modal') as HTMLElement;
+        rect(modal);
+        const reads: Element[] = [];
+        window.getComputedStyle = ((element: Element) => { reads.push(element); return {}; }) as typeof window.getComputedStyle;
+        expect(findActiveTranslationModal([window.document])).toBeNull();
+        expect(reads).toEqual([]);
+    });
+
+    it('checks an explicitly hidden shadow host before reading its modal descendant styles', () => {
+        const window = dom('<html><body><div id="host" aria-hidden="true"></div></body></html>');
+        const host = window.document.querySelector('#host') as HTMLElement;
+        const shadow = host.attachShadow({mode: 'open'});
+        const modal = window.document.createElement('div');
+        modal.setAttribute('role', 'dialog'); modal.setAttribute('aria-modal', 'true'); shadow.append(modal); rect(modal);
+        const original = window.getComputedStyle;
+        const reads: Element[] = [];
+        window.getComputedStyle = ((element: Element) => { reads.push(element); return original(element); }) as typeof window.getComputedStyle;
+        expect(findActiveTranslationModal([shadow])).toBeNull();
+        expect(reads).toEqual([]);
+        host.removeAttribute('aria-hidden');
+        expect(findActiveTranslationModal([shadow])).toBe(modal);
+        expect(reads).toContain(modal);
+    });
+
     it('reports only mutations that may change modal discovery', () => {
         const window = dom('<html><body><div id="modal" role="dialog" aria-modal="true"><p>x</p></div><p id="copy">copy</p></body></html>');
         const modal = window.document.querySelector('#modal') as HTMLElement; const copy = window.document.querySelector('#copy')!;

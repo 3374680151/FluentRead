@@ -76,7 +76,7 @@ function isControlledTranslationForSource(output, source, sourceParts = [source]
 
 // 页面证据只投影实际 DOM。保护子树通过原标签/文本/href 与译文骨架配对，
 // 不能把未编码的普通正文当作成功；任何漏槽、换源或额外正文都会使完整比较失败。
-function readControlledPageEvidenceInPage() {
+function readControlledPageEvidenceInPage(options) {
   const artifact = '.fluent-read-bilingual-content,.fluent-read-loading,.fluent-read-retry-wrapper,[data-fr-translation-owned="true"]';
   const formulaSelector = 'math,mjx-container,.MathJax,.MathJax_Display,.MathJax_SVG,.MathJax_CHTML,.katex,.mwe-math-element,.ltx_Math';
   const protectedSelector = `code,pre,kbd,samp,var,time,[role="timer"],${formulaSelector},svg,[translate="no"],.notranslate,[data-notranslate="true"],sup.reference`;
@@ -84,14 +84,38 @@ function readControlledPageEvidenceInPage() {
   const formulaAuxiliary = '.MJX_Assistive_MathML,mjx-assistive-mml,.katex-mathml,annotation,annotation-xml';
   // A URL/domain alone in a real link is an identifier skeleton; arbitrary anchor prose is not.
   const linkIdentifier = /^(?:https?:\/\/\S+|(?:[a-z0-9-]+\.)+[a-z]{2,}(?:[:/?#]\S*)?|\S+@\S+\.\S+|@[\p{L}\p{N}_-]+|u\/[\p{L}\p{N}_-]+|#[0-9]+)$/iu;
+  // CNN's /20*/* glob permits * across slashes, exactly as the production compiler does.
+  // These remain literal skeletons: neither a date nor a credit is omitted from evidence.
+  const cnnArticle = ['http:', 'https:'].includes(globalThis.location?.protocol) &&
+    ['www.cnn.com', 'edition.cnn.com'].includes(globalThis.location?.hostname) &&
+    /^\/20[\s\S]*\/[\s\S]*$/u.test(globalThis.location?.pathname || '');
   // The production GitHub adapter explicitly protects these custom time elements without role=timer.
-  const siteProtected = globalThis.location?.hostname === 'github.com' ? 'relative-time,time-ago,local-time' : '';
+  const siteProtected = globalThis.location?.hostname === 'github.com' ? 'relative-time,time-ago,local-time'
+    : cnnArticle ? '.byline__name,.timestamp__time-since,figcaption.image_large-elevate__credit,figcaption.image-elevate__credit' : '';
+  // 与生产 GitHub 原生 issue 身份组件一致；依赖连接中的 live 上下文匹配 main/timeline，
+  // 只配对保留的标签/文本/href/linkHref 骨架，不省略源、译文或 Markdown 内同名正文。
+  const githubMetadataProtected = globalThis.location?.hostname === 'github.com' ? [
+    'main a[data-testid="issue-body-header-author"][data-hovercard-type="user"][href]:not(.markdown-body):not(.markdown-body *)',
+    'main [data-testid="comment-header"]:not(.markdown-body):not(.markdown-body *):not(:has(.markdown-body))',
+    'main #issue-timeline a[data-testid="actor-link"][href]:not(.markdown-body):not(.markdown-body *)',
+  ].join(',') : '';
   const ubuntuManpage = globalThis.location?.hostname === 'manpages.ubuntu.com' && /^\/manpages\/[^/]+\/man[0-9][^/]*\/[^/]+\.html$/u.test(globalThis.location?.pathname || '');
   // Match the SQLite documentation profile exactly; ordinary page buttons are not protected prose.
   const sqliteDocument = ['sqlite.org', 'www.sqlite.org'].includes(globalThis.location?.hostname) &&
     /^(?:\/lang.*|\/syntax\/.*|\/c3ref\/.*|\/docs\.html)$/u.test(globalThis.location?.pathname || '');
+  // 与生产 Bing 正文规则的日期 omit 完全相同；普通日期 span 和其它页面仍参与完整源文比较。
+  const bingOmitted = globalThis.location?.hostname === 'www.bing.com' && globalThis.location?.pathname === '/search'
+    ? '#b_results > .b_algo .b_caption .news_dt' : '';
+  // Steam 讨论标题明确 omit 此元数据；只投影原生标题下的标签，不删译文或放过多余输出。
+  const steamDiscussion = ['http:', 'https:'].includes(globalThis.location?.protocol) &&
+    globalThis.location?.hostname === 'steamcommunity.com' &&
+    /^\/app\/\d+\/discussions\//u.test(globalThis.location?.pathname || '');
+  const steamOmitted = steamDiscussion
+    ? '#AppHubContent .forum_topics .forum_topic_name .forum_topic_label' : '';
+  const siteOmitted = [bingOmitted, steamOmitted].filter(Boolean).join(',');
   const literalToken = /^[\w.+/-]+(?:(?:\s*,\s*[\w.+/-]+)+|(?:\s+--?\w[\w-]*)+)?$/u;
   const isProtected = (node, live) => node.matches(protectedSelector) || siteProtected && node.matches(siteProtected) ||
+    githubMetadataProtected && live?.matches(githubMetadataProtected) ||
     sqliteDocument && node.matches('button') ||
     ubuntuManpage && live?.matches('#manpage-content section.Sh b,#manpage-content section.Sh i') && literalToken.test(node.textContent.trim()) ||
     node.matches('a[href]') && linkIdentifier.test(node.textContent.trim());
@@ -109,7 +133,78 @@ function readControlledPageEvidenceInPage() {
     }
     return parts;
   };
-  return [...document.querySelectorAll('.fluent-read-bilingual-content')].map((wrapper, index) => {
+  // Optional source partitions bind the complete native Text/BR corpus before
+  // translation. They do not infer missing source from whichever owners rendered.
+  const partitionRequest = options?.sourcePartition;
+  const partitionKey = '__fluentReadControlledSourcePartitionsV1';
+  const partitionArtifact = `${artifact},[data-fr-translation-segment="true"]`;
+  const projectPartition = (root, excludeSelectors) => {
+    const copy = root.cloneNode(true);
+    const live = [...root.querySelectorAll('*')], clones = [...copy.querySelectorAll('*')];
+    const contexts = new WeakMap(clones.map((node, index) => [node, live[index]]));
+    live.forEach((node, index) => {
+      if (node.closest(artifact)) return;
+      let omit = node.matches(omitted) || excludeSelectors.some(selector => node.matches(selector));
+      try {
+        const style = node.ownerDocument.defaultView?.getComputedStyle?.(node);
+        if (style?.display === 'none' || style?.visibility === 'hidden' || style?.visibility === 'collapse') omit = true;
+        if (style && (style.position === 'absolute' || style.position === 'fixed') &&
+            (style.overflow === 'hidden' || style.overflow === 'clip' || (style.overflowX === 'hidden' && style.overflowY === 'hidden'))) {
+          const clip = style.clip?.replace(/[\s,]+/gu, ' ').trim();
+          if ((/^rect\((0(?:px)?|1px) \1 \1 \1\)$/u.test(clip ?? '') || style.clipPath?.replace(/\s+/gu, '') === 'inset(50%)') &&
+              /^(?:0(?:\.\d+)?|1(?:\.0+)?)px$/u.test(style.width) && /^(?:0(?:\.\d+)?|1(?:\.0+)?)px$/u.test(style.height)) omit = true;
+        }
+      } catch { /* Missing styles never exempt source text. */ }
+      if (siteOmitted && node.matches(siteOmitted)) omit = true;
+      if (omit) clones[index].remove();
+    });
+    copy.querySelectorAll(artifact).forEach(node => node.remove());
+    copy.querySelectorAll('[data-fr-translation-segment="true"]').forEach(node => node.replaceWith(...node.childNodes));
+    for (const node of copy.querySelectorAll('*')) {
+      if (copy.contains(node) && isProtected(node, contexts.get(node))) node.remove();
+    }
+    return textNodes(copy, root.closest('a[href]')?.getAttribute('href') ?? null).map(part => part.text);
+  };
+  const partitionRows = (root, excludeSelectors, selector) => [...root.querySelectorAll(selector)].filter(node =>
+    !excludeSelectors.some(excluded => [...root.querySelectorAll(excluded)].some(ancestor => ancestor.contains(node))));
+  let partitionBindings;
+  if (partitionRequest) {
+    const ledgers = globalThis[partitionKey] ??= new Map();
+    if (partitionRequest.operation === 'capture') {
+      if (!Array.isArray(partitionRequest.configs) || !partitionRequest.configs.length) throw new Error('Source partitions require configurations');
+      const records = partitionRequest.configs.flatMap(config => {
+        const excludeSelectors = config.sourcePartition?.excludeSelectors ?? [];
+        const indexed = Object.prototype.hasOwnProperty.call(config, 'index');
+        if (indexed && (!Number.isSafeInteger(config.index) || config.index < 0)) {
+          throw new Error('Source partition index must be a non-negative safe integer');
+        }
+        const roots = [...document.querySelectorAll(config.selector)];
+        if (!roots.length) throw new Error(`Source partition container missing: ${config.selector}`);
+        if (indexed && config.index >= roots.length) throw new Error(`Source partition index out of range: ${config.selector}/${config.index}`);
+        // Hover supplies the resolved raw DOM index; full coverage omits index and
+        // retains every native container. Keep the raw index for later identity checks.
+        const selectedRoots = indexed ? [{root: roots[config.index], index: config.index}]
+          : roots.map((root, index) => ({root, index}));
+        return selectedRoots.map(({root, index}) => {
+          if (excludeSelectors.some(selector => root.matches(selector))) throw new Error('Source partition excludes its entire container');
+          if (root.matches(partitionArtifact) || partitionRows(root, excludeSelectors, partitionArtifact).length) {
+            throw new Error('Source partition baseline already has translation artifacts');
+          }
+          const sourceParts = projectPartition(root, excludeSelectors);
+          if (!sourceParts.join('').trim() || sourceParts.join('').includes('测试译文：')) throw new Error('Source partition baseline is not native source');
+          return {name: config.name || config.selector, selector: config.selector, index, excludeSelectors,
+            root: new WeakRef(root), sourceParts};
+        });
+      });
+      ledgers.set(partitionRequest.id, records);
+      if (ledgers.size > 128) ledgers.delete(ledgers.keys().next().value);
+      return records.map(({root: _root, ...record}) => record);
+    }
+    partitionBindings = ledgers.get(partitionRequest.id);
+    if (!partitionBindings) throw new Error('Source partition ledger unavailable');
+  }
+  const wrappers = [...document.querySelectorAll('.fluent-read-bilingual-content')];
+  const evidence = wrappers.map((wrapper, index) => {
     const owner = wrapper.parentElement;
     const source = owner.cloneNode(true), translated = wrapper.cloneNode(true);
     // Visibility must come from connected source elements: cloning loses class-dependent CSS.
@@ -132,6 +227,7 @@ function readControlledPageEvidenceInPage() {
               /^(?:0(?:\.\d+)?|1(?:\.0+)?)px$/u.test(style.width) && /^(?:0(?:\.\d+)?|1(?:\.0+)?)px$/u.test(style.height)) reason = 'computed-clipped-accessibility';
         }
       } catch { /* Unavailable styles cannot exempt visible source text. */ }
+      if (siteOmitted && node.matches(siteOmitted)) reason = 'site-rule-omission';
       if (reason) {omittedParts.push({tag: node.localName, text: node.textContent, reason}); clonedElements[position].remove();}
     });
     source.querySelectorAll(artifact).forEach(node => node.remove());
@@ -165,6 +261,59 @@ function readControlledPageEvidenceInPage() {
     const sourceTextNodes = textNodes(source, inheritedLink), outputTextNodes = textNodes(translated, inheritedLink);
     const sourceParts = sourceTextNodes.map(node => node.text);
     return {index, owner: owner.localName, source: sourceParts.join(''), sourceParts, output: outputTextNodes.map(node => node.text).join(''), sourceTextNodes, outputTextNodes, protectedMatches, omittedParts, sourceHtml: source.outerHTML.slice(0, 4000)};
+  });
+  if (!partitionBindings) return evidence;
+  return partitionBindings.map(record => {
+    const root = record.root.deref();
+    if (!root?.isConnected || document.querySelectorAll(record.selector)[record.index] !== root) {
+      throw new Error(`Source partition native container changed: ${record.selector}/${record.index}`);
+    }
+    const selected = new Set(partitionRows(root, record.excludeSelectors, '.fluent-read-bilingual-content'));
+    return {name: record.name, selector: record.selector, index: record.index,
+      sourceParts: projectPartition(root, record.excludeSelectors),
+      artifacts: Number(root.matches(partitionArtifact)) + partitionRows(root, record.excludeSelectors, partitionArtifact).length,
+      owners: evidence.filter((_row, index) => selected.has(wrappers[index]))};
+  });
+}
+
+const sourcePartitionLedgers = new WeakMap();
+async function captureSourcePartitions(page, configs) {
+  const id = require('node:crypto').randomUUID();
+  const expected = await page.evaluate(readControlledPageEvidenceInPage,
+    {sourcePartition: {operation: 'capture', id, configs}});
+  const ledger = Object.freeze({});
+  sourcePartitionLedgers.set(ledger, {page, id, expected});
+  return ledger;
+}
+
+async function assertSourcePartitions(page, ledger, phase, {restored = false} = {}) {
+  const binding = ledger && sourcePartitionLedgers.get(ledger);
+  if (!binding || binding.page !== page) throw new Error(`${phase}: source partition ledger does not belong to this page`);
+  const current = await page.evaluate(readControlledPageEvidenceInPage,
+    {sourcePartition: {operation: 'read', id: binding.id}});
+  const normalize = text => text.replace(/\s+/gu, ' ').trim();
+  const sameSource = (left, right) => [left.join(''), left.join(' ')].some(a =>
+    [right.join(''), right.join(' ')].some(b => normalize(a) === normalize(b)));
+  if (current.length !== binding.expected.length) throw new Error(`${phase}: source partition count changed`);
+  return current.map((state, index) => {
+    const expected = binding.expected[index];
+    const label = `${phase}/${expected.selector}/${expected.index}`;
+    if (restored && (state.artifacts !== 0 || state.owners.length !== 0)) {
+      throw new Error(`${label}: restored partition still has translation artifacts`);
+    }
+    if (!sameSource(state.sourceParts, expected.sourceParts)) throw new Error(`${label}: complete native partition source changed`);
+    if (!restored) {
+      assertControlledPageEvidence(state.owners, label);
+      const ownerParts = state.owners.flatMap(owner => owner.sourceParts);
+      if (!sameSource(ownerParts, expected.sourceParts) || !['', ' '].some(separator =>
+        isControlledTranslationForSource(state.owners.map(owner => owner.output).join(separator),
+          expected.sourceParts.join(''), expected.sourceParts))) {
+        throw new Error(`${label}: translation owners do not match complete partition source`);
+      }
+    }
+    return {name: expected.name, selector: expected.selector, index: expected.index,
+      sourcePartsCount: expected.sourceParts.length, expectedSource: expected.sourceParts.join(''),
+      ownerCount: state.owners.length, completeSourceMatched: true, restored};
   });
 }
 
@@ -218,45 +367,61 @@ async function installControlledProvider(context, createPage, timeout) {
   const install = worker => worker.evaluate(controlledProviderRuntime, true);
   const errors = [];
   const workers = new Set();
-  const onWorker = worker => {workers.add(worker); void install(worker).catch(error => errors.push(error.message));};
+  const isExtensionWorker = target => /^chrome-extension:\/\/[^/]+\//u.test(target.url());
+  const worker = context.serviceWorkers().find(isExtensionWorker) ||
+    await context.waitForEvent('serviceworker', {timeout, predicate: isExtensionWorker});
+  const extensionUrl = new URL(worker.url());
+  if (extensionUrl.protocol !== 'chrome-extension:') throw new Error('Controlled transport requires an extension service worker');
+  const extensionPrefix = `chrome-extension://${extensionUrl.host}/`;
+  // 实站可注册自己的 http(s) worker。测试供应商只接管本次扩展的传输，不触碰网站脚本。
+  const isOwnedWorker = target => target.url().startsWith(extensionPrefix);
+  const onWorker = target => {
+    if (!isOwnedWorker(target)) return;
+    workers.add(target);
+    void install(target).catch(error => errors.push(error.message));
+  };
   context.on('serviceworker', onWorker);
-  const worker = context.serviceWorkers()[0] || await context.waitForEvent('serviceworker', {timeout});
   workers.add(worker);
-  await install(worker);
-  const popup = await createPage(context, timeout);
   try {
-    await popup.goto(`chrome-extension://${new URL(worker.url()).host}/popup.html`, {waitUntil: 'domcontentloaded', timeout});
-    const response = await popup.evaluate(async () => {
-      const stored = await chrome.runtime.sendMessage({type: 'configStorageRead', key: 'local:config'});
-      if (!stored.success) throw new Error(stored.error);
-      const config = typeof stored.value === 'string' ? JSON.parse(stored.value) : stored.value;
-      const updates = {service: 'microsoft', from: 'en', to: 'zh-Hans', display: 1, autoTranslate: false,
-        hotkey: 'Control', floatingBallHotkey: 'Alt+T', fullPageTranslationMode: 'viewport',
-        useCache: false, enableAIContext: false, enableAIMultiSegment: false,
-        uiLanguage: 'zh-CN', uiLanguageSetupCompleted: true};
-      return chrome.runtime.sendMessage({type: 'persistConfig', mode: 'patch', config: updates,
-        expected: Object.fromEntries(Object.keys(updates).map(key => [key, config[key]])),
-        clientId: 'web-compatibility-suite', sequence: 1, baseRevision: config.__fluentConfigRevision});
-    });
-    if (!response?.success) throw new Error(`Controlled-provider configuration failed: ${JSON.stringify(response)}`);
-  } finally {await popup.close();}
+    await install(worker);
+    const popup = await createPage(context, timeout);
+    try {
+      await popup.goto(`${extensionPrefix}popup.html`, {waitUntil: 'domcontentloaded', timeout});
+      const response = await popup.evaluate(async () => {
+        const stored = await chrome.runtime.sendMessage({type: 'configStorageRead', key: 'local:config'});
+        if (!stored.success) throw new Error(stored.error);
+        const config = typeof stored.value === 'string' ? JSON.parse(stored.value) : stored.value;
+        const updates = {service: 'microsoft', from: 'en', to: 'zh-Hans', display: 1, autoTranslate: false,
+          hotkey: 'Control', floatingBallHotkey: 'Alt+T', fullPageTranslationMode: 'viewport',
+          useCache: false, enableAIContext: false, enableAIMultiSegment: false,
+          uiLanguage: 'zh-CN', uiLanguageSetupCompleted: true};
+        return chrome.runtime.sendMessage({type: 'persistConfig', mode: 'patch', config: updates,
+          expected: Object.fromEntries(Object.keys(updates).map(key => [key, config[key]])),
+          clientId: 'web-compatibility-suite', sequence: 1, baseRevision: config.__fluentConfigRevision});
+      });
+      if (!response?.success) throw new Error(`Controlled-provider configuration failed: ${JSON.stringify(response)}`);
+    } finally {await popup.close();}
+  } catch (error) {context.off('serviceworker', onWorker); throw error;}
   return {
+    captureSourcePartitions,
+    assertSourcePartitions,
     async assertPage(page, phase) {
       return assertControlledPageEvidence(await page.evaluate(readControlledPageEvidenceInPage), phase);
     },
     async snapshot() {
       if (errors.length) throw new Error(`Controlled transport worker failed: ${errors.join('; ')}`);
-      const current = context.serviceWorkers()[0];
-      if (!current || workers.size !== 1) throw new Error('Controlled transport worker changed or disappeared; response attribution is not proven');
+      const currentWorkers = context.serviceWorkers().filter(isOwnedWorker);
+      const current = currentWorkers[0];
+      if (current !== worker || currentWorkers.length !== 1 || workers.size !== 1) throw new Error('Controlled transport worker changed or disappeared; response attribution is not proven');
       const state = await current.evaluate(() => globalThis.__frCompatibilityTransport);
       if (!state || state.protocol !== 'utf8-han-v1' || !Number.isSafeInteger(state.requests) || state.requests < 1 || !Number.isSafeInteger(state.texts) || state.texts < 1 || state.active !== 0) {
         throw new Error('Controlled transport has no completed request evidence or remains active');
       }
       return {mode: 'controlled-microsoft-response', scope: 'real-site DOM compatibility only',
-        workerCount: workers.size, ...state, errors};
+        workerSelection: 'exact-extension-origin', workerCount: workers.size, ...state, errors};
     },
     dispose() {context.off('serviceworker', onWorker);},
   };
 }
 
-module.exports = {installControlledProvider, encodeControlledTranslation, decodeControlledTranslationText, isControlledTranslationForSource, readControlledPageEvidenceInPage, assertControlledPageEvidence};
+module.exports = {installControlledProvider, encodeControlledTranslation, decodeControlledTranslationText, isControlledTranslationForSource, readControlledPageEvidenceInPage, assertControlledPageEvidence, captureSourcePartitions, assertSourcePartitions};

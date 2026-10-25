@@ -41,6 +41,21 @@ Basic Google Drive and WebDAV configuration backups include website rules, switc
 
 The [full rule guide](https://github.com/FluentRead/FluentRead/blob/main/docs/contributing/site-adaptation.md) provides selectors, fields, and validation examples, plus instructions for sharing tested rules with the project.
 
+## Report a compatibility problem
+
+Search results, articles, comments, and signed-in feeds on the same website can use different structures. A dedicated rule does not mean every page type has been verified. Pages without one still use general content recognition. Public-page results also do not establish compatibility behind a login or challenge.
+
+Include the complete URL, browser and extension versions, the area that should be translated, and anything that should stay original. Explain whether scrolling, expanding comments, or changing articles triggers the problem. Do not include credentials or private content. A specific page and action can then be checked through translate, restore, and translate again, including content coverage, duplicate translations, and existing link behavior.
+
+<details class="guide-details">
+<summary>Maintainers: inspect the priority website review list</summary>
+
+Run `node scripts/site-translation/audit-site-coverage.cjs` in the repository, adding `--json` for structured output. It reads the current catalog to report declaration counts, categories, fixture evidence, page types to review separately, registered browser contracts, and priority hosts without dedicated rules. Contract registration and host declarations help schedule reviews; they do not establish full URL matching or DOM coverage.
+
+The `scopeAudit`, public HTML probes, and browser records in `coverage.json` retain their historical scope. Historical evidence is not a current live-site pass. Record semantic fixtures, site fixtures, actual pages, and actual translation services separately; rule counts cannot measure the percentage of popular websites that pass.
+
+</details>
+
 ## Related guides
 
 - [All guides](/en/docs/)

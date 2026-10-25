@@ -2183,7 +2183,17 @@
         "/auth/*"
       ]
     },
-    "profile": "article"
+    "profile": "article",
+    "exclude": [
+      "article [data-testid=\"byline\"]",
+      "article [data-testid=\"image\"] > span",
+      "article [data-testid=\"hero-image\"] > span"
+    ],
+    "watchIgnore": [
+      "article [data-testid=\"byline\"]",
+      "article [data-testid=\"image\"] > span",
+      "article [data-testid=\"hero-image\"] > span"
+    ]
   },
   {
     "id": "guardian",
@@ -2456,7 +2466,13 @@
         "/auth/*"
       ]
     },
-    "profile": "article"
+    "profile": "article",
+    "protect": [
+      ".byline__name",
+      ".timestamp__time-since",
+      "figcaption.image_large-elevate__credit",
+      "figcaption.image-elevate__credit"
+    ]
   },
   {
     "id": "npr-news",
@@ -2906,6 +2922,12 @@
       {
         "css": [
           ".mw-parser-output h2"
+        ],
+        "atomic": false
+      },
+      {
+        "css": [
+          ".mw-parser-output ol.references > li > span.mw-reference-text:has(> ul)"
         ],
         "atomic": false
       }
@@ -4432,7 +4454,8 @@
       }
     ],
     "protect": [
-      ".a-price"
+      ".a-price",
+      "#acrPopover"
     ]
   },
   {
@@ -4582,6 +4605,13 @@
     "content": [
       {
         "css": [
+          "#app_reviews_hash a[href*=\"/recommended/\"] + div > div:nth-child(2) > div > div:nth-child(1)"
+        ],
+        "resolve": "self",
+        "atomic": true
+      },
+      {
+        "css": [
           "#game_area_description p",
           "#game_area_description li",
           ".game_description_snippet"
@@ -4591,7 +4621,9 @@
     ],
     "protect": [
       ".game_purchase_price",
-      ".discount_final_price"
+      ".discount_final_price",
+      "#freeGameBtn",
+      "#app_reviews_hash a[data-miniprofile]"
     ]
   },
   {
@@ -5484,7 +5516,21 @@
         "/auth/*"
       ]
     },
-    "profile": "article"
+    "profile": "article",
+    "exclude": [
+      "article.article-main > header .publisher-author-card > .base-main-card__info > .base-main-card__title",
+      "article.article-main > header .publisher-author-card > .base-main-card__info > .base-main-card__metadata",
+      "article.article-main .inline-articles .inline-article-meta",
+      "main .right-rail .aside-article-card .base-aside-card__metadata",
+      "main .article-social-activity a.social-action-bar__button"
+    ],
+    "watchIgnore": [
+      "article.article-main > header .publisher-author-card > .base-main-card__info > .base-main-card__title",
+      "article.article-main > header .publisher-author-card > .base-main-card__info > .base-main-card__metadata",
+      "article.article-main .inline-articles .inline-article-meta",
+      "main .right-rail .aside-article-card .base-aside-card__metadata",
+      "main .article-social-activity a.social-action-bar__button"
+    ]
   },
   {
     "id": "seekingalpha",
@@ -5864,6 +5910,14 @@
         "resolve": "self",
         "atomic": false,
         "key": "google-news-home-read-headline"
+      },
+      {
+        "css": [
+          "main h1"
+        ],
+        "resolve": "self",
+        "atomic": false,
+        "key": "google-news-home-page-heading"
       }
     ],
     "exclude": [
@@ -6099,6 +6153,37 @@
       "[contenteditable=\"true\"]",
       "time",
       "[role=\"menuitem\"]"
+    ]
+  },
+  {
+    "id": "bluesky-profile-metadata",
+    "name": "Bluesky 公开资料与帖子元数据",
+    "match": {
+      "hosts": [
+        "bsky.app"
+      ],
+      "paths": [
+        "/profile/*"
+      ]
+    },
+    "mode": "augment",
+    "exclude": [
+      "[data-testid=\"profileHeaderDisplayName\"]",
+      "[data-testid^=\"feedItem-by-\"] a[aria-label][dir=\"auto\"][href^=\"/profile/\"]:not([href*=\"/post/\"]):not([data-testid=\"postText\"] a):not(div[role=\"link\"][aria-label] a)",
+      "[data-testid^=\"feedItem-by-\"] a[data-tooltip][href*=\"/post/\"]",
+      "[data-testid^=\"feedItem-by-\"] div:has(> div > [data-testid=\"replyBtn\"]):has([data-testid=\"likeCount\"])",
+      "div:has(> [data-testid=\"profileHeaderDisplayName\"]) + div > div[dir=\"auto\"]:not([data-testid=\"profileHeaderDescription\"]):only-child",
+      "div:has(> a[data-testid=\"profileHeaderFollowersButton\"]):has(> a[data-testid=\"profileHeaderFollowsButton\"])",
+      "[data-testid^=\"feedItem-by-\"] div[role=\"link\"][aria-label] > div:nth-child(1):has([data-testid=\"userAvatarImage\"]):has([data-tooltip])"
+    ],
+    "watchIgnore": [
+      "[data-testid=\"profileHeaderDisplayName\"]",
+      "[data-testid^=\"feedItem-by-\"] a[aria-label][dir=\"auto\"][href^=\"/profile/\"]:not([href*=\"/post/\"]):not([data-testid=\"postText\"] a):not(div[role=\"link\"][aria-label] a)",
+      "[data-testid^=\"feedItem-by-\"] a[data-tooltip][href*=\"/post/\"]",
+      "[data-testid^=\"feedItem-by-\"] div:has(> div > [data-testid=\"replyBtn\"]):has([data-testid=\"likeCount\"])",
+      "div:has(> [data-testid=\"profileHeaderDisplayName\"]) + div > div[dir=\"auto\"]:not([data-testid=\"profileHeaderDescription\"]):only-child",
+      "div:has(> a[data-testid=\"profileHeaderFollowersButton\"]):has(> a[data-testid=\"profileHeaderFollowsButton\"])",
+      "[data-testid^=\"feedItem-by-\"] div[role=\"link\"][aria-label] > div:nth-child(1):has([data-testid=\"userAvatarImage\"]):has([data-tooltip])"
     ]
   }
 ]

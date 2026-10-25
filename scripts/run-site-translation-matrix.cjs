@@ -80,6 +80,7 @@ function parseArgs(argv) {
   if (!args.list && !args.extensionDir) throw new Error('必须传入 --extension-dir');
   if (!args.list && !args.playwrightRoot) throw new Error('必须传入 --playwright-root');
   if (!args.list && !args.allowNetwork) throw new Error('真实网络矩阵必须显式传入 --allow-network');
+  if (!args.list && !args.runtimeDiagnosticsHelper) throw new Error('必须传入 --runtime-diagnostics-helper；缺少运行时采集不能判定矩阵通过');
   if (!args.list && args.background && !args.focusSafeHelper) {
     throw new Error('后台模式必须传入 --focus-safe-helper，禁止回退到会抢焦点的 Playwright 启动');
   }
@@ -194,7 +195,7 @@ function validateMatrix(caseConfigs = CASES) {
   if (!pr4038?.forbiddenMustExistSelectors?.includes("button[aria-haspopup='dialog'][aria-label*='search' i]") ||
       !pr4038?.interactionScenarios?.some((scenario) =>
         scenario.triggerSelector === "button[aria-haspopup='dialog'][aria-label*='search' i]" &&
-        scenario.dialogSelector === "[role='dialog'][aria-modal='true']" &&
+        scenario.dialogSelector === "[role='dialog'][aria-modal='true']:has([role='combobox'])" &&
         scenario.comboboxSelector === "[role='combobox']" &&
         scenario.listboxSelector === "[role='listbox']" && scenario.inputText === 'issues' &&
         scenario.closeAttempts === 3)) {
@@ -231,6 +232,7 @@ function childArgs(args, name, mode, attempt = 1) {
   if (args.browserPath) values.push('--browser-path', args.browserPath);
   if (args.timeout) values.push('--timeout', args.timeout);
   if (args.focusSafeHelper) values.push('--focus-safe-helper', args.focusSafeHelper);
+  if (args.runtimeDiagnosticsHelper) values.push('--runtime-diagnostics-helper', args.runtimeDiagnosticsHelper);
   if (args.allowNetwork) values.push('--allow-network');
   if (args.artifactsDir) values.push('--artifacts-dir', path.join(path.resolve(args.artifactsDir), name, mode,
     ...(attempt > 1 ? [`attempt-${attempt}`] : [])));
@@ -439,6 +441,7 @@ async function main() {
         tier: config.tier || 'required',
         url: config.url,
         modes: config.modes || ['hover', 'full'],
+        fullPageScope: normalizeCaseConfig(name, config).fullPageScope,
         coverageRules: normalizeCaseConfig(name, config).coverageRules,
         quarantineReason: config.quarantineReason || null,
       })),

@@ -51,12 +51,17 @@ function computed(element: Element): CSSStyleDeclaration | null {
 
 function isVisible(element: HTMLElement): boolean {
     if (element.isConnected === false || isOwned(element)) return false;
+    const ancestors: HTMLElement[] = [];
     for (const ancestor of composedAncestors(element)) {
         if (ancestor.nodeType !== 1) continue;
         const current = ancestor as HTMLElement;
+        if (current.hidden || current.hasAttribute('inert') || current.getAttribute('aria-hidden') === 'true') return false;
+        ancestors.push(current);
+    }
+    // 先排除整条组合祖先链的显式隐藏状态，避免解析不可见宿主组件的样式。
+    for (const current of ancestors) {
         const style = computed(current);
-        if (current.hidden || current.hasAttribute('inert') || current.getAttribute('aria-hidden') === 'true' ||
-            style?.display === 'none' || style?.visibility === 'hidden' || style?.visibility === 'collapse' || style?.opacity === '0') return false;
+        if (style?.display === 'none' || style?.visibility === 'hidden' || style?.visibility === 'collapse' || style?.opacity === '0') return false;
     }
     const rect = element.getBoundingClientRect?.();
     const view = element.ownerDocument.defaultView;

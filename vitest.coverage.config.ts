@@ -683,6 +683,7 @@ export default defineConfig({
                 'src/core/site-adaptation/schema.ts',
                 'src/core/site-adaptation/compiler.ts',
                 'src/core/site-adaptation/literalLabel.ts',
+                'src/core/site-adaptation/bbcCreditCaption.ts',
                 'src/core/site-adaptation/session.ts',
                 'src/features/settings/model/siteAdaptationEditor.ts',
                 'src/features/settings/model/sitePreferences.ts',

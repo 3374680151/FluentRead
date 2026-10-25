@@ -8,6 +8,7 @@
 
 const {guardBrowserClose} = require('./testing/owned-browser-close.cjs');
 const {installControlledProvider} = require('./site-translation/controlled-provider.cjs');
+const {interactionHrefsEquivalent} = require('./site-translation/interaction-url.cjs');
 const {runStabilityProbes, runNativeCommentToggle} = require('./site-translation/stability-probes.cjs');
 const {reportErrorCodes, siteTestExitCode} = require('./testing/site-error-diagnostics.cjs');
 const fs = require('node:fs');
@@ -19,6 +20,7 @@ const {
   CASES,
   collectBaseCaseConfigErrors,
   normalizeCaseConfig,
+  normalizeDismissiblePromotion,
 } = require('./site-translation/case-config.cjs');
 
 const PRODUCTION_SOURCE_ROOTS = ['src', 'entrypoints', 'components', 'public', 'styles'];
@@ -152,6 +154,7 @@ function parseArgs(argv) {
   if (!args.extensionDir) throw new Error('必须传入 --extension-dir');
   if (!args.playwrightRoot) throw new Error('必须传入 --playwright-root');
   if (!args.allowNetwork) throw new Error('真实网络站点测试必须显式传入 --allow-network');
+  if (!args.runtimeDiagnosticsHelper) throw new Error('必须传入 --runtime-diagnostics-helper；缺少运行时采集不能判定站点兼容性通过');
   if (args.background && !args.focusSafeHelper) {
     throw new Error('后台模式必须传入 --focus-safe-helper，禁止回退到会抢焦点的 Playwright 启动');
   }
@@ -163,6 +166,10 @@ function parseArgs(argv) {
     throw new Error(`case ${args.case} 配置无效：\n- ${configErrors.join('\n- ')}`);
   }
   if (!normalized.modes.includes(args.mode)) throw new Error(`case ${args.case} 不支持 ${args.mode} 模式`);
+  if (!args.controlledProvider && (normalized.coverageRules.some(rule => rule.sourcePartition) ||
+      normalized.hoverTargets.some(target => target.sourcePartition))) {
+    throw new Error(`case ${args.case} 的 sourcePartition 完整正文契约必须使用 --controlled-provider；不能跳过完整来源验收`);
+  }
 
   return {
     ...caseConfig,
@@ -170,6 +177,45 @@ function parseArgs(argv) {
     ...normalized,
     ...(args.controlledProvider ? {service: 'microsoft'} : {}),
   };
+}
+
+function loadRuntimeDiagnostics(helperPath, load = require) {
+  const {createRuntimeDiagnostics, redact} = load(path.resolve(helperPath));
+  if (typeof createRuntimeDiagnostics !== 'function' || typeof redact !== 'function') {
+    throw new Error('运行时诊断 helper 缺少 createRuntimeDiagnostics/redact 接口');
+  }
+  const diagnostics = createRuntimeDiagnostics();
+  for (const name of ['start', 'attachPage', 'setExtensionId', 'setPhase', 'flush', 'snapshot', 'assertClean', 'stop']) {
+    if (typeof diagnostics?.[name] !== 'function') throw new Error(`运行时诊断 helper 缺少接口：${name}`);
+  }
+  return {diagnostics, redact};
+}
+
+// 原始功能失败与诊断失败分别保留。即使 verdict/write/stop 失败，调用方仍须清理自有浏览器。
+async function finishRuntimeDiagnostics(diagnostics, output, artifactsDir) {
+  const failures = [];
+  let verdictPassed = false;
+  const attempt = async (stage, action) => {
+    try {await action();} catch (error) {failures.push({stage, error}); output.ok = false;}
+  };
+  await attempt('runtime-flush', () => diagnostics.flush());
+  await attempt('runtime-verdict', () => {diagnostics.assertClean(); verdictPassed = true;});
+  await attempt('runtime-snapshot', () => {
+    output.runtimeDiagnostics = diagnostics.snapshot();
+    if (verdictPassed && output.runtimeDiagnostics?.passed !== true) throw new Error('运行时诊断缺少通过证据');
+  });
+  if (artifactsDir && output.runtimeDiagnostics) await attempt('runtime-evidence', () =>
+    fs.writeFileSync(path.join(artifactsDir, 'runtime-diagnostics.json'), JSON.stringify(output.runtimeDiagnostics, null, 2)));
+  await attempt('runtime-stop', () => diagnostics.stop());
+  // primaryError 的异常身份由 main 保留；这里返回全部失败，不能覆盖它或让清理提前退出。
+  return failures;
+}
+
+async function unloadRuntimePage(page, diagnostics, phase) {
+  if (!page || page.isClosed()) return {status: 'unavailable', reason: 'page-already-closed-or-not-created'};
+  diagnostics.setPhase(phase);
+  await page.goto('about:blank', {waitUntil: 'domcontentloaded', timeout: 3000});
+  return {status: 'observed', action: 'about:blank-navigation', timeoutMs: 3000};
 }
 
 function assertCoverageReport(rules, report, phase) {
@@ -228,7 +274,7 @@ function assertCoverageRestoration(report, phase) {
   return report;
 }
 
-function withMandatoryHeadingCoverage(rules, protectPageHeading = false) {
+function withMandatoryHeadingCoverage(rules, protectPageHeading = false, fullPageScope = 'finite-page') {
   // 站点自身的列表页标题属于应用 UI，显式纳入 forbidden contract 时保留原文。
   if (protectPageHeading) return [...rules];
   return [
@@ -239,7 +285,7 @@ function withMandatoryHeadingCoverage(rules, protectPageHeading = false) {
       kind: 'heading',
       minInitial: 0,
       minSeen: 0,
-      trackDynamic: true,
+      trackDynamic: fullPageScope !== 'initial-corpus',
       sourceIncludes: [],
       requiresPhrase: true,
     },
@@ -271,65 +317,77 @@ const COVERAGE_EXCLUDED_SELECTOR_LIST = [
 const COVERAGE_EXCLUDED_ANCESTORS = COVERAGE_EXCLUDED_SELECTOR_LIST.join(', ');
 const COVERAGE_PROTECTED_DESCENDANTS = [...COVERAGE_EXCLUDED_SELECTOR_LIST, 'math', 'svg'].join(', ');
 
+// Predicate and failure details share exactly the same eligibility decisions.
+function readCoverageReadinessInPage({coverageRules, excludedSelector, protectedSelector, technicalWords, diagnostics = false}) {
+  const technicalWordSet = new Set(technicalWords);
+  const naturalLanguage = value => {
+    const text = String(value || '').replace(/\s+/gu, ' ').trim();
+    if (/^https?:\/\/\S+$/iu.test(text)) return false;
+    if (!text || /^#!|^#lang\b|^<!doctype\b|^<\?xml\b/iu.test(text)) return false;
+    if (/^[a-z][a-z0-9_-]*(?:-stmt|-expr|-clause)?:\s*(?:hide|show|expand|collapse|藏起来)?$/iu.test(text)) return false;
+    const token = text.replace(/^[`'"([{]+|[`'"\])},.!?;:]+$/gu, '');
+    if (!/\s/u.test(token) && (technicalWordSet.has(token.toLowerCase()) ||
+      (/^[A-Z][A-Z0-9_-]{3,15}$/u.test(token) && !/[AEIOU]/u.test(token)))) return false;
+    const letters = text.match(/[A-Za-z]/gu)?.length || 0;
+    const cjk = text.match(/[\u3400-\u9fff]/gu)?.length || 0;
+    return letters >= 2 && letters >= cjk;
+  };
+  const sourceText = node => {
+    const clone = node.cloneNode(true);
+    clone.querySelectorAll('.fluent-read-bilingual-content, .fluent-read-loading, .fluent-read-retry-wrapper, [data-fr-translation-owned="true"]')
+      .forEach(owned => owned.remove());
+    clone.querySelectorAll('[data-fr-translation-segment="true"]').forEach(segment => segment.replaceWith(...segment.childNodes));
+    clone.querySelectorAll(protectedSelector).forEach(protectedNode => protectedNode.remove());
+    return (clone.textContent || '').replace(/\s+/gu, ' ').trim();
+  };
+  const rows = coverageRules.map(rule => {
+    const nodes = [...document.querySelectorAll(rule.selector)].map((node, index) => {
+      const text = sourceText(node), reasons = [];
+      const isHtml = node instanceof HTMLElement;
+      const excluded = node.closest(excludedSelector);
+      const artifact = node.closest('.fluent-read-bilingual-content, [data-fr-translation-owned="true"]');
+      const rect = node.getBoundingClientRect(), style = getComputedStyle(node);
+      if (!isHtml) reasons.push('not-html-element');
+      if (excluded) reasons.push('excluded-ancestor');
+      if (artifact) reasons.push('translation-artifact');
+      if (!(rect.width > 0 && rect.height > 0)) reasons.push('no-rect');
+      if (style.display === 'none' || style.visibility === 'hidden') reasons.push('hidden-style');
+      if (!text) reasons.push('protected-source-empty');
+      if (!naturalLanguage(text)) reasons.push('natural-language-false');
+      if (text.length < (rule.minTextLength || 0)) reasons.push('min-text-length');
+      if (rule.requiresPhrase && !/[\s.,:;!?()\-]/u.test(text)) reasons.push('requires-phrase');
+      return {index, tag: node.localName, id: node.id, text, sourceLength: text.length, reasons,
+        excludedAncestor: excluded ? {tag: excluded.localName, id: excluded.id, classes: excluded.className} : null,
+        rect: {width: rect.width, height: rect.height}, style: {display: style.display, visibility: style.visibility},
+        rawSample: (node.textContent || '').replace(/\s+/gu, ' ').trim().slice(0, 180)};
+    });
+    const eligible = nodes.filter(node => node.reasons.length === 0);
+    const missingSourceIncludes = rule.sourceIncludes.filter(fragment => !eligible.some(node => node.text.includes(fragment)));
+    return {name: rule.name, selector: rule.selector, nodes, eligible, missingSourceIncludes,
+      minInitial: rule.minInitial, ready: eligible.length >= rule.minInitial && missingSourceIncludes.length === 0};
+  });
+  if (!diagnostics) return rows.every(row => row.ready);
+  return rows.map(row => ({name: row.name, selector: row.selector, count: row.nodes.length,
+    samples: row.nodes.slice(0, 8).map(node => node.rawSample), eligibleCount: row.eligible.length,
+    minInitial: row.minInitial, ready: row.ready, missingSourceIncludes: row.missingSourceIncludes,
+    ruleRejections: [...(row.eligible.length < row.minInitial ? ['minimum-eligible-count'] : []),
+      ...(row.missingSourceIncludes.length ? ['source-fragment-missing'] : [])],
+    eligibleSamples: row.eligible.slice(0, 8).map(node => ({index: node.index, source: node.text.slice(0, 180)})),
+    rejected: row.nodes.filter(node => node.reasons.length).map(({text, ...node}) => ({...node, sourceSample: text.slice(0, 180)}))}));
+}
+
 async function waitForCoverageReady(page, rules, timeout) {
+  const argument = {coverageRules: rules, excludedSelector: COVERAGE_EXCLUDED_ANCESTORS,
+    protectedSelector: COVERAGE_PROTECTED_DESCENDANTS, technicalWords: [...SINGLE_TOKEN_TECHNICAL_WORDS]};
   try {
-    await page.waitForFunction(({coverageRules, excludedSelector, protectedSelector, technicalWords}) => {
-      const technicalWordSet = new Set(technicalWords);
-      const naturalLanguage = (value) => {
-        const text = String(value || '').replace(/\s+/gu, ' ').trim();
-        if (/^https?:\/\/\S+$/iu.test(text)) return false;
-        if (!text || /^#!|^#lang\b|^<!doctype\b|^<\?xml\b/iu.test(text)) return false;
-        if (/^[a-z][a-z0-9_-]*(?:-stmt|-expr|-clause)?:\s*(?:hide|show|expand|collapse|藏起来)?$/iu.test(text)) {
-          return false;
-        }
-        const token = text.replace(/^[`'"([{]+|[`'"\])},.!?;:]+$/gu, '');
-        if (!/\s/u.test(token) && (technicalWordSet.has(token.toLowerCase()) ||
-          (/^[A-Z][A-Z0-9_-]{3,15}$/u.test(token) && !/[AEIOU]/u.test(token)))) return false;
-        const letters = text.match(/[A-Za-z]/gu)?.length || 0;
-        const cjk = text.match(/[\u3400-\u9fff]/gu)?.length || 0;
-        return letters >= 2 && letters >= cjk;
-      };
-      const sourceText = (node) => {
-        const clone = node.cloneNode(true);
-        clone.querySelectorAll(
-          '.fluent-read-bilingual-content, .fluent-read-loading, .fluent-read-retry-wrapper, [data-fr-translation-owned="true"]',
-        ).forEach((owned) => owned.remove());
-        clone.querySelectorAll('[data-fr-translation-segment="true"]').forEach((segment) => {
-          segment.replaceWith(...segment.childNodes);
-        });
-        clone.querySelectorAll(protectedSelector).forEach((protectedNode) => protectedNode.remove());
-        return (clone.textContent || '').replace(/\s+/gu, ' ').trim();
-      };
-      const eligible = (node, rule) => {
-        if (!(node instanceof HTMLElement) || node.closest(excludedSelector)) return false;
-        if (node.closest('.fluent-read-bilingual-content, [data-fr-translation-owned="true"]')) return false;
-        const rect = node.getBoundingClientRect();
-        const style = getComputedStyle(node);
-        const text = sourceText(node);
-        return rect.width > 0 && rect.height > 0 && style.display !== 'none' && style.visibility !== 'hidden' &&
-          naturalLanguage(text) && text.length >= (rule.minTextLength || 0) &&
-          (!rule.requiresPhrase || /[\s.,:;!?()\-]/u.test(text));
-      };
-      return coverageRules.every((rule) => {
-        const texts = [...document.querySelectorAll(rule.selector)].filter((node) => eligible(node, rule)).map(sourceText);
-        return texts.length >= rule.minInitial &&
-          rule.sourceIncludes.every((fragment) => texts.some((text) => text.includes(fragment)));
-      });
-    }, {
-      coverageRules: rules,
-      excludedSelector: COVERAGE_EXCLUDED_ANCESTORS,
-      protectedSelector: COVERAGE_PROTECTED_DESCENDANTS,
-      technicalWords: [...SINGLE_TOKEN_TECHNICAL_WORDS],
-    }, {timeout});
+    await page.waitForFunction(readCoverageReadinessInPage, argument, {timeout});
   } catch (error) {
-    const diagnostics = await page.evaluate((coverageRules) => coverageRules.map((rule) => ({
-      name: rule.name,
-      selector: rule.selector,
-      count: document.querySelectorAll(rule.selector).length,
-      samples: [...document.querySelectorAll(rule.selector)].slice(0, 8)
-        .map((node) => (node.textContent || '').replace(/\s+/gu, ' ').trim().slice(0, 180)),
-    })), rules);
-    throw new Error(`${error.message}\ncoverageRules 页面就绪诊断：${JSON.stringify(diagnostics)}`);
+    let diagnostics;
+    try {diagnostics = await page.evaluate(readCoverageReadinessInPage, {...argument, diagnostics: true});}
+    catch (diagnosticError) {diagnostics = {status: 'unavailable', reason: diagnosticError.message};}
+    const failure = new Error(`${error.message}\ncoverageRules 页面就绪诊断：${JSON.stringify(diagnostics)}`, {cause: error});
+    failure.readinessDiagnostic = diagnostics;
+    throw failure;
   }
 }
 
@@ -1547,6 +1605,121 @@ async function waitForStableTarget(page, selector, timeout) {
   await page.waitForTimeout(1000);
 }
 
+// Read-only preconditions for one native dismiss action. Accessibility attributes are never rewritten.
+function readDismissiblePromotionStateInPage({dialogSelector, buttonSelector, contentSelector, expectedUrl,
+  afterDismissal = false, waitForButton = false, diagnostics = false}) {
+  const paint = node => {
+    if (!node) return {painted: false, reasons: ['missing']};
+    const reasons = [], rect = node.getBoundingClientRect();
+    if (!node.isConnected) reasons.push('disconnected');
+    if (node.closest('[hidden]')) reasons.push('hidden-attribute');
+    if (!(rect.width > 0 && rect.height > 0)) reasons.push('no-rect');
+    for (let current = node; current; current = current.parentElement) {
+      const style = getComputedStyle(current);
+      if (style.display === 'none') reasons.push(`display:none:${current.localName}`);
+      if (['hidden', 'collapse'].includes(style.visibility)) reasons.push(`visibility:${style.visibility}:${current.localName}`);
+      if (style.opacity === '0') reasons.push(`opacity:0:${current.localName}`);
+    }
+    return {painted: reasons.length === 0, reasons, width: rect.width, height: rect.height};
+  };
+  const dialogs = [...document.querySelectorAll(dialogSelector)], buttons = [...document.querySelectorAll(buttonSelector)];
+  const contents = [...document.querySelectorAll(contentSelector)];
+  const visibleDialogs = dialogs.filter(node => paint(node).painted);
+  const blockers = [...document.querySelectorAll('dialog[open],[role="dialog"],[role="alertdialog"],[aria-modal="true"]')]
+    .filter(node => paint(node).painted);
+  const button = buttons[0], content = contents[0];
+  const contentHidden = !!content?.closest('[hidden],[inert],[aria-hidden="true"]');
+  const ariaHiddenAncestor = button?.closest('[aria-hidden="true"]');
+  const inertAncestor = button?.closest('[inert]');
+  // Native inactive promotion markup can be present before its hiding CSS settles.
+  // Only an external ancestor containing the whole known dialog may wait; no click occurs in that state.
+  const inactiveKnownPromotionAncestor = !!ariaHiddenAncestor && !!content && !inertAncestor && dialogs.length === 1 &&
+    ariaHiddenAncestor !== dialogs[0] && ariaHiddenAncestor.contains(dialogs[0]) && !ariaHiddenAncestor.contains(content);
+  const formAttributes = ['form', 'formaction', 'formmethod', 'formenctype', 'formtarget', 'formnovalidate'];
+  const state = {urlUnchanged: location.href === expectedUrl, path: location.pathname,
+    dialogCount: dialogs.length, visibleDialogCount: visibleDialogs.length, blockingDialogCount: blockers.length,
+    unrecognizedBlockingDialogs: blockers.filter(node => !visibleDialogs.includes(node)).map(node => ({tag: node.localName,
+      role: node.getAttribute('role'), ariaModal: node.getAttribute('aria-modal')})),
+    dialog: dialogs[0] ? {role: dialogs[0].getAttribute('role'), ariaModal: dialogs[0].getAttribute('aria-modal'), ...paint(dialogs[0])} : null,
+    button: {count: buttons.length, tag: button?.localName || null, insideDialog: !!button && dialogs.length === 1 && dialogs[0].contains(button),
+      typeAttribute: button?.getAttribute('type') ?? null, effectiveType: button?.type ?? null,
+      ancestorForm: !!button?.closest('form'), associatedForm: !!button?.form,
+      formAttributes: button ? formAttributes.filter(name => button.hasAttribute(name)) : [],
+      disabled: !!button && (!!button.disabled || button.hasAttribute('disabled') || button.getAttribute('aria-disabled') === 'true'),
+      inaccessibleAncestor: !!ariaHiddenAncestor || !!inertAncestor, inactiveKnownPromotionAncestor,
+      ariaHiddenAncestor: ariaHiddenAncestor ? {tag: ariaHiddenAncestor.localName, id: ariaHiddenAncestor.id} : null,
+      inertAncestor: inertAncestor ? {tag: inertAncestor.localName, id: inertAncestor.id} : null, ...paint(button)},
+    content: {count: contents.length, hasText: !!content?.textContent?.trim(), hiddenOrInertAncestor: contentHidden,
+      insideDialog: !!content && dialogs.some(dialog => dialog.contains(content)), ...paint(content)}};
+  if (diagnostics) return state;
+  const reject = reason => {throw new Error(`Dismissible promotion preparation refused: ${reason}; ${JSON.stringify(state)}`);};
+  if (!state.urlUnchanged) reject('URL changed');
+  if (/(?:^|\/)(?:authwall|login|signin|signup|checkpoint|challenge|captcha)(?:\/|$)/iu.test(location.pathname)) {
+    reject('authentication or challenge path');
+  }
+  if (state.unrecognizedBlockingDialogs.length) reject('unrecognized blocking dialog');
+  if (contents.length !== 1 || !state.content.hasText || !state.content.painted) {
+    if (afterDismissal) return false;
+    reject('public content is absent, ambiguous or not rendered');
+  }
+  // A hidden known dialog needs no action when the public article is already readable.
+  const needsDialog = visibleDialogs.length > 0 || (contentHidden && dialogs.length > 0);
+  if (needsDialog) {
+    if (dialogs.length !== 1 || visibleDialogs.length > 1 || dialogs[0].getAttribute('role') !== 'dialog' ||
+        dialogs[0].getAttribute('aria-modal') !== 'true') reject('promotion dialog is not unique and modal');
+    if (state.content.insideDialog) reject('configured content is inside the promotion');
+    if (afterDismissal) return false;
+    if (buttons.length !== 1 || !state.button.insideDialog || button.localName !== 'button' || state.button.disabled ||
+        (state.button.inaccessibleAncestor && !inactiveKnownPromotionAncestor)) reject('dismiss button is not unique, native and actionable inside the promotion');
+    const type = state.button.typeAttribute;
+    // Native LinkedIn's close button omits type. It is safe only without any associated/ancestor form.
+    if ((type !== null && type.toLowerCase() !== 'button') || state.button.ancestorForm || state.button.associatedForm ||
+        state.button.formAttributes.length) reject('dismiss button can submit/reset or belongs to a form');
+    if (inactiveKnownPromotionAncestor || !state.dialog.painted || !state.button.painted) {
+      if (waitForButton) return false;
+      reject('known promotion dismiss button is not yet active and painted');
+    }
+    return {action: 'dismiss', publicContentCount: contents.length};
+  }
+  if (contentHidden) {
+    if (afterDismissal) return false;
+    reject('public content remains hidden or inert without a known promotion');
+  }
+  return {action: 'none', publicContentCount: contents.length};
+}
+
+async function prepareDismissiblePromotion(page, config, expectedUrl, timeout) {
+  const normalized = normalizeDismissiblePromotion(config);
+  if (!normalized) return undefined;
+  const argument = {...normalized, expectedUrl}, deadline = Date.now() + timeout;
+  const remaining = () => Math.max(1, deadline - Date.now());
+  try {
+    if (!await page.evaluate(readDismissiblePromotionStateInPage, {...argument, waitForButton: true})) {
+      const painted = await page.waitForFunction(readDismissiblePromotionStateInPage,
+        {...argument, waitForButton: true}, {timeout: remaining(), polling: 100});
+      await painted?.dispose?.();
+    }
+    const before = await page.evaluate(readDismissiblePromotionStateInPage, argument);
+    if (before.action === 'none') return {status: 'not-present', nativeClicks: 0, ...normalized, url: expectedUrl};
+    if (Date.now() >= deadline) throw new Error('native preparation deadline exceeded before click');
+    await page.locator(normalized.buttonSelector).click({timeout: remaining()});
+    if (page.url() !== expectedUrl) throw new Error('URL changed after click');
+    const ready = await page.waitForFunction(readDismissiblePromotionStateInPage,
+      {...argument, afterDismissal: true}, {timeout: remaining(), polling: 100});
+    await ready?.dispose?.();
+    const after = await page.evaluate(readDismissiblePromotionStateInPage, {...argument, afterDismissal: true});
+    if (!after || after.action !== 'none' || page.url() !== expectedUrl) throw new Error('public content did not become readable');
+    return {status: 'dismissed', nativeClicks: 1, ...normalized, url: expectedUrl};
+  } catch (error) {
+    let details;
+    try {details = await page.evaluate(readDismissiblePromotionStateInPage, {...argument, diagnostics: true});}
+    catch (diagnosticError) {details = {status: 'unavailable', reason: diagnosticError.message};}
+    const failure = new Error(`Dismissible promotion preparation refused: ${error.message}\npromotion diagnostics: ${JSON.stringify(details)}`, {cause: error});
+    failure.promotionDiagnostic = details;
+    throw failure;
+  }
+}
+
 async function waitForPageContract(
   page,
   requiredSelectors,
@@ -1795,9 +1968,20 @@ function reconcileForbiddenContractState(initial, current) {
       initial.count = current.count;
       return null;
     }
-    const currentSignatures = new Set(current.signatures.map((signature) => JSON.stringify(signature)));
-    const missingBaseline = initial.signatures.some((signature) =>
-      !currentSignatures.has(JSON.stringify(signature)));
+    const currentSignatures = new Map();
+    for (const signature of current.signatures) {
+      const key = JSON.stringify(signature);
+      currentSignatures.set(key, (currentSignatures.get(key) || 0) + 1);
+    }
+    // Relative times and publisher labels can repeat. Each baseline node needs
+    // its own matching occurrence; one survivor cannot account for two originals.
+    const missingBaseline = initial.signatures.some((signature) => {
+      const key = JSON.stringify(signature);
+      const remaining = currentSignatures.get(key) || 0;
+      if (!remaining) return true;
+      currentSignatures.set(key, remaining - 1);
+      return false;
+    });
     if (current.count < initial.count || missingBaseline) {
       return `动态 forbidden DOM 基线丢失：${JSON.stringify({
         before: diagnosticState(initial),
@@ -1844,7 +2028,7 @@ async function assertPageContract(page, baseline, requiredSelectors, expectedUrl
   for (const current of state.interactionState) {
     const initial = baseline.interactionState.find(({selector}) => selector === current.selector);
     const stable = current.count >= initial.minimumCount && current.tagName === initial.tagName &&
-      current.href === initial.href && current.type === initial.type && current.disabled === initial.disabled &&
+      interactionHrefsEquivalent(initial.href, current.href, expectedUrl) && current.type === initial.type && current.disabled === initial.disabled &&
       current.ariaDisabled === initial.ariaDisabled && current.role === initial.role && current.connected &&
       (current.disabled || current.focusable);
     if (!stable) errors.push(`交互元素失效：${JSON.stringify({before: initial, after: current})}`);
@@ -2214,15 +2398,54 @@ async function readFullPageState(page, selector, requiredSelectors, fullCoverage
   });
 }
 
-function findHoverTextPointInPage({selector, index}) {
+function findHoverTextPointInPage({selector, index, textIncludes = []}) {
   const target = document.querySelectorAll(selector)[index];
   if (!target?.isConnected) return null;
   const excluded = '[data-fr-translation-owned="true"], .fluent-read-bilingual-content, ' +
     '.fluent-read-loading, .fluent-read-retry-wrapper, [hidden], [aria-hidden="true"], [inert]';
   const hitPolicyForText = (parent, x, y) => {
     const hit = document.elementFromPoint(x, y);
-    if (!hit || hit.closest(excluded)) return null;
-    if (target.contains(hit) && (hit === parent || hit.contains(parent))) return 'direct-text';
+    if (!hit) return null;
+    if (!hit.closest(excluded) && target.contains(hit) && (hit === parent || hit.contains(parent))) return 'direct-text';
+    // Google News /home 的空整卡链接与可读标题是同一卡片的兄弟。
+    // 只接受已观察到的三层命中栈；aria-hidden 的例外只属于这个空链接自身。
+    if (typeof location !== 'undefined' && location.hostname === 'news.google.com' && location.pathname === '/home' &&
+      parent === target && target.matches('main a[href^="./read/"]:not([aria-hidden="true"])')) {
+      const wrapper = hit.parentElement;
+      const card = target.parentElement;
+      const barrier = 'dialog, [role="dialog"], [role="alertdialog"], [aria-modal="true"], button, [role="button"], ' +
+        'input, textarea, select, [contenteditable]:not([contenteditable="false"]), [role="textbox"], [role="combobox"], [role="searchbox"]';
+      const nonAriaExcluded = '[data-fr-translation-owned="true"], .fluent-read-bilingual-content, ' +
+        '.fluent-read-loading, .fluent-read-retry-wrapper, [hidden], [inert]';
+      const href = target.getAttribute('href');
+      const destination = target.getAttribute('target');
+      const stack = document.elementsFromPoint?.(x, y);
+      if (!hit.matches('a[aria-hidden="true"][tabindex="-1"]') || hit.childNodes.length ||
+        !wrapper?.matches('div') || wrapper.childNodes.length !== 1 || wrapper.firstChild !== hit ||
+        !card?.matches('div') || wrapper.parentElement !== card || card.firstElementChild !== wrapper ||
+        hit.closest(nonAriaExcluded) || wrapper.closest(excluded) ||
+        [hit, wrapper, target].some(owner => owner.closest(barrier)) ||
+        !href || hit.getAttribute('href') !== href || destination !== '_blank' || hit.getAttribute('target') !== destination ||
+        !stack || stack[0] !== hit || stack[1] !== wrapper || stack[2] !== target) return null;
+      const paintlessStretchedBox = owner => {
+        const style = getComputedStyle(owner);
+        const transparent = style.backgroundColor === 'transparent' || /^rgba\(\s*0\s*,\s*0\s*,\s*0\s*,\s*0\s*\)$/u.test(style.backgroundColor);
+        return style.position === 'absolute' && ['left', 'right', 'top', 'bottom'].every(key => style[key] === '0px') &&
+          transparent && style.backgroundImage === 'none' && style.boxShadow === 'none' && style.filter === 'none' &&
+          (!style.backdropFilter || style.backdropFilter === 'none') && style.opacity === '1' &&
+          ['borderTopWidth', 'borderRightWidth', 'borderBottomWidth', 'borderLeftWidth', 'outlineWidth'].every(key => style[key] === '0px');
+      };
+      if (![hit, wrapper].every(paintlessStretchedBox)) return null;
+      for (const owner of [hit, wrapper, target, card]) {
+        for (const pseudo of ['::before', '::after']) {
+          const content = getComputedStyle(owner, pseudo).content;
+          if (content !== 'none' && content !== 'normal' && content !== '') return null;
+        }
+      }
+      // 目的地也是稳定性的一部分；同一文字下的链接更新会重置既有 200ms 计时。
+      return `google-news-stretched-link:${JSON.stringify([href, destination])}`;
+    }
+    if (hit.closest(excluded)) return null;
     // PH 首页把产品名链接的空 span 拉伸到整张卡片。仅识别已观察到的结构，
     // 且命中栈第二项必须是当前介绍的原文 parent，不能穿过其他遮罩或控件。
     if (typeof location === 'undefined' || location.hostname !== 'www.producthunt.com' || location.pathname !== '/' ||
@@ -2259,6 +2482,8 @@ function findHoverTextPointInPage({selector, index}) {
     const currentIndex = textIndex++;
     const parent = textNode.parentElement;
     if (!parent || parent.closest(excluded) || !textNode.textContent?.trim()) continue;
+    const originalText = textNode.textContent.replace(/\s+/gu, ' ').trim();
+    if (!textIncludes.every(fragment => originalText.includes(fragment))) continue;
     const style = getComputedStyle(parent);
     if (style.display === 'none' || style.visibility === 'hidden') continue;
     const range = document.createRange();
@@ -2383,9 +2608,13 @@ async function waitForHoverPointer(page, targetConfig, timeout, prepareClickText
 async function toggleHover(page, target, targetConfig, expectedCount, timeout, attempt, prepareClickText) {
   const {selector, index} = targetConfig;
   await target.scrollIntoViewIfNeeded();
+  // viewport 内的原文仍可能被原生 sticky 标题遮住。先用原生滚动居中，
+  // 再由下面原有的 TextRange / 实际命中 / 稳定期门禁决定能否发送手势。
+  await target.evaluate((node) => node.scrollIntoView({block: 'center', inline: 'nearest', behavior: 'instant'}));
   // 还原译文会改变布局，宿主也可能继续滚动或播放入场动画。固定等待后取外框
   // 坐标会落到空白容器；按键前等待真实原文行稳定并保持命中，按键只发送一次。
-  const {x, y} = await waitForHoverPointer(page, targetConfig, timeout, prepareClickText);
+  const point = await waitForHoverPointer(page, targetConfig, timeout, prepareClickText);
+  const {x, y} = point;
   await page.keyboard.down('Control');
   await page.keyboard.up('Control');
   try {
@@ -2417,6 +2646,7 @@ async function toggleHover(page, target, targetConfig, expectedCount, timeout, a
     }, {targetSelector: selector, targetIndex: index, point: {x, y}});
     throw new Error(`${error.message}\n悬浮 case 诊断（${JSON.stringify(targetConfig)}，第 ${attempt} 次，期望 wrapper=${expectedCount}）：${JSON.stringify(diagnostics)}`);
   }
+  return point;
 }
 
 function findHoverTargetInPage({
@@ -2744,6 +2974,26 @@ async function captureEvidence(page, outputPath) {
   }
 }
 
+async function captureSourcePartitionLedger(page, configs, controlledProvider) {
+  const partitions = configs.filter(config => config.sourcePartition);
+  if (!partitions.length) return null;
+  if (typeof controlledProvider?.captureSourcePartitions !== 'function' ||
+      typeof controlledProvider?.assertSourcePartitions !== 'function') {
+    throw new Error('sourcePartition 完整正文契约必须使用支持来源 ledger 的 --controlled-provider');
+  }
+  const ledger = await controlledProvider.captureSourcePartitions(page, partitions);
+  if (!ledger || typeof ledger !== 'object') throw new Error('sourcePartition 未捕获有效的原生正文基线 ledger');
+  return ledger;
+}
+
+async function verifySourcePartitionLedger(page, ledger, controlledProvider, phase, restored = false) {
+  if (ledger === null) return undefined;
+  if (!ledger || typeof controlledProvider?.assertSourcePartitions !== 'function') {
+    throw new Error(`${phase} sourcePartition 原生正文 ledger 或校验器缺失`);
+  }
+  return controlledProvider.assertSourcePartitions(page, ledger, phase, {restored});
+}
+
 async function runHoverCase(page, hoverTargets, requiredSelectors, pageContract, timeout, artifactsDir, prepareClickText, controlledProvider) {
   const initialUrl = page.url();
   const results = [];
@@ -2759,9 +3009,13 @@ async function runHoverCase(page, hoverTargets, requiredSelectors, pageContract,
     const target = targets.nth(runtimeTargetConfig.index);
     const counts = [];
     const neighborCounts = [];
+    const hoverTextPoints = [];
+    const sourcePartitionEvidence = [];
+    const sourcePartitionLedger = await captureSourcePartitionLedger(page, [runtimeTargetConfig], controlledProvider);
 
     for (const expected of [1, 0, 1]) {
-      await toggleHover(page, target, runtimeTargetConfig, expected, timeout, counts.length + 1, prepareClickText);
+      const point = await toggleHover(page, target, runtimeTargetConfig, expected, timeout, counts.length + 1, prepareClickText);
+      if (runtimeTargetConfig.textIncludes?.length) hoverTextPoints.push(point);
       counts.push(await target.locator('.fluent-read-bilingual-content').count());
       const neighborCount = await targets.evaluateAll((nodes, activeIndex) => nodes.reduce((count, node, index) =>
         count + (index === activeIndex ? 0 : node.querySelectorAll('.fluent-read-bilingual-content').length), 0), runtimeTargetConfig.index);
@@ -2779,6 +3033,8 @@ async function runHoverCase(page, hoverTargets, requiredSelectors, pageContract,
       );
       if (expected === 1 && controlledProvider) await controlledProvider.assertPage(page, `${targetConfig.name} 悬浮第 ${counts.length} 次切换`);
       if (expected === 0) await assertRequiredRestored(page, pageContract, `${targetConfig.name} 悬浮恢复`);
+      if (sourcePartitionLedger) sourcePartitionEvidence.push(await verifySourcePartitionLedger(page,
+        sourcePartitionLedger, controlledProvider, `${targetConfig.name} 悬浮第 ${counts.length} 次切换`, expected === 0));
       if (artifactsDir && expected === 1) {
         const suffix = counts.length === 1 ? 'first' : 'final';
         await captureEvidence(page, path.join(artifactsDir, `hover-${targetNumber + 1}-${targetConfig.name}-${suffix}.png`));
@@ -2797,6 +3053,8 @@ async function runHoverCase(page, hoverTargets, requiredSelectors, pageContract,
       counts,
       neighborCounts,
       translationText,
+      ...(hoverTextPoints.length ? {hoverTextPoints} : {}),
+      ...(sourcePartitionLedger ? {sourcePartitionEvidence} : {}),
     });
 
     // 为下一个语义类型清场，避免前一个 H1 的译文让全局 wrapper 计数
@@ -2805,6 +3063,8 @@ async function runHoverCase(page, hoverTargets, requiredSelectors, pageContract,
       await toggleHover(page, target, runtimeTargetConfig, 0, timeout, 4, prepareClickText);
       await assertWrapperUniqueness(page, 0, `${targetConfig.name} 悬浮目标清场`);
       await assertRequiredRestored(page, pageContract, `${targetConfig.name} 悬浮目标清场`);
+      if (sourcePartitionLedger) sourcePartitionEvidence.push(await verifySourcePartitionLedger(page,
+        sourcePartitionLedger, controlledProvider, `${targetConfig.name} 悬浮目标清场`, true));
     }
   }
 
@@ -2872,6 +3132,34 @@ function readFullPageFailureSnapshotInPage(targetSelector) {
   };
 }
 
+function readSanitizedFailureDomInPage() {
+  const clone = document.documentElement.cloneNode(true);
+  clone.querySelectorAll('script,noscript,style').forEach(node => node.remove());
+  clone.querySelectorAll('input').forEach(node => node.removeAttribute('value'));
+  clone.querySelectorAll('textarea').forEach(node => {node.textContent = '';});
+  for (const node of [clone, ...clone.querySelectorAll('*')]) {
+    for (const attribute of [...node.attributes]) {
+      if (/nonce|csrf|token/iu.test(attribute.name)) node.removeAttribute(attribute.name);
+    }
+  }
+  return '<!doctype html>\n' + clone.outerHTML;
+}
+
+async function completeFullPageScope({page, timeout, scrollContainer, selector, verifyUnchanged, waitForTarget,
+  fullPageScope = 'finite-page'}, actions = {scrollAndWaitFullPage, settleCoverageByReveal,
+  revealFullPageTarget, waitForTranslationIdle, observeCoverage}) {
+  if (fullPageScope === 'finite-page') {
+    return actions.scrollAndWaitFullPage(page, timeout, scrollContainer, selector, verifyUnchanged, waitForTarget);
+  }
+  if (fullPageScope !== 'initial-corpus') throw new Error(`Unknown full-page scope: ${fullPageScope}`);
+  // 无限信息流没有终点。逐个暴露覆盖选择器中本轮已冻结的初始正文，每个 owner 仍须严格完成。
+  await actions.settleCoverageByReveal(page, timeout, '本轮已载入正文覆盖收敛', 0, verifyUnchanged);
+  await actions.revealFullPageTarget(page, selector);
+  await waitForTarget();
+  await actions.waitForTranslationIdle(page, timeout, '本轮已载入正文回到目标后', 0);
+  await actions.observeCoverage(page);
+}
+
 async function runFullTranslationPass(context, pass) {
   const {
     page,
@@ -2883,12 +3171,14 @@ async function runFullTranslationPass(context, pass) {
     interactionScenarios,
     controlSelector,
     scrollContainer,
+    fullPageScope = 'finite-page',
     timeout,
     artifactsDir,
     initialUrl,
     readCompletion,
     previousCompletionSessionId,
     controlledProvider,
+    sourcePartitionLedger = null,
   } = context;
   const first = pass === 'first';
   const phase = first ? '全文首次翻译' : '全文再次翻译';
@@ -2926,8 +3216,8 @@ async function runFullTranslationPass(context, pass) {
   }
 
   const target = targetReadiness.target;
-  if (first) reportProgress(`首次目标已完成 (${targetReadiness.completion})，开始滚动页面主滚动面`);
-  await scrollAndWaitFullPage(page, timeout, scrollContainer, selector, verifyUnchanged, waitForTarget);
+  if (first) reportProgress(`首次目标已完成 (${targetReadiness.completion})，验证 ${fullPageScope} 正文范围`);
+  await completeFullPageScope({page, timeout, scrollContainer, selector, verifyUnchanged, waitForTarget, fullPageScope});
   await verifyUnchanged();
   const pageState = await readFullPageState(
     page,
@@ -2967,7 +3257,9 @@ async function runFullTranslationPass(context, pass) {
       first ? 'full-first-translation.png' : 'full-final-translation.png'));
   }
   const controlledAttribution = controlledProvider ? await controlledProvider.assertPage(page, phase) : undefined;
-  return {target, pageState, coverage, interactions, completionIdentity, targetReadiness, finalTargetReadiness, controlledAttribution};
+  const sourcePartitions = await verifySourcePartitionLedger(page, sourcePartitionLedger, controlledProvider, phase);
+  return {target, pageState, coverage, interactions, completionIdentity, targetReadiness, finalTargetReadiness,
+    controlledAttribution, sourcePartitions};
 }
 
 async function runFullCase(
@@ -2985,6 +3277,7 @@ async function runFullCase(
   artifactsDir,
   readCompletion,
   controlledProvider,
+  fullPageScope = 'finite-page',
 ) {
   const initialUrl = page.url();
   const baselineInteractionScenarios = await runInteractionScenarios(
@@ -2995,7 +3288,8 @@ async function runFullCase(
   );
   const runtimeCoverageRules = withMandatoryHeadingCoverage(coverageRules,
     skipUnscopedH1Coverage ||
-    pageContract.forbiddenState.some(({selector}) => /(?:^|[\s>+~,(])h1\b/iu.test(selector)));
+    pageContract.forbiddenState.some(({selector}) => /(?:^|[\s>+~,(])h1\b/iu.test(selector)), fullPageScope);
+  const sourcePartitionLedger = await captureSourcePartitionLedger(page, runtimeCoverageRules, controlledProvider);
   await installCoverageTracker(page, runtimeCoverageRules);
   const passContext = {
     page,
@@ -3007,11 +3301,13 @@ async function runFullCase(
     interactionScenarios,
     controlSelector,
     scrollContainer,
+    fullPageScope,
     timeout,
     artifactsDir,
     initialUrl,
     readCompletion,
     controlledProvider,
+    sourcePartitionLedger,
   };
   const firstPass = await runFullTranslationPass(passContext, 'first');
   passContext.previousCompletionSessionId = firstPass.completionIdentity.sessionId;
@@ -3037,12 +3333,19 @@ async function runFullCase(
   );
   const restoredCoverage = await readCoverageRestoration(page);
   assertCoverageRestoration(restoredCoverage, '全文恢复');
+  const restoredSourcePartitions = await verifySourcePartitionLedger(page, sourcePartitionLedger,
+    controlledProvider, '全文恢复', true);
   await resetCoverageTracker(page);
   reportProgress('全文恢复完成');
 
   const secondPass = await runFullTranslationPass(passContext, 'second');
   return {
+    fullPageScope,
+    fullPageBoundary: fullPageScope === 'initial-corpus'
+      ? 'all eligible nodes matching configured coverage selectors loaded at the start of each translation pass; does not claim the end of an infinite feed'
+      : 'finite page through its stable bottom',
     controlledAttribution: [firstPass.controlledAttribution, secondPass.controlledAttribution],
+    ...(sourcePartitionLedger ? {sourcePartitions: [firstPass.sourcePartitions, secondPass.sourcePartitions], restoredSourcePartitions} : {}),
     translated: firstPass.target,
     translatedPage: firstPass.pageState,
     coverage: firstPass.coverage,
@@ -3065,6 +3368,7 @@ async function runFullCase(
 
 async function main() {
   const args = parseArgs(process.argv.slice(2));
+  const {diagnostics: runtimeDiagnostics, redact} = loadRuntimeDiagnostics(args.runtimeDiagnosticsHelper);
   const extensionDir = path.resolve(args.extensionDir);
   if (!fs.existsSync(path.join(extensionDir, 'manifest.json'))) throw new Error('插件 manifest.json 不存在');
   const buildFreshness = assertFreshProductionExtension(extensionDir);
@@ -3076,8 +3380,9 @@ async function main() {
       [file, sha256(path.join(__dirname, '../src/features/full-page-translation/content', file))]))};
   if (!fs.existsSync(args.browserPath)) throw new Error(`浏览器不存在：${args.browserPath}`);
 
-  const artifactsDir = args.artifactsDir ? path.resolve(args.artifactsDir) : null;
-  if (artifactsDir) fs.mkdirSync(artifactsDir, {recursive: true});
+  const artifactsDir = args.artifactsDir ? path.resolve(args.artifactsDir)
+    : fs.mkdtempSync(path.join(os.tmpdir(), 'fluentread-site-evidence-'));
+  fs.mkdirSync(artifactsDir, {recursive: true});
   const {chromium} = loadPlaywright(args.playwrightRoot);
   const focusSafeHelper = loadFocusSafeHelper(args.focusSafeHelper);
   const viewport = {width: 1280, height: 900};
@@ -3087,9 +3392,14 @@ async function main() {
     '--no-first-run',
     '--no-default-browser-check',
   ];
-  const createPage = focusSafeHelper
+  const newPage = focusSafeHelper
     ? focusSafeHelper.newPageWithoutForeground
     : async (targetContext) => targetContext.newPage();
+  const createPage = async (...parameters) => {
+    const target = await newPage(...parameters);
+    await runtimeDiagnostics.attachPage(target, 'site-test-page');
+    return target;
+  };
   const activateTab = focusSafeHelper
     ? focusSafeHelper.activateExtensionTabWithoutForeground
     : async () => undefined;
@@ -3103,6 +3413,9 @@ async function main() {
   let extensionId;
   let diagnosticService = args.service;
   let controlledProvider;
+  let promotionPreparation;
+  let failureDomEvidence;
+  let runtimeStarted = false;
   const attemptStartedAt = Date.now();
   try {
     assertDedicatedProfile(profileDir);
@@ -3141,8 +3454,16 @@ async function main() {
       };
     }
     context = launched.context;
+    runtimeDiagnostics.setPhase(`${args.case}/${args.mode}/initialization`);
+    await runtimeDiagnostics.start(context);
+    runtimeStarted = true;
+    const initialWorker = context.serviceWorkers()[0] || await context.waitForEvent('serviceworker', {timeout: args.timeout});
+    extensionId = new URL(initialWorker.url()).host;
+    runtimeDiagnostics.setExtensionId(extensionId);
     if (args.controlledProvider) controlledProvider = await installControlledProvider(context, createPage, args.timeout);
     page = await createPage(context, args.timeout);
+    await runtimeDiagnostics.attachPage(page, 'translation-page');
+    runtimeDiagnostics.setPhase(`${args.case}/${args.mode}/navigation`);
     const navigation = await page.goto(args.url, {waitUntil: 'domcontentloaded', timeout: args.timeout});
     if (navigation && navigation.status() >= 400) throw new Error(`External site returned HTTP ${navigation.status()}: ${args.url}`);
     await activateTab(context, page, args.timeout);
@@ -3166,6 +3487,14 @@ async function main() {
       // Use normal browser scrolling; never remove the site's hidden markers.
       await page.locator(args.prepareScrollSelector).first().scrollIntoViewIfNeeded({timeout: args.timeout});
       reportProgress(`页面预滚动已完成：${args.prepareScrollSelector}`);
+    }
+    if (args.prepareDismissiblePromotion) {
+      // 实站可能在早期准备后才激活推广；正常预滚动后有界等候，再检查唯一安全关闭动作。
+      await page.waitForTimeout(Math.min(2000, args.timeout));
+      runtimeDiagnostics.setPhase(`${args.case}/${args.mode}/dismissible-promotion`);
+      promotionPreparation = {status: 'started', ...args.prepareDismissiblePromotion};
+      promotionPreparation = await prepareDismissiblePromotion(page, args.prepareDismissiblePromotion, args.url, args.timeout);
+      reportProgress(`公开推广准备完成：${promotionPreparation.status}`);
     }
     const hostMathRendering = await waitForHostMathRendering(page, args.timeout);
     await waitForStableTarget(page, args.selector, args.timeout);
@@ -3191,6 +3520,7 @@ async function main() {
     );
     const configResult = await readConfig(context, args.timeout, createPage, activateTab);
     extensionId = configResult.extensionId;
+    runtimeDiagnostics.setExtensionId(extensionId);
     diagnosticService = configResult.config?.service || args.service;
     // 读取配置时会临时激活 popup 页；关闭它后显式还原目标页，确保真实快捷键发给站点标签页。
     await activateTab(context, page, args.timeout);
@@ -3201,6 +3531,7 @@ async function main() {
     if (args.mode === 'hover' && config.hotkey !== expectedHotkey) throw new Error(`悬浮快捷键不符：${config.hotkey}`);
     if (args.mode === 'full' && config.floatingBallHotkey !== expectedHotkey) throw new Error(`全文快捷键不符：${config.floatingBallHotkey}`);
     reportProgress(`${args.case}/${args.mode} 页面 contract 与扩展配置已就绪`);
+    runtimeDiagnostics.setPhase(`${args.case}/${args.mode}/translate-restore-retranslate`);
 
     const result = args.mode === 'hover'
       ? await runHoverCase(
@@ -3228,6 +3559,7 @@ async function main() {
         artifactsDir,
         await createUnchangedCompletionReader(context, page, args.timeout),
         controlledProvider,
+        args.fullPageScope,
       );
     const nativeComments = args.stabilityProbes && args.case === 'hacker-news-8863'
       ? await runNativeCommentToggle({page, timeout: args.timeout, artifactsDir}) : undefined;
@@ -3235,6 +3567,7 @@ async function main() {
       ? await runStabilityProbes({page, selector: args.selector, timeout: args.timeout, artifactsDir, toggleFull, observeMs: 5000}) : undefined;
     output = {
       ok: true,
+      artifactsDir,
       artifactBinding,
       buildFreshness,
       stability,
@@ -3243,6 +3576,7 @@ async function main() {
       case: args.case,
       mode: args.mode,
       hostMathRendering,
+      promotionPreparation,
       url: args.url,
       selector: args.selector,
       requiredSelectors: args.requiredSelectors,
@@ -3268,6 +3602,7 @@ async function main() {
     };
   } catch (error) {
     primaryError = error;
+    runtimeDiagnostics.setPhase(`${args.case}/${args.mode}/failure-evidence`);
     // 只在失败后、既有清理前旁路取证；共用最多 2 秒，不修改测试/provider 预算或重试。
     const budgetMs = Math.min(args.timeout, 2000);
     const startedAt = Date.now();
@@ -3290,6 +3625,18 @@ async function main() {
       let optionsStage = 'page-selection';
       try {
         if (page && !page.isClosed()) {
+          let failureDom;
+          try {
+            const html = await page.evaluate(readSanitizedFailureDomInPage);
+            if (!expired) {
+              const file = path.join(artifactsDir, 'failure-native-dom.html');
+              fs.writeFileSync(file, html);
+              failureDom = {status: 'saved', path: file,
+                sanitization: 'scripts/styles removed; input values, textarea contents and nonce/csrf/token attributes removed; source DOM unchanged'};
+            }
+          } catch {failureDom = {status: 'unavailable', reason: 'native-dom-read-unavailable'};}
+          if (expired) return;
+          failureDomEvidence = failureDom;
           try {
             const snapshot = await page.evaluate(() => {
               const owned = (name) => `.${name}[data-fr-translation-owned="true"]`;
@@ -3326,7 +3673,7 @@ async function main() {
                 progress, requestSlotCounts: 'unavailable',
               };
             });
-            if (!expired) diagnostics.page = {status: 'available', ...snapshot};
+            if (!expired) diagnostics.page = {status: 'available', ...snapshot, failureDom};
           } catch { if (!expired) diagnostics.page.reason = 'page-read-unavailable'; }
         } else diagnostics.page.reason = 'page-unavailable';
         if (expired) return;
@@ -3456,6 +3803,28 @@ async function main() {
   finally {
     controlledProvider?.dispose();
     const cleanupErrors = [];
+    output ||= {ok: false, artifactsDir, case: args.case, mode: args.mode, url: args.url,
+      launchMode: launched?.launchMode, focusPolicy: launched?.focusPolicy, windowPlacement: launched?.windowPlacement};
+    if (promotionPreparation) output.promotionPreparation = promotionPreparation;
+    if (primaryError) {output.ok = false; output.error = redact(primaryError.message || primaryError);}
+    if (primaryError?.readinessDiagnostic) output.coverageReadinessDiagnostic = primaryError.readinessDiagnostic;
+    if (primaryError?.promotionDiagnostic) output.promotionDiagnostic = primaryError.promotionDiagnostic;
+    if (failureDomEvidence) output.failureNativeDom = failureDomEvidence;
+    try {
+      output.unload = await unloadRuntimePage(page, runtimeDiagnostics, `${args.case}/${args.mode}/unload`);
+      if (output.ok && output.unload.status !== 'observed') throw new Error('未观察到目标文档卸载，不能判定本轮通过');
+    }
+    catch (error) {
+      output.unload = {status: 'failed', message: redact(error.message || error)};
+      cleanupErrors.push(error);
+    }
+    runtimeDiagnostics.setPhase(`${args.case}/${args.mode}/cleanup`);
+    const diagnosticFailures = await finishRuntimeDiagnostics(runtimeDiagnostics, output, artifactsDir);
+    cleanupErrors.push(...diagnosticFailures.map(({error}) => error));
+    if (!runtimeStarted) {
+      output.runtimeDiagnostics = {...output.runtimeDiagnostics, passed: false, status: 'not-started'};
+    }
+    if (diagnosticFailures.length) output.finalizationErrors = diagnosticFailures.map(({stage, error}) => ({stage, message: redact(error.message || error)}));
     let browserClosed = false;
     try {
       if (launched?.close) {await launched.close(); browserClosed = true;}
@@ -3469,15 +3838,23 @@ async function main() {
         }
       }
     } catch (error) {cleanupErrors.push(error);}
+    output.cleanupConfirmed = browserClosed;
+    output.profileRemoved = !fs.existsSync(profileDir);
+    if (cleanupErrors.length) {
+      output.ok = false;
+      output.cleanupErrors = cleanupErrors.map(error => ({message: redact(error.message || error)}));
+    }
+    try {
+      if (output.runtimeDiagnostics) fs.writeFileSync(path.join(artifactsDir, 'runtime-diagnostics.json'), JSON.stringify(output.runtimeDiagnostics, null, 2));
+      fs.writeFileSync(path.join(artifactsDir, 'result.json'), JSON.stringify(output, null, 2));
+      reportProgress(`证据目录：${artifactsDir}`);
+    } catch (error) {cleanupErrors.push(error); output.ok = false;}
     for (const error of cleanupErrors) {
       process.stderr.write(`Cleanup failed: ${error.stack || error}\n`);
       reportErrorCodes(error, 'cleanup');
     }
     if (cleanupErrors.length && !primaryError) throw cleanupErrors[0];
   }
-  output.cleanupConfirmed = true;
-  output.profileRemoved = !fs.existsSync(profileDir);
-  if (artifactsDir) fs.writeFileSync(path.join(artifactsDir, 'result.json'), JSON.stringify(output, null, 2));
   process.stdout.write(`${JSON.stringify(output, null, 2)}\n`);
 }
 
@@ -3491,6 +3868,12 @@ if (require.main === module) {
 
 module.exports = {
   parseArgs,
+  prepareDismissiblePromotion,
+  readDismissiblePromotionStateInPage,
+  loadRuntimeDiagnostics,
+  finishRuntimeDiagnostics,
+  unloadRuntimePage,
+  completeFullPageScope,
   COVERAGE_EXCLUDED_ANCESTORS,
   COVERAGE_PROTECTED_DESCENDANTS,
   COVERAGE_TRACKER_KEY,
@@ -3506,8 +3889,11 @@ module.exports = {
   readCoverageStatuses,
   readFullTargetReadiness,
   readFullPageFailureSnapshotInPage,
+  readSanitizedFailureDomInPage,
   waitForFullTargetReadiness,
   runFullCase,
+  captureSourcePartitionLedger,
+  verifySourcePartitionLedger,
   beginCoverageCompletionPass,
   verifyCoverageUnchanged,
   isNaturalLanguageText,
@@ -3521,6 +3907,7 @@ module.exports = {
   closeInteractionDialog,
   validateCoverageRevealStatuses,
   waitForCoverageReady,
+  readCoverageReadinessInPage,
   waitForHostMathRendering,
   observeTranslationIdleInPage,
   waitForTranslationIdle,

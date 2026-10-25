@@ -186,6 +186,9 @@
       "[class*=\"PinnedIssue-module__metadataContainer\"]",
       "[class*=\"PinnedIssue-module__issueMetadata\"]",
       "[class*=\"IssueBodyHeader-module__IssueBodyHeaderContainer\"]",
+      "main a[data-testid=\"issue-body-header-author\"][data-hovercard-type=\"user\"][href]:not(.markdown-body):not(.markdown-body *)",
+      "main [data-testid=\"comment-header\"]:not(.markdown-body):not(.markdown-body *):not(:has(.markdown-body))",
+      "main #issue-timeline a[data-testid=\"actor-link\"][href]:not(.markdown-body):not(.markdown-body *)",
       "[aria-live]",
       "[role=\"status\"]",
       "[role=\"alert\"]",
@@ -242,6 +245,9 @@
       "[class*=\"PinnedIssue-module__metadataContainer\"]",
       "[class*=\"PinnedIssue-module__issueMetadata\"]",
       "[class*=\"IssueBodyHeader-module__IssueBodyHeaderContainer\"]",
+      "main a[data-testid=\"issue-body-header-author\"][data-hovercard-type=\"user\"][href]:not(.markdown-body):not(.markdown-body *)",
+      "main [data-testid=\"comment-header\"]:not(.markdown-body):not(.markdown-body *):not(:has(.markdown-body))",
+      "main #issue-timeline a[data-testid=\"actor-link\"][href]:not(.markdown-body):not(.markdown-body *)",
       "dialog",
       "[role=\"dialog\"]",
       "form[role=\"search\"]",
@@ -305,13 +311,17 @@
     "protect": [
       "time",
       "[role=\"progressbar\"]",
-      "[data-testid=\"app-bar-back\"]"
+      "[data-testid=\"app-bar-back\"]",
+      "main article span:has(+ span > a.x-link[href^=\"/\"]:not([href^=\"//\"]) > span.text-secondary.line-clamp-1) > a.x-link[href^=\"/\"]:not([href^=\"//\"]) > div.text-body.font-bold.line-clamp-1:not([dir=\"auto\"] *)"
     ],
     "exclude": [
       "[data-testid=\"tweetTextarea_0\"]",
       "[data-testid=\"DMComposerTextInput\"]",
       "[data-testid=\"User-Name\"]",
       "[data-testid=\"UserName\"]"
+    ],
+    "watchIgnore": [
+      "main article span:has(+ span > a.x-link[href^=\"/\"]:not([href^=\"//\"]) > span.text-secondary.line-clamp-1) > a.x-link[href^=\"/\"]:not([href^=\"//\"]) > div.text-body.font-bold.line-clamp-1:not([dir=\"auto\"] *)"
     ]
   },
   {
@@ -545,6 +555,14 @@
       },
       {
         "css": [
+          "ytd-video-renderer .metadata-snippet-text"
+        ],
+        "key": "youtube-search-card-description",
+        "resolve": "closest",
+        "atomic": true
+      },
+      {
+        "css": [
           "#description-inline-expander yt-attributed-string",
           "ytd-text-inline-expander yt-attributed-string"
         ],
@@ -578,7 +596,15 @@
       "yt-live-chat-app",
       "ytd-video-preview",
       "input#search",
-      "ytd-comment-simplebox-renderer"
+      "ytd-comment-simplebox-renderer",
+      "ytd-video-renderer ytd-channel-name",
+      "ytd-video-renderer #metadata-line",
+      "yt-lockup-view-model yt-content-metadata-view-model a[href^=\"/@\"]"
+    ],
+    "watchIgnore": [
+      "ytd-video-renderer ytd-channel-name",
+      "ytd-video-renderer #metadata-line",
+      "yt-lockup-view-model yt-content-metadata-view-model a[href^=\"/@\"]"
     ]
   },
   {
