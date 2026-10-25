@@ -15,7 +15,7 @@ const assertScaled = (actual, base, scale, label) => assert(Math.abs(Number.pars
 const SOURCE = 'Reading should feel calm and effortless. Colors and lines should follow the page you are reading.';
 const TRANSLATION = '阅读应该轻松、自然。颜色和线条应当贴合你正在阅读的网页。';
 const DEFAULT_APPEARANCE = {textColor: '', backgroundColor: '', lineColor: '', fillColor: '', fontScale: 100, fontWeight: 'default', fontFamily: 'default', opacity: 100, customCss: ''};
-const EXPECTED_CATEGORY_COUNTS = {文字: 12, 颜色: 12, 线条: 14, 标记: 9, 卡片: 5, 趣味: 6};
+const EXPECTED_CATEGORY_COUNTS = {文字: 12, 颜色: 12, 线条: 14, 标记: 9, 卡片: 12, 趣味: 12};
 const TEXT_COLOR_PRESETS = [
   {value: 49, label: '森林绿', hex: '#15803d'},
   {value: 50, label: '澄澈蓝', hex: '#1d4ed8'},
@@ -439,7 +439,7 @@ async function main() {
       await shot(group, `02-category-${category}`);
     }
     report.metrics.categoryCounts = categoryCounts;
-    report.checks.push('58 preset cards across six categories update preview and persisted style');
+    report.checks.push('71 preset cards across six categories update preview and persisted style');
 
     // 3. 外观微调：色板、键盘、滑块、分段控件与自定义取色器全部写入配置，并由预览按网页规则计算。
     await options.locator('.translation-style-categories').getByRole('radio', {name: '线条', exact: true}).click();

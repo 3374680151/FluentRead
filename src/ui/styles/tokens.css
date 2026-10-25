@@ -1,7 +1,7 @@
 /**
  * @file src/ui/styles/tokens.css
  * 文件职责：声明扩展页面共享的基础视觉语义变量，为 Popup、Options、文档页和可复用组件提供一致的品牌、文字、边框与表面颜色。
- * 主要内容：在 :root 定义 fr-color-brand、brand-strong、brand-soft、ink、muted、line、surface 等 token，统一选择菜单圆角和亮暗阴影，并保留旧短变量名到新命名空间的兼容别名；卡片、设置行、控件与焦点 token 统一层级和间距，颜色继续取自当前主题语义值。
+ * 主要内容：在 :root 定义 fr-color-brand、brand-strong、brand-soft、ink、muted、line、surface 等 token，统一选择菜单圆角和亮暗阴影，并保留旧短变量名到新命名空间的兼容别名；卡片、设置行、服务表单列宽和控件尺寸及焦点 token 统一层级和间距，颜色继续取自当前主题语义值。
  * 模块边界：这里只提供视觉语义值和迁移别名，为反馈色与层级阴影提供亮暗值，不包含具体组件选择器或页面布局，不改写各皮肤已登记的配色；各 app 页面在自己的 CSS 中消费并按场景覆盖。
  */
 /* 跨扩展页面共享的视觉语义。旧变量名保留为别名，迁移不改变现有主题表现。 */
@@ -40,6 +40,10 @@
   --fr-settings-row-min-height: 66px;
   --fr-settings-row-padding-block: 14px;
   --fr-settings-row-gap: 24px;
+  --fr-service-label-width: 140px;
+  --fr-service-column-gap: 16px;
+  --fr-service-control-width: 640px;
+  --fr-service-control-height: 40px;
   --fr-control-radius: 9px;
   --fr-control-min-height: 38px;
   --fr-action-gap: 8px;

@@ -30,15 +30,15 @@ import {
 describe('译文样式预设注册表', () => {
     it('保持稳定编号与唯一类名，并按六个分类组织全部预设', () => {
         const values = TRANSLATION_STYLE_PRESETS.map((preset) => preset.value);
-        expect([...values].sort((left, right) => left - right)).toEqual(Array.from({length: 58}, (_, index) => index));
-        expect(new Set(TRANSLATION_STYLE_PRESETS.map((preset) => preset.className)).size).toBe(58);
+        expect([...values].sort((left, right) => left - right)).toEqual(Array.from({length: 71}, (_, index) => index));
+        expect(new Set(TRANSLATION_STYLE_PRESETS.map((preset) => preset.className)).size).toBe(71);
         expect(TRANSLATION_STYLE_PRESETS.every((preset) => preset.className.startsWith('fluent-display-'))).toBe(true);
         expect(TRANSLATION_STYLE_CATEGORIES.map(({value}) => value)).toEqual(['text', 'color', 'line', 'mark', 'card', 'fun']);
         const counts = Object.fromEntries(TRANSLATION_STYLE_CATEGORIES.map((category) => [
             category.value,
             TRANSLATION_STYLE_PRESETS.filter((preset) => preset.category === category.value).length,
         ]));
-        expect(counts).toEqual({text: 12, color: 12, line: 14, mark: 9, card: 5, fun: 6});
+        expect(counts).toEqual({text: 12, color: 12, line: 14, mark: 9, card: 12, fun: 12});
         const groups = new Set(TRANSLATION_STYLE_LEGACY_GROUPS.map((group) => group.value));
         expect(TRANSLATION_STYLE_PRESETS.every((preset) => groups.has(preset.legacyGroup))).toBe(true);
         expect(TRANSLATION_STYLE_PRESETS.filter((preset) => preset.category === 'line').every((preset) => preset.usesLine)).toBe(true);
@@ -86,8 +86,9 @@ describe('译文样式预设注册表', () => {
             ['background', '背景色系列'], ['special', '特殊效果'], ['pro', '专业样式'], ['transparent', '透明效果'], ['fun', '趣味效果'],
         ]);
         expect(legacy.filter((item) => !item.disabled).map((item) => item.value)).toEqual([
-            0, 1, 2, 3, 29, 30, 31, 32, 49, 50, 51, 52, 53, 54, 55, 56, 57, 4, 5, 6, 24, 25, 33, 7, 8, 9, 39, 10, 11, 12, 13, 14, 15, 37, 38,
-            16, 17, 18, 19, 26, 27, 28, 34, 35, 36, 20, 21, 22, 23, 40, 41, 42, 43, 44, 45, 46, 47, 48,
+            0, 1, 2, 3, 29, 30, 31, 32, 49, 50, 51, 52, 53, 54, 55, 56, 57, 4, 5, 6, 24, 25, 33, 7, 8, 9, 39, 58, 59, 60, 61, 62, 63, 64,
+            10, 11, 12, 13, 14, 15, 37, 38, 16, 17, 18, 19, 26, 27, 28, 34, 35, 36, 20, 21, 22, 23,
+            40, 41, 42, 43, 44, 45, 46, 47, 48, 65, 66, 67, 68, 69, 70,
         ]);
         expect(legacy.find((item) => item.value === 1)).toEqual({value: 1, label: '加粗显示', class: 'fluent-display-bold', group: 'basic'});
         // 逐行绘制的预设把标记带到旧版选项，渲染器据此包裹行内译文。

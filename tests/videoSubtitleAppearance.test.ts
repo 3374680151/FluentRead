@@ -79,6 +79,7 @@ describe('video subtitle appearance contract', () => {
       textColor: '#abcdef',
       translationColor: '#123456',
       position: 'top',
+      bilingualOrder: 'original-first',
       bottomOffset: 25,
       autoBottom: false,
       backgroundOpacity: 0,
@@ -112,6 +113,23 @@ describe('video subtitle appearance contract', () => {
       translationColor: '#0f766e',
       backgroundOpacity: 88,
     });
+  });
+
+  it('双语顺序默认原文在上，合法值经配置保存保留，旧值和非法值回退且不改其他外观', () => {
+    expect(new Config().videoSubtitleAppearance.bilingualOrder).toBe('original-first');
+    for (const bilingualOrder of [undefined, null, '', 'invalid', false, {}, 'ORIGINAL-FIRST']) {
+      const appearance = normalizeVideoSubtitleAppearance({bilingualOrder, readingAnnotation: true, fontScale: 160});
+      expect(appearance).toMatchObject({bilingualOrder: 'original-first', readingAnnotation: true, fontScale: 160});
+      expect(getVideoSubtitleAppearanceCssVars(appearance)['--fluent-read-video-subtitle-translation-order']).toBe('3');
+    }
+    for (const bilingualOrder of ['original-first', 'translation-first'] as const) {
+      const saved = normalizeConfig({videoSubtitleAppearance: {bilingualOrder, readingAnnotation: true, fontScale: 160}});
+      expect(normalizeConfig(JSON.parse(JSON.stringify(saved))).videoSubtitleAppearance).toMatchObject({
+        bilingualOrder, readingAnnotation: true, fontScale: 160,
+      });
+      expect(getVideoSubtitleAppearanceCssVars(saved.videoSubtitleAppearance)['--fluent-read-video-subtitle-translation-order'])
+        .toBe(bilingualOrder === 'translation-first' ? '0' : '3');
+    }
   });
 
   it('converts normalized appearance to stable CSS variables for the content UI', () => {

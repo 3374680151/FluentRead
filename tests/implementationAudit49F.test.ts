@@ -1669,7 +1669,16 @@ describe('49F owned settings i18n client admission', () => {
         try{
             const defaults={...client.config.translationAppearance};client.config.display=0;await client.settle();await client.click('.translation-style-mode-note button');expect(client.config.display).toBe(1);
             await client.click('.translation-style-preview-theme button:last-child');expect(client.root.querySelector('.translation-style-preview')!.getAttribute('data-page-theme')).toBe('dark');expect(client.config.theme).toBe('auto');
-            await client.click('.translation-style-categories button:last-child');const preset=client.root.querySelector('.translation-style-card')!.getAttribute('data-style-value');await client.click('.translation-style-card');expect(client.config.style).toBe(Number(preset));
+            for (const [categoryIndex, newestStyle] of [[4, 64], [5, 70]] as const) {
+                const oldStyle = client.config.style;
+                await client.click(`.translation-style-categories button[data-option-index="${categoryIndex}"]`);
+                expect(client.root.querySelectorAll('.translation-style-card')).toHaveLength(12);
+                expect(client.config.style).toBe(oldStyle);
+                await client.click(`[data-style-value="${newestStyle}"]`);
+                expect(client.config.style).toBe(newestStyle);
+                expect(client.root.querySelector(`[data-style-value="${newestStyle}"]`)!.getAttribute('aria-checked')).toBe('true');
+                expect(client.root.querySelector('[data-testid="bilingual-highlight-preview-translation"]')!.classList.contains(client.preset(newestStyle)!.className)).toBe(true);
+            }
             await client.click('.translation-appearance-disclosure');
             for(const [field,color] of [['textColor','#123456'],['backgroundColor','#ffffcc'],['lineColor','#654321'],['fillColor','#e0e0e0']] as const){const id=field.replace(/[A-Z]/g,letter=>`-${letter.toLowerCase()}`);await client.input(`[data-color-port="translation-${id}"]`,color);expect(client.config.translationAppearance[field]).toBe(color);}
             await client.click('.translation-appearance-choice:nth-of-type(2) button:last-child');expect(client.config.translationAppearance.fontWeight).not.toBe('default');

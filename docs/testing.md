@@ -120,6 +120,12 @@ GitHub 仓库列表和 Issue 列表同时保留旧容器与当前结构的保护
 
 生产 Chrome 扩展构建后运行 `node scripts/testing/run-personal-corrections-test.cjs --extension-dir .output/chrome-mv3 --playwright-root <捆绑 Node 包目录> --focus-safe-helper <focus-safe-browser.cjs 路径> --artifacts-dir <证据目录> --real-url https://example.com`。脚本使用第二屏临时 Edge 后台窗口和可信输入，翻译响应为确定性 Google 夹具；网页、双语渲染、后台消息和加密存储使用生产实现。验证原句重复复用时零额外 provider 请求、近似句只作草稿、两种语言与标题语境隔离、材料/项目范围、恢复重译、公共缓存隔离、页签栏右侧语言与底部紧凑范围的实际几何、范围帮助的真实悬停/焦点与 390px 提示边界、焦点恢复，保存 JSON、DOM 和截图。此证据不代表在线译文质量或 Firefox 实机验收。
 
+## 视频双语上下顺序（issue #1073）
+
+播放器菜单和字幕外观设置共用 `videoSubtitleAppearance.bilingualOrder`，默认原文在上；切换只重排原文、读音和译文，读音始终紧跟原文，单语显示与字幕下载顺序保持各自语义。`videoSubtitleAppearance`、`videoSubtitleAppearanceSettingsLifecycle`、`videoUiI18n`、`videoSubtitleTrackPriorityRuntime`、`videoCaptionPlatformRuntime` 和 `videoNativeFullscreen` 覆盖归一化、持久化、即时更新、缓存/节点保留、单语和原生轨道选择。
+
+生产 Chrome 构建后，运行 `node scripts/testing/run-video-menu-ui-test.cjs --suite subtitle-order --extension-dir .output/chrome-mv3 --playwright-root <Node包目录> --focus-safe-helper scripts/testing/focus-safe-browser.cjs --runtime-diagnostics <浏览器测试技能>/scripts/runtime-diagnostics.cjs --artifacts-dir <证据目录>`。专项在第二屏临时 Edge 后台正常窗口中验证真实点击和键盘切换、字幕上下几何、无重复翻译请求、刷新后偏好、单语显示、390/320px 菜单与外部配置同步，并保存截图及运行时诊断。网页、媒体、原字幕和翻译响应使用确定性夹具，不代表原站、在线服务、Firefox 或 Safari 系统全屏实机验收。
+
 ## 视频完整句学习
 
 视频字幕总开关关闭时，YouTube/X 播放器按钮和菜单必须移除；播放器菜单的「关闭」遵循同一行为，重新开启从扩展弹窗或设置页操作。`videoSubtitleTrackPriorityRuntime` 覆盖两个平台初始关闭、已打开菜单的移除、周期同步后保持隐藏、重复开启不产生副本，以及隐藏字幕与关闭功能的区别。生产 Chrome 构建后使用 `node scripts/run-video-menu-state-test.cjs --button-visibility-only --extension-dir .output/chrome-mv3 --playwright-root <Node包目录> --focus-safe-helper scripts/testing/focus-safe-browser.cjs --artifacts-dir <证据目录>` 定向验证：初始关闭、外部配置关闭、控制栏重建、刷新、菜单关闭、重新开启，以及字幕关闭时网页段落翻译—恢复—再次翻译的 `[1, 0, 1]`。脚本使用临时 Edge 后台正常窗口与受控 YouTube/X DOM、媒体和翻译响应；不代表原站、在线服务或 Firefox 运行验收。
@@ -202,7 +208,8 @@ pnpm test tests/speechProgress.test.ts tests/offscreenTtsPlayback.test.ts tests/
 node scripts/run-selection-speech-test.cjs \
   --extension-dir .output/chrome-mv3 \
   --playwright-root <Node包目录> \
-  --focus-safe-helper <扩展界面测试技能>/scripts/focus-safe-browser.cjs \
+  --focus-safe-helper scripts/testing/focus-safe-browser.cjs \
+  --runtime-diagnostics <扩展界面测试技能>/scripts/runtime-diagnostics.cjs \
   --artifacts-dir /private/tmp/fluentread-selection-speech
 ```
 
@@ -396,7 +403,7 @@ node scripts/testing/run-webdav-backup-ui-test.cjs \
 
 句子操作统一使用已有划词入口。定向回归使用 `tests/sentenceActionsMount.test.ts`、`tests/selectionTranslatorLifecycle.test.ts`、`tests/bilingualSentenceHighlight.test.ts` 和 `tests/selectionTtsContentController.test.ts`，验证普通悬停仅绘制高亮、选区卡片按需收藏句子、多语言来源、关闭偏好与请求清理。生产浏览器专项运行 `node scripts/testing/run-sentence-listening-test.cjs --selection-entry-only --extension-dir .output/chrome-mv3 --playwright-root <Node包目录> --focus-safe-helper <focus-safe-browser.cjs路径> --artifacts-dir /private/tmp/fluentread-sentence-selection`，验证原文和译文停留不弹入口、不增加请求；主动选中后只有一个既有小图标，点击才展开、复制和收藏，继续阅读、390px 布局、划词关闭和翻译—恢复—再次翻译。网页和翻译服务为本地确定性夹具，不代表外部服务质量或 Firefox 实机运行。
 
-译文样式由 `tests/translationAppearance.test.ts` 与 `tests/translationAppearanceStyles.test.ts` 覆盖预设注册表、旧版选项顺序、外观归一化、颜色换算与网页样式节点的安装、原位更新和移除；颜色换算还保留旧配置中的字母裸 hex（包括不透明四位与八位），继续拒绝透明和损坏值。`tests/pageStyles.test.ts` 验证外观样式随公共页面样式一起安装、订阅配置更新，并在移除或 context 失效时一起清理。生产扩展构建后执行 `node scripts/testing/run-translation-style-ui-test.cjs --extension-dir .output/chrome-mv3 --playwright-root <Node包目录> --focus-safe-helper <focus-safe-browser.cjs路径> --artifacts-dir /private/tmp/fluentread-translation-style`：在临时 Edge 与第二屏后台窗口中验证界面风格页第一组为译文样式、四类 29 张样式卡片逐一写入配置并同步预览、色板与方向键、滑块、分段控件和自定义取色器、仅译文提示、逐句高亮开关、重新打开后的保存结果、设置搜索直达外观面板与逐句高亮开关、深色界面与 1024/820/390 宽度；再用本地确定性夹具真实悬浮翻译，确认外观调整无需新请求即可更新已有译文，停用插件或恢复默认时移除外观样式节点，并检查简约卡片底色在网页上生效。
+译文样式由 `tests/translationAppearance.test.ts` 与 `tests/translationAppearanceStyles.test.ts` 覆盖预设注册表、旧版选项顺序、外观归一化、颜色换算与网页样式节点的安装、原位更新和移除；颜色换算还保留旧配置中的字母裸 hex（包括不透明四位与八位），继续拒绝透明和损坏值。`tests/pageStyles.test.ts` 验证外观样式随公共页面样式一起安装、订阅配置更新，并在移除或 context 失效时一起清理。生产扩展构建后执行 `node scripts/testing/run-translation-style-ui-test.cjs --extension-dir .output/chrome-mv3 --playwright-root <Node包目录> --focus-safe-helper <focus-safe-browser.cjs路径> --artifacts-dir /private/tmp/fluentread-translation-style`：在临时 Edge 与第二屏后台窗口中验证界面风格页第一组为译文样式、六类 71 张样式卡片逐一写入配置并同步预览，其中卡片与趣味各 12 种；覆盖色板与方向键、滑块、分段控件和自定义取色器、仅译文提示、逐句高亮开关、重新打开后的保存结果、设置搜索直达外观面板与逐句高亮开关、深色界面与 1024/820/390 宽度；再用本地确定性夹具真实悬浮翻译，确认外观调整无需新请求即可更新已有译文，停用插件或恢复默认时移除外观样式节点，并检查简约卡片底色在网页上生效。
 
 ## 关键内容空间与交互工作量
 
@@ -1512,3 +1519,10 @@ Popup 服务概览显示默认、继承和独立功能在配置中选择的模�
 生产 Chrome 构建后，运行 `node scripts/testing/run-kagi-headline-translation-test.cjs --allow-network --extension-dir .output/chrome-mv3 --playwright-root <工作区 Node.js 包目录> --artifacts-dir /private/tmp/fluentread-kagi-headlines`。可用 `--focus-safe-helper` 指定等价的焦点安全 helper，默认使用仓库版本。
 
 专项创建临时 Edge profile 与第二屏后台可见窗口，先检查 Kagi 原生展开/收起以确认页面水合，再验证正文/全部节点范围的双语标题、普通按钮原位替换、上下排版、点击与 Enter/空格、动态插入、仅译文闭合 Shadow 文本、恢复重译、Control 悬浮切换和真实分类切换。DOM、截图和报告写入证据目录；结束后关闭本次浏览器并删除临时 profile。翻译使用确定性微软响应，仅证明真实站点 DOM 与生产扩展的兼容性，不代表在线供应商质量或 Firefox 实机验收。
+
+
+## 划词语音栏与正文布局
+
+生成语音和播放状态栏位于正文之后，带独立分隔线并按控件实际高度参与布局。自动尺寸卡片为底栏自然增高，达到当前位置的可用高度上限时正文滚动；手动调整过尺寸的卡片保留用户外框，正文独立滚动。停止后底栏收起，自动卡恢复自然高度。
+
+针对该边界运行 `pnpm test tests/selectionTranslatorLifecycle.test.ts`。生产构建后运行 `node scripts/run-selection-speech-test.cjs --layout-only --extension-dir .output/chrome-mv3 --playwright-root <Node包目录> --focus-safe-helper scripts/testing/focus-safe-browser.cjs --runtime-diagnostics <扩展界面测试技能>/scripts/runtime-diagnostics.cjs --artifacts-dir <证据目录>`，验证等待生成、播放、停止和重播、原文与译文切换、窄屏与深色，以及手动缩小卡片后正文末尾和操作按钮仍可访问。断言正文滚动区域不与底栏相交，所有播放按钮完整位于底栏内；自动卡未到高度上限时不得因语音栏出现而压缩正文。测试使用临时后台 Edge 和确定性翻译/WAV 夹具，不能代替外部语音合成质量或 Firefox 实机验证。

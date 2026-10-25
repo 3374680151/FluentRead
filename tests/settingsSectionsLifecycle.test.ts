@@ -647,7 +647,14 @@ describe('新服务对话框实际模板首次挂载与后续实例归属', () =
         await settle();
         expect(document.querySelectorAll('[data-composite-strategy-help]')).toHaveLength(1);
         expect(document.querySelector('[data-composite-strategy-help]')?.textContent).toBe('settings.services.composite.randomHelp');
-        expect(document.querySelector('details[data-composite-advanced]')?.hasAttribute('open')).toBe(false);
+        const timeout = document.querySelector('[data-testid="composite-member-timeout"]')! as unknown as HTMLInputElement;
+        expect(timeout).not.toBeNull();
+        expect(timeout.closest('details')).toBeNull();
+        const timeoutDescriptionId = timeout.getAttribute('aria-describedby');
+        expect(timeoutDescriptionId).toBeTruthy();
+        const timeoutDescription = document.getElementById(timeoutDescriptionId!);
+        expect(timeoutDescription?.textContent).toBe('settings.services.composite.timeoutBehavior');
+        expect(timeoutDescription?.closest('details, [hidden], [aria-hidden="true"]')).toBeNull();
         const select = document.querySelector('[data-testid="composite-member-select"]')!;
         function addMember(service: string) {
             const option = select.querySelector(`option[value="${service}"]`)!;
@@ -658,17 +665,13 @@ describe('新服务对话框实际模板首次挂载与后续实例归属', () =
         expect(fixture.providerState!.compositeDraft.services).toEqual(['google', 'microsoft']);
         expect(document.querySelectorAll('[data-composite-member]')).toHaveLength(2);
         oldInterfaceSubmit();expect(fixture.state.config.customOpenAIProviders).toEqual([]);expect(fixture.state.config.compositeTranslationProviders).toEqual([]);
-        const advanced = document.querySelector('details[data-composite-advanced]')!;
-        advanced.setAttribute('open', '');advanced.dispatchEvent(new fixture.domWindow!.Event('toggle'));await settle();
-        const timeout = document.querySelector('[data-testid="composite-member-timeout"]')! as unknown as HTMLInputElement;
         timeout.value = '0';timeout.dispatchEvent(new fixture.domWindow!.Event('input', {bubbles: true}));await settle();
-        advanced.removeAttribute('open');advanced.dispatchEvent(new fixture.domWindow!.Event('toggle'));await settle();
         submitProviderFromTemplate(fixture);await settle();
         expect(fixture.state.config.compositeTranslationProviders).toEqual([]);expect(fixture.patch).not.toHaveBeenCalled();
-        expect(advanced.hasAttribute('open')).toBe(true);
-        expect(advanced.querySelector('[role="alert"]')?.textContent).toBe('settings.services.composite.timeoutInvalid');
+        expect(timeout.getAttribute('aria-invalid')).toBe('true');
+        expect(timeout.closest('.setting-control')?.querySelector('[role="alert"]')?.textContent).toBe('settings.services.composite.timeoutInvalid');
         timeout.value = '5';timeout.dispatchEvent(new fixture.domWindow!.Event('input', {bubbles: true}));await settle();
-        expect(advanced.hasAttribute('open')).toBe(true);
+        expect(timeout.getAttribute('aria-invalid')).not.toBe('true');
         submitProviderFromTemplate(fixture);await settle();
         expect(fixture.state.config.compositeTranslationProviders).toEqual([expect.objectContaining({name: 'Daily combination', services: ['google', 'microsoft'], strategy: 'random', timeoutMs: 5000})]);
         expect(fixture.state.config.customOpenAIProviders).toEqual([]);

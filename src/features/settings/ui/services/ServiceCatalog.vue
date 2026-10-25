@@ -1,6 +1,6 @@
 <!--
  * @file src/features/settings/ui/services/ServiceCatalog.vue
- * 文件职责：以服务目录和清晰分层的配置工作区呈现翻译服务，窄屏按需展开目录，保持配置与默认使用分离；默认状态由目录标记和显式按钮表达，标题不重复显示状态徽章。
+ * 文件职责：以服务目录和清晰分层的配置工作区呈现翻译服务，窄屏按需展开目录，标题操作按详情区实际宽度排列，保持配置与默认使用分离；默认状态由目录标记和显式按钮表达，标题不重复显示状态徽章。
  * 主要内容：侧栏为同行名称与标签保留稳定宽度，窄屏目录使用单列；侧栏展示全部内置及自定义服务，分组可单独收起，选中服务或回到本页时展开正在配置的服务所在分组；顶部分组导航复用设置页的紧凑样式，点击后展开并滚动到对应分组，随目录滚动同步高亮并横向显示当前入口；搜索过滤目录时展开全部匹配分组，此时点击分组导航会清空搜索并回到完整目录；自定义按钮直接打开创建表单，入口下方的状态插槽由父组件反馈首次窗口加载，反馈显示时停用按钮说明气泡，避免遮挡提示与关闭操作；右侧服务标题支持程序聚焦且不加入 Tab 顺序，集中展示服务名称及接口性质徽章、模型、官网帮助和连接配置；目录搜索文本按需缓存，目录几何按帧合并并缓存分组位置，滚动只读取当前位置，活跃上下文限定操作并取消过期焦点、滚动与帧回调。
  * 模块边界：目录提供“配置服务”“自定义服务”和“添加组合”入口，组合与自建接口共同显示在自定义目录且不展示模型字段；标题栏在检查连接左侧提供显式设为默认操作，通过独立事件交给外层 SettingsSections 持久化，公开构建不展示 ChatGPT 登录模块或旧配置详情，模块只在显式开发开关下可见，不编辑凭据、不测试连接也不保存配置；分组收起状态只保存在本次页面会话，不写入配置，停用或切换上下文时取消目录帧并重建分组尺寸及字体观察，卸载时清理观察器与监听；详细表单归 ServiceConfiguration.vue，服务定义来自 core/config。
  -->
@@ -549,23 +549,26 @@ watch(() => props.service, (service) => {
 .service-count { margin-left: 4px; font-variant-numeric: tabular-nums; }
 .service-groups { overflow-y: auto; min-height: 0; flex: 1; margin-top: 12px; overscroll-behavior: contain; }
 .directory-items { display: grid; gap: 1px; }
-.service-detail { display: flex; flex-direction: column; min-width: 0; min-height: 0; margin: 0; padding: 20px; overflow-y: auto; overflow-x: hidden; scrollbar-gutter: stable; border: 0; border-radius: 0; background: var(--surface); overscroll-behavior: contain; }
+.service-detail { container: service-detail / inline-size; display: flex; flex-direction: column; min-width: 0; min-height: 0; margin: 0; padding: 20px; overflow-y: auto; overflow-x: hidden; scrollbar-gutter: stable; border: 0; border-radius: 0; background: var(--surface); overscroll-behavior: contain; }
 .detail-hero { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; padding-bottom: 12px; margin-bottom: 12px; border-bottom: 1px solid var(--line); flex-shrink: 0; }
 .detail-hero > :deep(.service-icon) { margin-top: 2px; }
 .detail-heading { flex: 1 1 160px; min-width: 0; }
-.hero-service-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; max-width: 100%; margin-left: auto; }
-.hero-connection-action { flex: none; }
-.service-default-button { display: inline-flex; align-items: center; justify-content: center; gap: 7px; max-width: 100%; min-height: 36px; padding: 7px 12px; border: 1px solid var(--brand-border, #f3c0ce); border-radius: 9px; color: var(--brand-strong, #bd2853); background: var(--surface, #fff); font-size: 12px; font-weight: 600; cursor: pointer; }
+.hero-service-actions { display: flex; align-items: stretch; flex-wrap: wrap; gap: 8px; max-width: 100%; margin-left: auto; }
+.hero-connection-action { display: flex; min-width: 0; }
+.service-default-button { display: inline-flex; align-items: center; justify-content: center; gap: 7px; min-width: 0; max-width: 100%; min-height: 36px; padding: 7px 12px; border: 1px solid var(--brand-border, #f3c0ce); border-radius: 8px; color: var(--brand-strong, #bd2853); background: var(--surface, #fff); font-size: 12px; font-weight: 600; line-height: 1.5; overflow-wrap: anywhere; cursor: pointer; }
 .service-default-button > svg { flex: none; }
 .service-default-button:hover:not(:disabled) { border-color: var(--brand); background: var(--brand-soft); }
 .service-default-button:disabled { border-color: var(--line); color: var(--muted); cursor: default; }
+@container service-detail (max-width: 600px) {
+  .hero-service-actions { width: 100%; margin-left: 0; }
+}
 .detail-title-row { display: flex; align-items: center; flex-wrap: wrap; gap: 9px; }
 .detail-title-row h4 { margin: 0; font-size: 20px; line-height: 1.4; overflow-wrap: anywhere; }
 .detail-hero p { margin: 5px 0 0; color: var(--muted, #737c8f); font-size: 12px; line-height: 1.6; }
 .service-description { max-width: 760px; margin: 0 0 12px; color: var(--muted, #737c8f); font-size: 12px; line-height: 1.65; }
 .service-website-link { display: inline-flex; align-items: center; gap: 4px; color: var(--brand-strong); font-size: 12px; font-weight: 550; text-decoration: none; }
 .service-website-link:hover { color: var(--brand-strong, #bd2853); text-decoration: underline; }
-.model-section { display: grid; grid-template-columns: 140px minmax(0, 1fr); align-items: center; gap: 16px; padding: 0 0 12px; margin: 0 0 12px; border: 0; border-bottom: 1px solid var(--line); border-radius: 0; flex-shrink: 0; }
+.model-section { display: grid; grid-template-columns: var(--fr-service-label-width, 140px) minmax(0, 1fr); align-items: center; gap: var(--fr-service-column-gap, 16px); padding: 0 0 12px; margin: 0 0 12px; border: 0; border-bottom: 1px solid var(--line); border-radius: 0; flex-shrink: 0; }
 .model-section > :deep(.model-picker) { width: 100%; max-width: 640px; justify-self: start; }
 .model-heading strong { font-size: 13px; font-weight: 550; }
 .service-configuration-slot { flex-shrink: 0; padding-bottom: 12px; }

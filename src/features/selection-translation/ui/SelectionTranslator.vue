@@ -1,9 +1,9 @@
 <!--
  * @file src/features/selection-translation/ui/SelectionTranslator.vue
  * 通知布局：收藏与语音设置通知沿用安全可见视口订阅，触摸动作保留完整命中区；通知不增加独立监听或请求。
- * 极矮视口：同一卡片改为整卡滚动并收紧顶栏间距，保留输入与请求、手动几何和语音锁；Safari 键盘视口变化后仅在当前有限窗口内滚动卡片自身显露原聚焦输入，主动操作取消待处理显露；恢复尺寸后沿用原定位，不增加监听或计时器。
+ * 极矮视口：同一卡片改为整卡滚动并收紧顶栏间距，保留输入与请求、手动几何和语音状态；Safari 键盘视口变化后仅在当前有限窗口内滚动卡片自身显露原聚焦输入，主动操作取消待处理显露；恢复尺寸后沿用原定位，不增加监听或计时器。
  * 文件职责：实现划词翻译的主要页面组件，覆盖选区捕获、触摸原生句柄稳定等待、避开原生菜单上下区域的行侧入口、可见视口与安全区定位、后台及宿主恢复来源校验、图标/小点/悬停/快捷键/仅右键菜单/直接弹出、原生菜单可信选区恢复与重复请求复用、翻译与词卡展示、免费 AI 讲解的显式启用、朗读、收藏选中的单词/表达/句子、双语分享卡片、鉴权服务配置入口、重试和关闭。
- * 主要内容：相同译文保留原文且不重复展示；Firefox 触摸入口为原生手柄保留独立侧距，以绑定来源快照的可信触摸处理缺少 click 的情况并取消拖动；Safari/Firefox 触摸入口成功开卡后保留当前快照并清空同一原生选区，异步空选区不误关卡片；组件管理可信手势、已关闭选区与选择丢失宽限、继续阅读或复制原文时自动收起、请求 token、按既有错误种类显示有限提示并仅为当前鉴权失败提供通用设置入口、行内代码保护与纯文本安全渲染、按标签页页面缩放补偿的弹窗定位、空白拖动、边角缩放、主题及可换行的多语言标题；普通译文先于完整原文，单行可横向滚动的导航与右侧固定分享、收藏、关闭及更多操作把高度留给正文，次级菜单按可见窗口覆盖显示；指针移动按帧合并并在结束时提交最后位置，已定位卡片不重复读取选区几何；富文本 UTF-16 跟读偏移一次计算并复用；默认过滤同语言选区，按配置开放中英反向入口，翻译方向始终按现有语言配置判断；统一卡片默认显示翻译并以同一导航进入学习；首次定位后保持弹窗锚点，手动尺寸下内容与播放状态变化只影响内部布局；闲置语音栏不占空间，自动卡生成与播放期间用独立临时高度保持外框，停止恢复自然尺寸；学习短回答自然收拢、长回答受高度上限约束，完整原文和译文按需对照并允许翻译继续完成；单词先展示原文与可用词卡，再补充辅助释义，以紧凑状态提示等待、未命中与网络失败；关闭或更换选区取消等待并阻止旧响应覆盖新结果；区分语音生成和播放，按实际音频时钟或浏览器词边界显示完整词高亮，并提供真实音频时间与前后 5 秒跳转。
+ * 主要内容：相同译文保留原文且不重复展示；Firefox 触摸入口为原生手柄保留独立侧距，以绑定来源快照的可信触摸处理缺少 click 的情况并取消拖动；Safari/Firefox 触摸入口成功开卡后保留当前快照并清空同一原生选区，异步空选区不误关卡片；组件管理可信手势、已关闭选区与选择丢失宽限、继续阅读或复制原文时自动收起、请求 token、按既有错误种类显示有限提示并仅为当前鉴权失败提供通用设置入口、行内代码保护与纯文本安全渲染、按标签页页面缩放补偿的弹窗定位、空白拖动、边角缩放、主题及可换行的多语言标题；普通译文先于完整原文，单行可横向滚动的导航与右侧固定分享、收藏、关闭及更多操作把高度留给正文，次级菜单按可见窗口覆盖显示；指针移动按帧合并并在结束时提交最后位置，已定位卡片不重复读取选区几何；富文本 UTF-16 跟读偏移一次计算并复用；默认过滤同语言选区，按配置开放中英反向入口，翻译方向始终按现有语言配置判断；统一卡片默认显示翻译并以同一导航进入学习；首次定位后保持弹窗锚点，手动尺寸下内容与播放状态变化只影响内部布局；闲置语音栏不占空间，自动卡生成与播放期间按底栏实际高度自然增高，达到视口上限后正文独立滚动；学习短回答自然收拢、长回答受高度上限约束，完整原文和译文按需对照并允许翻译继续完成；单词先展示原文与可用词卡，再补充辅助释义，以紧凑状态提示等待、未命中与网络失败；关闭或更换选区取消等待并阻止旧响应覆盖新结果；区分语音生成和播放，按实际音频时钟或浏览器词边界显示完整词高亮，并提供真实音频时间与前后 5 秒跳转。
  * 材料关联：主动收藏与阅读时捕获当前选区的稳定来源和文本位置，词书真实保存后才关联材料引用，隐私窗口不采集。
  * 模块边界：组件只通过公共客户端和 runtime 消息触达后台及现有设置入口，不直接持有 provider、IndexedDB 或 Offscreen 资源；纯选区算法在 core，活动 Range 通过回调交给 content/runtime 管理 modal 挂载所有权；扩展 PDF 文档页通过可选来源适配器复用同一卡片、标题和阅读上下文，来源失效时取消当前请求，词书协议独立维护；Safari 仅为可信聚焦的同一追问框、卡片和原文保留初次键盘缩高或明确旋转后的有限宿主页平移窗口，明确方向先于可见视口宽度更新时也保留该固定窗口，宽度追上不续期；极矮可滚动卡片内的可信纵向触摸另有不续期的400ms尾窗，只容许累计2px宿主页偏移，不拦截原生滚动；输入与框内编辑键结束当前窗口，外部手势、缩放、失焦与关闭撤销身份，普通滚动仍收卡；阅读依据的 DOM 锚点只属于当前选区，关闭、换区或卸载释放临时绘制和监听。
  -->
@@ -798,9 +798,6 @@ const popupResizeEdges = ['n', 's', 'e', 'w', 'ne', 'nw', 'se', 'sw'] as const;
 const popupManipulating = ref(false);
 let manualPopupPosition: {left: number; top: number} | null = null;
 let manualPopupSize: {width: number; height: number} | null = null;
-// 自动卡只在生成和播放语音期间锁住当前外框；不能把临时高度记成用户手动尺寸。
-let audioPopupHeight: number | null = null;
-let audioPopupHeightRevision = 0;
 let popupGesture: {pointerId: number; x: number; y: number; rect: DOMRect; edge: string; element: HTMLElement} | null = null;
 let pendingPopupPoint: {x: number; y: number} | null = null;
 let popupGestureFrame: number | null = null;
@@ -823,30 +820,8 @@ function stopPopupGesture(event?: PointerEvent): void {
 function resetPopupGeometry(): void {
   stopPopupGesture();
   cancelPositionUpdate();
-  clearAudioPopupHeightLock();
   manualPopupPosition = null;
   manualPopupSize = null;
-}
-
-function clearAudioPopupHeightLock(): void {
-  audioPopupHeightRevision += 1;
-  const hadLock = audioPopupHeight !== null;
-  audioPopupHeight = null;
-  if (hadLock && !manualPopupSize) {
-    const {height: _height, ...naturalStyle} = tooltipStyle.value;
-    tooltipStyle.value = naturalStyle;
-  }
-}
-
-function beginAudioPopupHeightLock(): void {
-  const element = tooltipRef.value;
-  if (isShortViewport() || !showTooltip.value || !element || manualPopupSize || audioPopupHeight !== null) return;
-  const height = element.getBoundingClientRect().height;
-  if (!Number.isFinite(height) || height <= 0) return;
-  audioPopupHeightRevision += 1;
-  audioPopupHeight = height;
-  if (manualPopupPosition) applyManualPopupGeometry();
-  else tooltipStyle.value = {...tooltipStyle.value, height: px(height / popupScale.value)};
 }
 
 function applyManualPopupGeometry(measured?: Pick<DOMRect, 'width'>): void {
@@ -860,8 +835,7 @@ function applyManualPopupGeometry(measured?: Pick<DOMRect, 'width'>): void {
   // 临时退化只改变呈现，不写回用户几何；常规卡仍保留左上角和原高度限制。
   const top = compact ? viewport.top : Math.max(viewport.top + 12, Math.min(manualPopupPosition.top, viewport.bottom - Math.min(140 * scale, Math.max(1, viewport.height - 24)) - 12));
   const availableHeight = compact ? viewport.height : Math.max(1, viewport.bottom - top - 12);
-  const preferredHeight = manualPopupSize?.height ?? audioPopupHeight;
-  const height = preferredHeight !== null ? Math.min(preferredHeight, availableHeight) : undefined;
+  const height = manualPopupSize ? Math.min(manualPopupSize.height, availableHeight) : undefined;
   if (!compact) {
     manualPopupPosition = {left, top};
     if (manualPopupSize) manualPopupSize = {width, height: height!};
@@ -874,24 +848,9 @@ function applyManualPopupGeometry(measured?: Pick<DOMRect, 'width'>): void {
   };
 }
 
-// 同步捕获未出现语音栏时的自然高度；prepare -> play 不重新量，也不随着跟读进度变化。
-watch(() => isPreparingAudio.value || isPlaying.value, active => {
-  if (active) beginAudioPopupHeightLock();
-  else clearAudioPopupHeightLock();
-}, {flush: 'sync'});
+// 自动卡保留自然高度，为生成/播放底栏留出真实空间；手动尺寸仍由用户控制。
 watch([readingMode, showTooltip], () => {
   if (readingMode.value || !showTooltip.value) openingAuthenticationSettings.value = null;
-  clearAudioPopupHeightLock();
-  if (!showTooltip.value || (!isPreparingAudio.value && !isPlaying.value)) return;
-  const revision = audioPopupHeightRevision;
-  const owner = snapshot.value;
-  const view = readingMode.value;
-  // 切换视图可使用新正文的自然尺寸；旧视图、旧音频和关闭后的 nextTick 不能重新锁高。
-  void nextTick(() => {
-    if (revision !== audioPopupHeightRevision || snapshot.value !== owner || readingMode.value !== view
-      || !showTooltip.value || (!isPreparingAudio.value && !isPlaying.value)) return;
-    beginAudioPopupHeightLock();
-  });
 }, {flush: 'sync'});
 
 function beginPopupGesture(event: PointerEvent): void {
@@ -955,7 +914,6 @@ function flushPopupGesture(gesture: NonNullable<typeof popupGesture>): void {
     if (edge.includes('s')) bottom = Math.min(viewport.bottom - 12, Math.max(rect.bottom + dy, top + minHeight));
     manualPopupPosition = {left, top};
     manualPopupSize = {width: right - left, height: bottom - top};
-    clearAudioPopupHeightLock();
   }
   // 手势从按下时的矩形算绝对位移，移动帧不用再读取写入后的卡片布局。
   applyManualPopupGeometry(rect);
@@ -1052,7 +1010,6 @@ function applyPageZoom(value: unknown): void {
     width: manualPopupSize.width * ratio,
     height: manualPopupSize.height * ratio,
   };
-  if (audioPopupHeight !== null) audioPopupHeight *= ratio;
   pageZoom.value = nextZoom;
   viewportSize.value = getSafeVisualViewportRect();
   schedulePositionUpdate();
@@ -2747,7 +2704,6 @@ onBeforeUnmount(() => {
   unsubscribeVisualViewport = null;
   if (selectionFrame !== null) window.cancelAnimationFrame(selectionFrame);
   cancelPositionUpdate();
-  clearAudioPopupHeightLock();
   // 悬停延迟可能跨过卸载；卸载后不能再按旧选区打开阅读卡片。
   cancelReadingHover();
   cancelSelectionLoss();
@@ -2904,11 +2860,11 @@ onBeforeUnmount(() => {
 .fr-text-audio-btn:hover, .fr-text-audio-btn:focus-visible { border-color: rgba(214, 63, 118, .25); background: rgba(255, 255, 255, .72); color: #d63f76; outline: none; transform: translateY(-1px); }
 .fr-text-block pre { overflow-wrap:anywhere; margin:0; white-space:pre-wrap; word-break:break-word; font:inherit; font-size:14px; line-height:1.7; user-select:text; }
 .fr-original-text pre { font-size:12.5px; line-height:1.65; }
-.fr-playing-status { flex: none; box-sizing: border-box; height: 36px; padding: 4px 14px; display: flex; align-items: center; justify-content: space-between; gap:8px; color: #777780; font-size: 12px; }
+.fr-playing-status { flex: none; box-sizing: border-box; min-height: 38px; padding: 5px 14px; display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap:6px 8px; border-top: 1px solid #eeedf0; background: inherit; color: #777780; font-size: 12px; line-height: 1.4; }
 .fr-playing-status.is-idle { display: none; }
-.fr-playing-status button { border: 1px solid #e8a4bc; border-radius: 7px; padding: 3px 8px; color: #d83e70; }
-.fr-playing-label { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-.fr-playback-controls { display:flex; flex:none; align-items:center; gap:5px; }
+.fr-playing-status button { flex: none; min-height: 27px; border: 1px solid #e8a4bc; border-radius: 7px; padding: 3px 8px; color: #d83e70; font: inherit; line-height: 1.2; }
+.fr-playing-label { flex:1 1 auto; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.fr-playback-controls { display:flex; flex-wrap:wrap; flex:0 1 auto; max-width:100%; margin-inline-start:auto; align-items:center; justify-content:flex-end; gap:5px; }
 .fr-playback-time { font-size:10px; font-variant-numeric:tabular-nums; white-space:nowrap; }
 .fr-playing-status .fr-seek-btn { display:grid; place-items:center; width:27px; height:27px; padding:0; border-color:transparent; color:inherit; }
 .fr-seek-btn svg { width:22px; height:22px; fill:none; stroke:currentColor; stroke-width:1.6; stroke-linecap:round; stroke-linejoin:round; }
@@ -2927,6 +2883,7 @@ onBeforeUnmount(() => {
 .fr-dark-theme :is(.fr-text-copy-btn, .fr-text-audio-btn) { border-color:transparent; background:transparent; color:#b4aab3; }
 .fr-dark-theme :is(.fr-text-copy-btn, .fr-text-audio-btn):is(:hover, :focus-visible) { border-color: #c96a8b; background: #553846; color: #ffd9e7; }
 .fr-dark-theme .fr-text-copy-btn.fr-copied { border-color: #98617a; background: rgba(93, 52, 71, .62); color: #f2bdcd; }
+.fr-dark-theme .fr-playing-status { border-color:#4d404a; color:#c8bdc6; }
 .fr-dark-theme .fr-original-text { color: #d0d0d7; }
 .fr-dark-theme .fr-translation-result { color: #f1ecef; }
 .fr-dark-theme .fr-word-learning-card { background: transparent; }
