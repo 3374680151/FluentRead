@@ -13,8 +13,8 @@ import padPkcs7 from 'crypto-js/pad-pkcs7';
 import {normalizeChineseLanguageCode} from '@/src/core/language/chinese';
 import {detectChineseScript} from '@/src/core/language/detect';
 import {identifyTextLanguage} from '@/src/core/language/identify';
-import {serializeTranslationSlots} from '@/src/core/translation/serialization';
-import {getTranslationGlossarySourceText} from '@/src/services/translation/requestSnapshot';
+import {rebuildTranslationSlots} from '@/src/core/translation/slotProtocol';
+import {getTranslationGlossarySourceSlots} from '@/src/services/translation/requestSnapshot';
 import {abortErrorFromSignal, cancelUnreadResponseBody, runtimeFetch} from '@/src/platform/http/runtime';
 import {createHttpStatusError, readJsonResponse} from '@/src/platform/http/errors';
 import {GlossaryPlaceholderError, validateGlossaryProtectedTokens} from '@/src/core/glossary/protection';
@@ -192,12 +192,12 @@ export async function translateFreeChineseWebText(provider: FreeChineseWebProvid
     if (signal?.aborted) throw abortErrorFromSignal(signal);
     if (typeof text !== 'string') throw failure('免费网页翻译仅支持文本输入', 'request', 400);
     if (!text.trim()) return text;
-    const slots = getTranslationGlossarySourceText(text);
-    const {from, to} = direction(source, target, Array.isArray(slots) ? slots : [slots]);
-    if (!Array.isArray(slots)) return translatePlain(provider, slots, from, to, signal);
+    const slots = getTranslationGlossarySourceSlots(text);
+    const {from, to} = direction(source, target, slots ? slots.texts : [text]);
+    if (!slots) return translatePlain(provider, text, from, to, signal);
     const translated: string[] = [];
-    for (const slot of slots) translated.push(await translatePlain(provider, slot, from, to, signal));
-    // slots 只有在完整槽协议解析成功时才会是数组，因此首个标记必然存在。
-    const nonce = text.match(/^___FLUENTREAD_([a-z0-9_-]+)_0_BEGIN___/iu)![1]!;
-    return serializeTranslationSlots(translated, nonce).payload;
+    for (const slot of slots.texts) translated.push(await translatePlain(provider, slot, from, to, signal));
+    const result = rebuildTranslationSlots(slots.packet, translated);
+    if (result === null) throw failure('免费网页翻译返回的文本槽结构无效', 'request');
+    return result;
 }

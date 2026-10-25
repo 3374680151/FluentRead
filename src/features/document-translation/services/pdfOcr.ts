@@ -1,7 +1,7 @@
 /**
  * @file src/features/document-translation/services/pdfOcr.ts
  * 文件职责：让没有文字层的扫描版 PDF 也能进入同一套版面分析与翻译流程：把逐页文字识别的结果换算成版面分析所需的字形，重建各页的段落与待翻译片段。
- * 主要内容：找出解析时标记为扫描页的页（含文字 PDF 里夹着的扫描页）；按给定顺序逐页调用注入的识别器，报告进度并响应取消；识别出的文字行按页面坐标转成字形后交给版面分析，与已有文字的页一起重排全文片段编号；旋转的扫描页按展示方向识别和排版，原页的旋转角另记给导出使用；识别失败或取消时不改动原文档。
+ * 主要内容：找出解析时标记为扫描页的页（含文字 PDF 里夹着的扫描页）；按给定顺序逐页调用注入的识别器，报告进度并响应取消；识别出的文字行按页面坐标转成字形后交给版面分析，与已有文字的页一起重排全文片段编号；按未识别页的页码、块位置及原文迁移已有译文和人工确认，避免把旧编号误套到新增 OCR 段；旋转的扫描页按展示方向识别和排版，原页的旋转角另记给导出使用；识别失败或取消时不改动原文档。
  * 模块边界：不渲染页面、不加载识别引擎、不发起翻译；页面图像与识别引擎由应用层注入（图像按展示方向渲染），版面规则归 core/pdfLayoutAnalysis。
  */
 import type {DocumentSegment, ParsedDocument, PdfDocumentPage} from '../core/document';
@@ -23,6 +23,37 @@ export interface RecognizePdfOptions {
 export function pdfPagesNeedingOcr(document: ParsedDocument | null | undefined): number[] {
     if (document?.binary?.kind !== 'pdf') return [];
     return document.binary.pages.flatMap((page, index) => page.scanned ? [index] : []);
+}
+
+/** OCR 只重建扫描页；已有文字页的块顺序与几何保持不变，重复原文也按所在页和块区分。 */
+export function remapPdfTranslationState(
+    previous: ParsedDocument,
+    recognized: ParsedDocument,
+    translations: readonly string[],
+    confirmedTranslationIds: readonly number[],
+): {translations: string[]; confirmedTranslationIds: number[]} {
+    const result = {translations: [] as string[], confirmedTranslationIds: [] as number[]};
+    if (previous.binary?.kind !== 'pdf' || recognized.binary?.kind !== 'pdf') return result;
+    result.translations = Array<string>(recognized.segments.length).fill('');
+    const nextPages = new Map(recognized.binary.pages.map(page => [page.pageNumber, page]));
+    const confirmed = new Set(confirmedTranslationIds);
+    for (const page of previous.binary.pages) {
+        if (page.scanned) continue;
+        const nextPage = nextPages.get(page.pageNumber);
+        if (!nextPage) continue;
+        page.blocks.forEach((block, index) => {
+            const nextBlock = nextPage.blocks[index];
+            if (block.segmentIndex < 0 || !nextBlock || nextBlock.segmentIndex < 0) return;
+            const source = previous.segments[block.segmentIndex];
+            const target = recognized.segments[nextBlock.segmentIndex];
+            if (!source || !target || source.source !== target.source
+                || !(['x', 'y', 'width', 'height'] as const).every(key => block[key] === nextBlock[key])) return;
+            const translation = translations[block.segmentIndex] ?? '';
+            result.translations[nextBlock.segmentIndex] = translation;
+            if (translation.trim() && confirmed.has(block.segmentIndex)) result.confirmedTranslationIds.push(nextBlock.segmentIndex);
+        });
+    }
+    return result;
 }
 
 /** 识别框的高度包含上伸与下伸部分；字号约为框高的八成半，基线在框底向上约两成处。 */

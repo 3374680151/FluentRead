@@ -8,8 +8,8 @@ import {translateFreeTextChunks} from './freeTextChunks';
 import {resolveTranslationLanguages} from '@/src/core/translation/languages';
 import {BILIBILI_FREE_TRANSLATION_DOMAIN, BILIBILI_FREE_TRANSLATION_MODEL} from '@/src/core/config/freeTranslation';
 import {translationLanguageOptions} from '@/src/core/language/catalog';
-import {serializeTranslationSlots} from '@/src/core/translation/slotProtocol';
-import {getTranslationGlossarySourceText, requireTranslationProviderConfig} from '@/src/services/translation/requestSnapshot';
+import {rebuildTranslationSlots} from '@/src/core/translation/slotProtocol';
+import {getTranslationGlossarySourceSlots, requireTranslationProviderConfig} from '@/src/services/translation/requestSnapshot';
 import type {TranslationProviderRequest} from '@/src/services/translation/types';
 import {abortErrorFromSignal, cancelUnreadResponseBody, runtimeFetch} from '@/src/platform/http/runtime';
 import {createHttpStatusError, readJsonResponse} from '@/src/platform/http/errors';
@@ -73,12 +73,13 @@ export async function translateBilibiliFree(request: TranslationProviderRequest<
     if (source !== 'auto') languageName(source);
     languageName(target);
     if (source === target) return origin;
-    const slots = getTranslationGlossarySourceText(origin);
-    if (!Array.isArray(slots)) return translatePlain(slots, source, target, abortSignal);
+    const slots = getTranslationGlossarySourceSlots(origin);
+    if (!slots) return translatePlain(origin, source, target, abortSignal);
     const translated: string[] = [];
-    for (const slot of slots) translated.push(await translatePlain(slot, source, target, abortSignal));
-    const nonce = origin.match(/^___FLUENTREAD_([a-z0-9_-]+)_0_BEGIN___/iu)![1]!;
-    return serializeTranslationSlots(translated, nonce).payload;
+    for (const slot of slots.texts) translated.push(await translatePlain(slot, source, target, abortSignal));
+    const result = rebuildTranslationSlots(slots.packet, translated);
+    if (result === null) throw new Error('B站翻译返回的文本槽结构无效');
+    return result;
 }
 
 /** 独立服务读取冻结配置和语言覆盖；批量保持输入顺序并共用调用方取消信号。 */

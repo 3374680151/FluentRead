@@ -1,7 +1,7 @@
 /**
  * @file src/platform/storage/modelArtifacts.ts
  * 文件职责：为按需模型复用固定版本、分块磁盘缓存和内容校验下载能力。
- * 主要内容：4MiB 分块、Range 续传、多来源回退、流式 SHA-256 校验及离线 Response 重建；连接与读取等待独立响应取消和超时，拒绝迟到来源回写；就绪只认完整校验收据，退役资源可按调用者明确指定的缓存名定向删除。
+ * 主要内容：4MiB 分块、Range 续传、多来源回退、流式 SHA-256 校验及离线 Response 重建；连接与读取独立响应取消和超时，每次等待结束释放取消监听，拒绝迟到来源回写；就绪只认完整校验收据，退役资源可按调用者明确指定的缓存名定向删除。
  * 模块边界：不认识 feature、模型算法或页面正文，不清空其他模型缓存，不执行远程代码。
  */
 import {sha256} from '@noble/hashes/sha256';
@@ -66,14 +66,20 @@ export function createModelArtifactStore(cacheName: string, files: readonly Mode
         if (offset === file.size) {progress(offset, true); await verify(file, signal); return;}
         const controller = new AbortController(), abort = () => controller.abort();
         signal.addEventListener('abort', abort, {once: true});
-        const interrupted = new Promise<never>((_resolve, reject) => {
-            controller.signal.addEventListener('abort', () => reject(new DOMException('模型下载超时或已暂停', 'TimeoutError')), {once: true});
-        });
-        // 取消可发生在缓存等待期间；尚未进入 race 时也要消费拒绝。
-        void interrupted.catch(() => undefined);
         const attemptActive = () => {
             active(signal);
             if (controller.signal.aborted) throw new DOMException('模型下载超时', 'TimeoutError');
+        };
+        const waitAttempt = <T>(start: () => Promise<T>): Promise<T> => {
+            attemptActive();
+            let onAbort!: () => void;
+            const interrupted = new Promise<never>((_resolve, reject) => {
+                onAbort = () => reject(new DOMException('模型下载超时或已暂停', 'TimeoutError'));
+                controller.signal.addEventListener('abort', onAbort, {once: true});
+            });
+            // 每个等待独享取消 Promise，避免整份模型的所有 read reaction 保留到最后；同步抛错也必须被竞速消费。
+            const pending = new Promise<T>(resolve => resolve(start()));
+            return Promise.race([pending, interrupted]).finally(() => controller.signal.removeEventListener('abort', onAbort));
         };
         let timer: ReturnType<typeof setTimeout> | undefined;
         const arm = (ms: number) => {clearTimeout(timer); timer = setTimeout(abort, ms);};
@@ -81,14 +87,13 @@ export function createModelArtifactStore(cacheName: string, files: readonly Mode
         let originalBody: ReadableStream<Uint8Array> | null | undefined;
         try {
             active(signal); arm(20_000);
-            const fetched = fetch(file.url.replace('https://huggingface.co', origin), {signal: controller.signal, credentials: 'omit', referrerPolicy: 'no-referrer', headers: offset ? {Range: `bytes=${offset}-`} : {}}).then(response => {
+            const response = await waitAttempt(() => fetch(file.url.replace('https://huggingface.co', origin), {signal: controller.signal, credentials: 'omit', referrerPolicy: 'no-referrer', headers: offset ? {Range: `bytes=${offset}-`} : {}}).then(response => {
                 if (controller.signal.aborted) {
                     cancelUnreadResponseBody(response);
                     throw new DOMException('模型下载来源已失效', 'TimeoutError');
                 }
                 return response;
-            });
-            const response = await Promise.race([fetched, interrupted]);
+            }));
             originalBody = response.body;
             attemptActive();
             if (!response.ok || !response.body) throw new Error('MODEL_NETWORK');
@@ -100,7 +105,7 @@ export function createModelArtifactStore(cacheName: string, files: readonly Mode
             reader = response.body.getReader(); const cache = await open();
             let buffer = new Uint8Array(Math.min(MODEL_ARTIFACT_CHUNK_BYTES, file.size - offset)), filled = 0, index = offset / MODEL_ARTIFACT_CHUNK_BYTES;
             while (true) {
-                attemptActive(); arm(45_000); const {done, value} = await Promise.race([reader.read(), interrupted]); clearTimeout(timer);
+                attemptActive(); arm(45_000); const {done, value} = await waitAttempt(() => reader!.read()); clearTimeout(timer);
                 attemptActive();
                 if (done) break;
                 if (offset + filled + value.byteLength > file.size) throw new Error('MODEL_INTEGRITY');

@@ -68,6 +68,40 @@ describe('fixed model artifacts integrity and bounded resumable cache', () => {
         expect(progress).toHaveBeenCalledWith(body.length, true); await store.download(file, new AbortController().signal, progress); expect(fetcher).toHaveBeenCalledOnce();
         await store.remove(file); expect(await store.complete(file)).toBe(false);
     });
+    it('keeps cancellation bookkeeping bounded across thousands of successful stream reads', async () => {
+        const body = new Uint8Array(2048 * 16).fill(7), file = fileFor(body), store = createModelArtifactStore('models', [file]);
+        let offset = 0;
+        const reader = {read: vi.fn(async () => {
+            if (offset === body.length) return {done: true as const, value: undefined};
+            const value = body.subarray(offset, offset + 16); offset += value.length;
+            return {done: false as const, value};
+        }), cancel: vi.fn(async () => {}), releaseLock: vi.fn()};
+        vi.stubGlobal('fetch', vi.fn(async () => ({ok: true, status: 200, headers: new Headers(), body: {getReader: () => reader}})));
+        const nativeRace = Promise.race.bind(Promise), registrations = new WeakMap<object, number>();
+        let mostRegistrations = 0;
+        // 同一个未决取消 Promise 会保留每次 race 的 reaction；只计数身份复用，不依赖 GC 或耗时。
+        const race = vi.spyOn(Promise, 'race').mockImplementation(values => {
+            const inputs = Array.from(values);
+            if (inputs.length === 2 && inputs[1] instanceof Promise) {
+                const count = (registrations.get(inputs[1]) ?? 0) + 1;
+                registrations.set(inputs[1], count); mostRegistrations = Math.max(mostRegistrations, count);
+            }
+            return nativeRace(inputs);
+        });
+        try {
+            await store.download(file, new AbortController().signal, () => {});
+            expect(reader.read).toHaveBeenCalledTimes(2049);
+            expect(new Uint8Array(await (await store.blob(file)).arrayBuffer())).toEqual(body);
+            expect(await store.complete(file)).toBe(true);
+            expect(mostRegistrations).toBeLessThanOrEqual(1);
+        } finally {race.mockRestore();}
+    });
+    it('observes synchronous transport failure even when it also cancels the owner', async () => {
+        const file = fileFor(new Uint8Array([1, 2])), store = createModelArtifactStore('models', [file]), abort = new AbortController();
+        const fetcher = vi.fn(() => {abort.abort(); throw new Error('transport revoked');}); vi.stubGlobal('fetch', fetcher);
+        await expect(store.download(file, abort.signal, () => {})).rejects.toMatchObject({name: 'AbortError'});
+        expect(fetcher).toHaveBeenCalledOnce(); expect(cache.put).not.toHaveBeenCalled();
+    });
     it('requires a valid receipt plus all actual chunks; stale/corrupt receipts cannot claim ready', async () => {
         const body = new Uint8Array([1,2]), file = fileFor(body), store = createModelArtifactStore('models', [file]);
         const receipt = `${file.url}?fluent-read-verified=${file.sha256}`, chunk = `${file.url}?fluent-read-part=0`;

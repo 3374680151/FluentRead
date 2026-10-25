@@ -1,7 +1,7 @@
 /**
  * @file src/features/information-highlight/offscreen/runtime.ts
  * 文件职责：在共享离屏文档看守信息高亮模型下载、独立评分 Worker 和有界暖机复用。
- * 主要内容：首次创建模型运行时时定向清理退役模型缓存，失败不阻断当前模型；每种模型独立管理下载与状态，显式准备才下载；所有评分共用串行队列，切换时释放旧模型 Worker，任意时刻只暖驻一个模型；取消、短收尾看守及 180 秒空闲释放沿用共享资源预算，异步状态读取后复验代次与释放状态，禁止迟到工作重建 Worker 或下载。
+ * 主要内容：首次创建模型运行时时定向清理退役模型缓存，失败不阻断当前模型；显式恢复等待旧下载取消排空，暂停、删除和销毁撤销旧准备意图；评分共用串行队列，切换时释放旧模型 Worker，任意时刻只暖驻一个模型；取消、短收尾看守及 180 秒空闲释放沿用共享资源预算，异步等待后复验代次，禁止迟到工作重建 Worker 或下载。
  * 模块边界：不访问宿主 DOM、不持有页面偏好、不另建 offscreen 文档；仅消费模型清单与 platform 缓存。
  */
 import {DEFAULT_INFORMATION_HIGHLIGHT_MODEL_ID, getInformationHighlightModel, type InformationHighlightModelId} from '@/src/core/config/informationHighlightModel';
@@ -41,6 +41,7 @@ export function createInformationHighlightModelRuntime(dependencies: Information
     let phase: InformationHighlightModelStatus['phase'] = 'absent', errorCode: InformationHighlightModelErrorCode | undefined;
     let capability: Promise<InformationHighlightCapability> | undefined;
     let job: {controller: AbortController; done: Promise<void>} | undefined;
+    let preparationGeneration = 0;
     let disposed = false, removing = false, worker: Worker | undefined, initialized = false, sequence = 0, generation = 0;
     let tail: Promise<void> = Promise.resolve(), warmTimer: ReturnType<typeof setTimeout> | undefined;
     let fileSnapshot: Promise<Array<{complete: boolean; bytes: number}>> | undefined, snapshotAt = 0;
@@ -64,11 +65,18 @@ export function createInformationHighlightModelRuntime(dependencies: Information
         if (!job && !removing && phase !== 'error') phase = downloaded ? 'ready' : downloadedBytes ? 'paused' : 'absent';
         return {modelId: model.id, phase: removing ? 'removing' : phase, downloaded, initialized, downloadedBytes, totalBytes: model.bytes, downloadSizeBytes: model.bytes, modelName: model.name, ...await support(), ...(errorCode ? {errorCode} : {})};
     };
-    const prepare = async () => {
+    const prepare = async (): Promise<InformationHighlightModelStatus> => {
+        const owner = preparationGeneration;
         const current = await status();
         if (disposed) throw new Error('INFORMATION_HIGHLIGHT_DISPOSED');
+        if (owner !== preparationGeneration) throw abortError();
         if (!current.supported) throw new Error(current.reason);
         if (removing) throw new Error('INFORMATION_HIGHLIGHT_REMOVING');
+        if (job?.controller.signal.aborted) {
+            await job.done;
+            if (owner !== preparationGeneration) throw abortError();
+            return prepare();
+        }
         if (job) return current;
         if (current.downloaded) {phase = 'ready'; errorCode = undefined; return {...current, phase, errorCode};}
         const controller = new AbortController(); phase = 'queued'; errorCode = undefined;
@@ -95,10 +103,10 @@ export function createInformationHighlightModelRuntime(dependencies: Information
         job = {controller, done: Promise.resolve().then(run)};
         return {...current, phase: 'queued' as const};
     };
-    const pause = async () => {job?.controller.abort(); if (job) phase = 'paused'; return status();};
+    const pause = async () => {preparationGeneration++; job?.controller.abort(); if (job) phase = 'paused'; return status();};
     const remove = async () => {
         if (removing) return status();
-        removing = true; phase = 'removing'; job?.controller.abort();
+        preparationGeneration++; removing = true; phase = 'removing'; job?.controller.abort();
         try {await job?.done; stop(); for (const file of artifacts) await dependencies.store.remove(file); phase = 'absent'; errorCode = undefined;}
         catch (error) {phase = 'error'; errorCode = 'INFORMATION_HIGHLIGHT_REMOVE_FAILED'; throw error;}
         finally {removing = false; fileSnapshot = undefined;}
@@ -163,7 +171,7 @@ export function createInformationHighlightModelRuntime(dependencies: Information
             void result.then(resolve, reject).finally(() => signal.removeEventListener('abort', abort));
         });
     };
-    return {status, prepare, pause, remove, score, releaseWorker: stop, dispose: () => {disposed = true; job?.controller.abort(); stop();}};
+    return {status, prepare, pause, remove, score, releaseWorker: stop, dispose: () => {preparationGeneration++; disposed = true; job?.controller.abort(); stop();}};
 }
 
 export interface InformationHighlightModelsRuntimeDependencies extends Omit<InformationHighlightRuntimeDependencies, 'store' | 'modelId' | 'notify'> {

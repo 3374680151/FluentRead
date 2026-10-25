@@ -132,6 +132,14 @@ GitHub 仓库列表和 Issue 列表同时保留旧容器与当前结构的保护
 
 `apiKeyRotation` 验证单密钥、无密钥和关闭轮询时的取消终态，凭据回显脱敏，以及无敏感元数据时保留原错误类和恢复标记。`informationHighlightArtifacts` 验证缓存命中期间取消、无视取消的连接或流读取、迟到响应释放和超时来源禁止回写；`documentHistory` 与 `documentHistoryCommitter` 验证 blocked/timeout 后的迟到连接释放、恢复连接与旧事件隔离。模型等待使用受控 transport，不能代替真实大文件或 CDN 下载验收。
 
+模型流的取消等待还覆盖 2,048 个连续数据块及 EOF：保留实际字节与 SHA-256 校验，确认不会让同一个未决取消 Promise 累积所有读取的回调；操作计数不能替代真实浏览器堆内存测量。`personalCorrectionMemory` 验证清理后的迟到广播、扩展运行时撤销后的安全注销、注册失败和注册期间取消，始终使用注册时的事件对象完成本地清理。
+
+`freeWebProviders` 与 `serializationPerformance` 验证七类免费适配器沿用原包槽位边界：原文中的字面标记、空槽和空白必须保留，译文注入活动标记则拒绝结果，不能重新猜测或更换命名空间。HTTP/SSE 响应使用受控夹具，不代表在线服务验收。`offscreenMessageRouter` 验证取消后不再读取、编码迟到音频或格式化迟到错误；正常响应仍按原协议结算一次。
+
+`informationHighlightBackend` 验证暂停后的立即恢复会等待旧下载排空，后续暂停、删除和销毁能撤销旧恢复意图。`informationHighlightContent` 验证同一 Text 节点的数据重分配、同值重写及改回原文后重建绘制位置，同时保留评分缓存和未变化滚动的 Range 身份；原生 Range 的真实变更另以临时 Edge 对照夹具验证。`documentAppLifecycle` 和 `pdfOcr` 验证混合 PDF 补入扫描段落后，按原页、块位置及原文迁移已有译文和人工确认；重复原句不能跨块误配，取消与识别失败保留原状态，明确重译才清空确认。
+
+`contentUiRuntime` 通过真实 feature registry 和悬浮球 runtime 验证宿主被页面移除后释放旧订阅并重建、旧排队回调隔离、停用后的迟到挂载移除与再次启用恢复；单纯替换 body 保留原实例。Shadow UI 工厂与组件端口在该测试中受控，不等于真实 Vue 挂载或网站验收。
+
 `inputBox` 与 `inputTranslationContentFeature` 覆盖 fieldset 继承禁用、首个 legend 例外、响应前再次检查及提示定位的按帧合并与卸载清理。`videoCaptionPlatformRuntime` 保证失败句 A→B→A 在退避期内仍可手动重试；`videoPretranslationController` 检查换句不重绑原生字幕监听，轨道增删只操作变化项。`paragraphCopyCore` 验证复制代码时保留首行缩进及内部空行。
 
 `emojiLiterals` 对简单 emoji 检查零分段器构造，复杂字素每次扫描只构造一次；`harnessMemoryRecall` 用 200 条学习笔记检查无检索信息的查询不构建搜索投影，并保留偏好排序和每次重读。操作计数和 Node 微基准只证明所测计算减少，不代表页面帧率、输入延迟、实机内存或全项目无缺陷。函数索引、人工审查与实际行为验证须分别记录，未审函数不能因类型检查或测试总数而视为审查完成。
