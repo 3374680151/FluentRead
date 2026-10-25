@@ -3,8 +3,8 @@
  * 文件职责：定义网页双语译文容器的基础排版与全部“译文样式”预设，是内容脚本注入网页和设置页实时预览共用的唯一视觉来源。
  * 主要内容：先声明 .fluent-read-bilingual-content 基础规则，再按文字、颜色、线条、标记、卡片与趣味六类定义预设；线条与底色读取
  * --fluent-read-translation-* 自定义属性并回退到各预设原有配色，使“自定义外观”无需改写类名即可生效。29 号以后的预设
- * 装饰效果不写死浅色网页的配色：线条、底色和彩色文字用 currentColor 调配，随网页文字颜色在浅色和深色网页上自动取得合适的深浅；品牌粉保留品牌源色色相并按页面文字深浅调节；
- * 自带表面的卡片则同时声明文字颜色；新增卡片与手账装饰继承网页文字色，装饰位于容器内且不遮挡正文；打印时撤下自有译文的屏外渲染隔离，确保完整正文参与分页；基础换行仅覆盖 text-wrap，不折叠宿主保留的空白。
+ * 阅读向线条、标记和彩色文字用 currentColor 调配，随网页文字深浅调整；卡片与趣味使用各自的彩色纸面、正文和链接配色，避免所有主题从黑灰文字生成同一片灰底。
+ * 信笺、折角、叠纸、胶带与邮票提供不同的纸页细节，纹理避开正文；自带表面的主题显式声明正文与链接颜色，用户外观变量仍可覆盖；打印时撤下自有译文的屏外渲染隔离，确保完整正文参与分页；基础换行仅覆盖 text-wrap，不折叠宿主保留的空白。
  * 模块边界：只包含 fluent 前缀约束的选择器，不决定何时添加类名，也不写入用户外观；外观变量由内容脚本的样式同步器或
  * 设置页预览提供，加载、重试、图片与提示框等其他页面状态仍在 src/app/content/page.css。
  */
@@ -243,21 +243,23 @@
 
 /* 卡片：自带浅色表面的卡片同时声明深色文字，深色网页上也保持可读。 */
 .fluent-display-card-mode {
-    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.12);
-    padding: 4px 8px;
-    border-radius: 4px;
-    background: var(--fluent-read-translation-fill-faint, rgba(64, 158, 255, 0.1));
+    box-shadow: 0 2px 5px rgba(37, 99, 235, 0.1);
+    padding: 6px 10px;
+    border-radius: 5px;
+    background: var(--fluent-read-translation-surface, #edf6ff);
+    color: #173b58;
 }
 
 .fluent-display-modern-card {
     background: linear-gradient(135deg,
-        var(--fluent-read-translation-surface, #f5f7fa) 0%,
-        var(--fluent-read-translation-surface-deep, #e4e7ed) 100%);
-    border-radius: 8px;
-    padding: 6px 12px;
-    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.05);
+        var(--fluent-read-translation-surface, #def8f1) 0%,
+        var(--fluent-read-translation-surface, #e6f2ff) 48%,
+        var(--fluent-read-translation-surface-deep, #f0e5ff) 100%);
+    border-radius: 10px;
+    padding: 8px 12px;
+    box-shadow: 0 4px 12px rgba(96, 79, 169, 0.1);
     margin: 4px 0;
-    color: #1f2328;
+    color: #342d58;
 }
 
 .fluent-display-paper {
@@ -271,16 +273,16 @@
 
 .fluent-display-tech {
     font-family: "Consolas", monospace;
-    background: #f8f9fa;
-    padding: 2px 6px;
-    border-radius: 3px;
-    border: 1px solid var(--fluent-read-translation-line, #eee);
-    color: #24292f;
+    background: #eef2ff;
+    padding: 5px 9px;
+    border-radius: 5px;
+    border: 1px solid var(--fluent-read-translation-line, #bac9f4);
+    color: #283b65;
 }
 
 /*
- * 以下为 29 号以后的预设。译文继承网页的文字颜色，因此用 color-mix 把 currentColor 调成线条和底色：
- * 浅色网页得到浅灰，深色网页得到浅白，无需判断网页主题，也不依赖系统的深色模式。
+ * 阅读向预设继承网页文字，用 currentColor 调配线条和底色；卡片与趣味主题在后面声明配套的纸面与正文色，
+ * 不用网页灰色文字替代主题配色，也不依赖操作系统的深色模式。
  */
 
 /* 文字：阅读向 */
@@ -368,68 +370,80 @@
 
 /* 卡片 */
 .fluent-display-glass {
-    background: var(--fluent-read-translation-fill-faint, color-mix(in srgb, currentColor 5%, transparent));
-    border: 1px solid color-mix(in srgb, currentColor 14%, transparent);
+    background: linear-gradient(135deg,
+        var(--fluent-read-translation-surface, rgba(227, 249, 255, 0.96)),
+        var(--fluent-read-translation-surface-deep, rgba(213, 240, 255, 0.96)));
+    color: #12445a;
+    border: 1px solid #8ad6e8;
     border-radius: 12px;
     padding: 8px 14px;
-    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.06);
+    box-shadow: inset 0 1px rgba(255, 255, 255, 0.9), 0 3px 9px rgba(14, 116, 144, 0.1);
     -webkit-backdrop-filter: blur(8px) saturate(1.2);
     backdrop-filter: blur(8px) saturate(1.2);
 }
 
-/* 新增卡片都沿用网页文字色，以淡底、边框与阴影区分层次。 */
+/* 卡片各有独立纸色与配套深色正文，主题在深色网页中仍保留本色。 */
 .fluent-display-card-outline {
-    border: 1px solid var(--fluent-read-translation-line, color-mix(in srgb, currentColor 25%, transparent));
+    border: 1px solid var(--fluent-read-translation-line, #6fcea7);
     border-radius: 10px;
-    background: var(--fluent-read-translation-fill-faint, color-mix(in srgb, currentColor 2%, transparent));
+    background: var(--fluent-read-translation-surface, #edfcf3);
+    color: #164e38;
     padding: 8px 12px;
 }
 
 .fluent-display-card-accent {
-    border-inline-start: 4px solid var(--fluent-read-translation-line, color-mix(in srgb, currentColor 55%, transparent));
+    border-inline-start: 4px solid var(--fluent-read-translation-line, #f07863);
     border-radius: 2px 10px 10px 2px;
-    background: var(--fluent-read-translation-fill-soft, color-mix(in srgb, currentColor 7%, transparent));
+    background: var(--fluent-read-translation-surface, #fff0e9);
+    color: #6d3b30;
     padding: 8px 12px;
 }
 
 .fluent-display-card-double {
-    border: 3px double var(--fluent-read-translation-line, color-mix(in srgb, currentColor 32%, transparent));
-    border-radius: 6px;
-    background: var(--fluent-read-translation-fill-faint, color-mix(in srgb, currentColor 3%, transparent));
-    padding: 8px 12px;
+    border: 1px solid var(--fluent-read-translation-line, #c4b5ed);
+    border-top: 3px solid var(--fluent-read-translation-line, #9c7dd8);
+    border-radius: 2px 2px 8px 8px;
+    background: var(--fluent-read-translation-surface, #f5f0ff);
+    color: #493274;
+    padding: 10px 12px;
+    box-shadow: inset 0 3px #ffffff;
 }
 
 .fluent-display-card-folded {
-    border: 1px solid var(--fluent-read-translation-line, color-mix(in srgb, currentColor 16%, transparent));
+    border: 1px solid #efd692;
     border-radius: 4px;
     background: linear-gradient(225deg,
-        var(--fluent-read-translation-line, color-mix(in srgb, currentColor 20%, transparent)) 12px, transparent 12px) top right / 18px 18px no-repeat,
-        var(--fluent-read-translation-fill-soft, color-mix(in srgb, currentColor 6%, transparent));
+        var(--fluent-read-translation-line, #eeb94a) 12px, transparent 12px) top right / 18px 18px no-repeat,
+        var(--fluent-read-translation-surface, #fff6ce);
+    color: #614b1c;
     padding: 10px 22px 10px 12px;
 }
 
 .fluent-display-card-floating {
     border-radius: 14px;
-    background: var(--fluent-read-translation-fill-faint, color-mix(in srgb, currentColor 4%, transparent));
-    box-shadow: 0 2px 3px color-mix(in srgb, currentColor 6%, transparent),
-        0 8px 18px -6px color-mix(in srgb, currentColor 24%, transparent);
+    background: var(--fluent-read-translation-surface, #fff0f6);
+    color: #63364c;
+    box-shadow: 0 2px 3px rgba(190, 70, 119, 0.08), 0 8px 18px -6px rgba(190, 70, 119, 0.3);
     padding: 10px 14px;
 }
 
 .fluent-display-card-stacked {
-    border: 1px solid var(--fluent-read-translation-line, color-mix(in srgb, currentColor 22%, transparent));
-    border-radius: 6px;
-    background: var(--fluent-read-translation-fill-faint, color-mix(in srgb, currentColor 4%, transparent));
-    /* 使用内阴影叠出纸页，不向容器外扩展，窄栏和多行译文也不会溢出。 */
-    box-shadow: inset 0 -3px var(--fluent-read-translation-fill-soft, color-mix(in srgb, currentColor 10%, transparent)),
-        inset 0 -5px var(--fluent-read-translation-line, color-mix(in srgb, currentColor 15%, transparent));
-    padding: 8px 12px 14px;
+    width: calc(100% - 6px);
+    border: 1px solid var(--fluent-read-translation-line, #e4b98c);
+    border-radius: 4px;
+    background: var(--fluent-read-translation-surface, #fff3e3);
+    color: #67492c;
+    /* 阴影错开两页纸，主表面让出 6px 空间；文字不参与位移或裁剪。 */
+    box-shadow: 3px 3px 0 -1px #fffaf2, 3px 3px 0 #e8c5a0,
+        6px 6px 0 -1px #fff3e3, 6px 6px 0 #ecd3b7;
+    padding: 8px 12px;
 }
 
 .fluent-display-card-dashed {
-    border: 1px dashed var(--fluent-read-translation-line, color-mix(in srgb, currentColor 38%, transparent));
+    border: 1px dashed var(--fluent-read-translation-line, #36b5aa);
     border-radius: 12px;
-    background: var(--fluent-read-translation-fill-faint, color-mix(in srgb, currentColor 3%, transparent));
+    background: var(--fluent-read-translation-surface, #eafbf7);
+    color: #22594d;
     padding: 8px 12px;
 }
 
@@ -437,9 +451,10 @@
 .fluent-display-tape-note {
     position: relative;
     border-radius: 3px;
-    background: var(--fluent-read-translation-fill-soft, color-mix(in srgb, currentColor 7%, transparent));
+    background: var(--fluent-read-translation-surface, #fff8e6);
+    color: #634e2e;
     padding: 18px 12px 10px;
-    box-shadow: 0 2px 3px color-mix(in srgb, currentColor 10%, transparent);
+    box-shadow: 0 2px 4px rgba(153, 112, 36, 0.14);
 }
 
 .fluent-display-tape-note::before {
@@ -450,47 +465,82 @@
     width: 3.6em;
     max-width: calc(100% - 24px);
     height: 0.6em;
-    background: var(--fluent-read-translation-line, color-mix(in srgb, currentColor 18%, transparent));
+    background: repeating-linear-gradient(90deg, transparent 0 6px, rgba(255, 255, 255, 0.35) 6px 8px),
+        var(--fluent-read-translation-line, #86cbe7);
     transform: translateX(-50%) rotate(-3deg);
     pointer-events: none;
 }
 
 .fluent-display-postage {
-    border: 3px dotted var(--fluent-read-translation-line, color-mix(in srgb, currentColor 42%, transparent));
-    border-radius: 2px;
-    background: var(--fluent-read-translation-fill-faint, color-mix(in srgb, currentColor 4%, transparent));
-    padding: 8px 12px;
+    position: relative;
+    background: linear-gradient(var(--fluent-read-translation-surface, #fff8f0), var(--fluent-read-translation-surface, #fff8f0))
+        center / calc(100% - 10px) calc(100% - 10px) no-repeat, var(--fluent-read-translation-line, #efa58f);
+    color: #713b32;
+    padding: 13px 16px;
+    /* 齿孔仅占外沿 4px，正文保留至少 13px 内边距，不裁切文字或链接。 */
+    -webkit-mask: linear-gradient(#000, #000) center / calc(100% - 8px) calc(100% - 8px) no-repeat,
+        radial-gradient(circle, #000 4px, transparent 4.2px) 0 0 / 10px 10px round;
+    mask: linear-gradient(#000, #000) center / calc(100% - 8px) calc(100% - 8px) no-repeat,
+        radial-gradient(circle, #000 4px, transparent 4.2px) 0 0 / 10px 10px round;
+}
+
+.fluent-display-postage::before {
+    content: "";
+    position: absolute;
+    inset: 8px;
+    border: 1px solid var(--fluent-read-translation-line, #eac6b4);
+    pointer-events: none;
 }
 
 .fluent-display-dot-note {
     border-radius: 8px;
     background: radial-gradient(circle,
-        var(--fluent-read-translation-line, color-mix(in srgb, currentColor 13%, transparent)) 0.8px, transparent 1px) 0 0 / 9px 9px,
-        var(--fluent-read-translation-fill-faint, color-mix(in srgb, currentColor 3%, transparent));
+        var(--fluent-read-translation-line, #ee94b0) 1.2px, transparent 1.5px) right center / 20px 10px repeat-y,
+        var(--fluent-read-translation-surface, #fff1f6);
+    color: #693c50;
     padding: 10px 12px;
+    padding-inline-end: 30px;
 }
 
 .fluent-display-grid-note {
     border-radius: 4px;
-    background: linear-gradient(var(--fluent-read-translation-line, color-mix(in srgb, currentColor 9%, transparent)) 1px, transparent 1px) 0 0 / 1.1em 1.1em,
-        linear-gradient(90deg, var(--fluent-read-translation-line, color-mix(in srgb, currentColor 9%, transparent)) 1px, transparent 1px) 0 0 / 1.1em 1.1em,
-        var(--fluent-read-translation-fill-faint, color-mix(in srgb, currentColor 2%, transparent));
-    padding: 10px 12px;
+    border-inline-start: 2px solid var(--fluent-read-translation-line, #ec9aa8);
+    /* 第一层用纸色铺平正文区，方格只留在四周，避免网格穿过汉字。 */
+    background: linear-gradient(var(--fluent-read-translation-surface, #eef9ff), var(--fluent-read-translation-surface, #eef9ff)) content-box,
+        linear-gradient(#c5e3f2 1px, transparent 1px) 0 0 / 12px 12px,
+        linear-gradient(90deg, #c5e3f2 1px, transparent 1px) 0 0 / 12px 12px,
+        var(--fluent-read-translation-surface, #eef9ff);
+    color: #254d67;
+    padding: 12px 16px;
 }
 
 .fluent-display-spotlight {
-    border-bottom: 2px solid var(--fluent-read-translation-line, color-mix(in srgb, currentColor 32%, transparent));
-    border-radius: 50% 50% 4px 4px / 12px 12px 4px 4px;
-    background: radial-gradient(ellipse at 50% 0%,
-        var(--fluent-read-translation-fill-soft, color-mix(in srgb, currentColor 15%, transparent)), transparent 75%);
+    position: relative;
+    border: 1px solid var(--fluent-read-translation-line, #6966b3);
+    border-radius: 8px;
+    background: radial-gradient(ellipse at 100% 0%,
+        var(--fluent-read-translation-fill-soft, rgba(157, 119, 255, 0.38)), transparent 70%), #202747;
+    color: #f5f0ff;
     padding: 10px 14px;
+    padding-inline-end: 2.7em;
+}
+
+.fluent-display-spotlight::before {
+    content: "✦";
+    position: absolute;
+    inset-inline-end: 12px;
+    top: 5px;
+    color: var(--fluent-read-translation-line, #f7d987);
+    font: 18px/1.2 Georgia, serif;
+    pointer-events: none;
 }
 
 .fluent-display-bookmark {
     position: relative;
-    border-inline-start: 3px solid var(--fluent-read-translation-line, color-mix(in srgb, currentColor 35%, transparent));
+    border-inline-start: 3px solid var(--fluent-read-translation-line, #a18cdd);
     border-radius: 2px 8px 8px 2px;
-    background: var(--fluent-read-translation-fill-soft, color-mix(in srgb, currentColor 6%, transparent));
+    background: var(--fluent-read-translation-surface, #f2edff);
+    color: #4b3973;
     padding: 10px 12px;
     padding-inline-end: 2.5em;
 }
@@ -502,7 +552,7 @@
     top: 0;
     width: 14px;
     height: 22px;
-    background: var(--fluent-read-translation-line, color-mix(in srgb, currentColor 35%, transparent));
+    background: var(--fluent-read-translation-line, #9674da);
     clip-path: polygon(0 0, 100% 0, 100% 100%, 50% 74%, 0 100%);
     pointer-events: none;
 }
@@ -515,18 +565,35 @@
     box-shadow: 0 1px 1px rgba(0, 0, 0, 0.08), 0 8px 10px -8px rgba(0, 0, 0, 0.35);
 }
 
-/* 自带浅色表面的卡片在深色网页上会继承网页的浅色链接，看不清；链接统一改用深色。 */
+/* 自带浅色表面的主题使用深蓝链接，覆盖骨架保存的宿主内联链接色，避免浅蓝或白色链接落到浅纸面上。 */
+.fluent-display-card-mode a,
 .fluent-display-modern-card a,
 .fluent-display-paper a,
 .fluent-display-tech a,
-.fluent-display-sticky-note a {
-    color: #0b57d0;
+.fluent-display-glass a,
+.fluent-display-card-outline a,
+.fluent-display-card-accent a,
+.fluent-display-card-double a,
+.fluent-display-card-folded a,
+.fluent-display-card-floating a,
+.fluent-display-card-stacked a,
+.fluent-display-card-dashed a,
+.fluent-display-hand-drawn a,
+.fluent-display-sticky-note a,
+.fluent-display-chat-bubble a,
+.fluent-display-tape-note a,
+.fluent-display-postage a,
+.fluent-display-dot-note a,
+.fluent-display-grid-note a,
+.fluent-display-bookmark a {
+    color: #175cd3 !important;
 }
 
 .fluent-display-chat-bubble {
     width: fit-content;
     max-width: 100%;
-    background: var(--fluent-read-translation-fill-soft, color-mix(in srgb, currentColor 9%, transparent));
+    background: var(--fluent-read-translation-surface, #dcf8e9);
+    color: #22533e;
     border-radius: 4px 16px 16px 16px;
     padding: 6px 12px;
 }
@@ -537,9 +604,9 @@
     font-family: ui-monospace, SFMono-Regular, "Cascadia Mono", Menlo, Consolas, "Liberation Mono", monospace;
     font-size: 0.94em;
     line-height: 1.6;
-    background: #10151c;
-    color: #a6e3b4;
-    border: 1px solid #263242;
+    background: #102c3e;
+    color: #b9f3d4;
+    border: 1px solid #2d6a7c;
     border-radius: 6px;
     padding: 6px 12px 6px 2em;
 }
@@ -553,8 +620,9 @@
     text-indent: 0;
 }
 
-.fluent-display-terminal a {
-    color: #7dd3fc;
+.fluent-display-terminal a,
+.fluent-display-spotlight a {
+    color: #9edfff !important;
 }
 
 /* 渐变色与网页文字颜色混合：浅色网页偏深、深色网页偏亮，两边都保持可读。不支持时保持普通文字，避免文字被填成透明后消失。 */
@@ -604,8 +672,10 @@
 }
 
 .fluent-display-hand-drawn {
-    border: 1.5px solid var(--fluent-read-translation-line, color-mix(in srgb, currentColor 55%, transparent));
+    border: 1.5px solid var(--fluent-read-translation-line, #e99759);
     border-radius: 255px 15px 225px 15px / 15px 225px 15px 255px;
+    background: var(--fluent-read-translation-surface, #fff8dd);
+    color: #6b452a;
     padding: 4px 14px;
 }
 
