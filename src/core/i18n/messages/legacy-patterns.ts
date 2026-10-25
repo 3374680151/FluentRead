@@ -11,6 +11,15 @@ import {learningMaterialPatterns} from './learningMaterials';
 
 export const localizedLegacyPatterns: readonly LocalizedLegacyPattern[] = [
     ...learningMaterialPatterns,
+    // 两点选取将起点、终点或拒绝原因与取消提示组成一个文本节点，捕获前缀继续按当前语言翻译。
+    {pattern: "^(.+) · Esc 取消$", localizedCaptures: [1], messages: {
+        'en-US': "{1} · Esc to cancel",
+        'ja-JP': "{1} · Esc でキャンセル",
+        'ko-KR': "{1} · Esc로 취소",
+        'fr-FR': "{1} · Échap pour annuler",
+        'ru-RU': "{1} · Esc — отмена",
+        'es-ES': "{1} · Esc para cancelar",
+    }},
     // 两点选取会嵌入当前占用快捷键的功能名；保留整句边界，并让捕获继续使用现有功能名称译文。
     {pattern: '^快捷键已用于(.+)，请点击快捷键更换后使用$', localizedCaptures: [1], messages: {
         'en-US': 'This shortcut is used for {1}. Click the shortcut to change it before use.',
@@ -27,15 +36,6 @@ export const localizedLegacyPatterns: readonly LocalizedLegacyPattern[] = [
         'fr-FR': 'Ce raccourci est déjà utilisé pour {1}. Choisissez une autre combinaison.',
         'ru-RU': 'Это сочетание уже используется для «{1}». Выберите другое сочетание.',
         'es-ES': 'Este atajo ya se usa para {1}. Elige otra combinación.',
-    }},
-    // 两点选取将起点、终点或拒绝原因与取消提示组成一个文本节点，捕获前缀继续按当前语言翻译。
-    {pattern: "^(.+) · Esc 取消$", localizedCaptures: [1], messages: {
-        'en-US': "{1} · Esc to cancel",
-        'ja-JP': "{1} · Esc でキャンセル",
-        'ko-KR': "{1} · Esc로 취소",
-        'fr-FR': "{1} · Échap pour annuler",
-        'ru-RU': "{1} · Esc — отмена",
-        'es-ES': "{1} · Esc para cancelar",
     }},
     {pattern: "^当前网页有 (\\d+) 处相同原句。出现不同的已保存译法时，不会自动采用。$", localizedCaptures: [], messages: {
         'en-US': "This page contains {1} instances of the same source sentence. Conflicting saved translations are not applied automatically.",
