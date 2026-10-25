@@ -1,7 +1,7 @@
 /**
  * @file src/services/config/historyRuntime.ts
  * 文件职责：以独立实例协调配置历史的延迟水合、观察、串行写入、去抖追加与恢复动作。
- * 主要内容：保留实际持久化确认、旧读取隔离、失败重试和完整快照游标；隔离订阅者异常，不将 UI 故障伪装成历史落盘失败；通过明确端口读取当前配置并提交恢复，不持有全局配置或凭据。
+ * 主要内容：保留实际持久化确认、旧读取隔离、原子投影迁移、失败重试和完整快照游标；隔离订阅者异常，不将 UI 故障伪装成历史落盘失败；通过明确端口读取当前配置并提交恢复，不持有全局配置或凭据。
  * 模块边界：只消费注入的存储、就绪和权威提交端口；导入与创建实例均不启动 I/O，历史消费者首次等待或订阅时才水合。
  */
 import type {Config} from '@/src/core/config/model';
@@ -13,7 +13,7 @@ export const CONFIG_HISTORY_STORAGE_KEY = 'local:configHistory' as const;
 const CONFIG_HISTORY_DEBOUNCE_MS = 350;
 type ConfigHistoryListener = (nextHistory: ConfigHistoryState) => void;
 export interface ConfigHistoryRuntimePorts {
-    storage: Pick<ConfigStoragePort, 'getItem' | 'setItem' | 'watch'>;
+    storage: Pick<ConfigStoragePort, 'getItem' | 'setItem' | 'setItemIfUnchanged' | 'watch'>;
     ready(): Promise<void>;
     getConfig(): Config;
     getRevision(): number;
@@ -117,11 +117,18 @@ export function createConfigHistoryRuntime(ports: ConfigHistoryRuntimePorts) {
             const parsed = parseConfigHistory(storedHistory);
             if (parsed) {
                 setHistoryState(parsed);
-                // 旧历史可能仍含统计、安全开关或内部迁移字段；读取时立即迁移为
-                // 可恢复投影，避免这些字段继续占用存储或在其他上下文中泄漏出来。
-                if (ports.isWriteOwner() && serializeConfig(storedHistory) !== serializeConfig(parsed)) {
+                // 自动清理旧投影必须使用原子条件写，避免加密或提交等待期间覆盖
+                // 外部新历史；无 CAS 的端口只安装内存投影，显式历史动作再持久化。
+                if (ports.isWriteOwner() && storage.setItemIfUnchanged
+                    && serializeConfig(storedHistory) !== serializeConfig(parsed)) {
                     try {
-                        await storage.setItem<ConfigHistoryState>(CONFIG_HISTORY_STORAGE_KEY, parsed);
+                        const written = await storage.setItemIfUnchanged(CONFIG_HISTORY_STORAGE_KEY, storedHistory, parsed);
+                        if (!written) {
+                            const revision = historyStorageRevision;
+                            const latest = await storage.getItem<unknown>(CONFIG_HISTORY_STORAGE_KEY);
+                            // 重新读取时仍可能先收到更晚的 watch，不能再次回退它。
+                            if (revision === historyStorageRevision) handleStoredHistoryChange(latest);
+                        }
                     } catch (error) {
                         console.warn('[FluentRead] 配置历史可恢复投影迁移暂未落盘', error);
                     }

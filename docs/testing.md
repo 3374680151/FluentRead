@@ -116,6 +116,8 @@ GitHub 仓库列表和 Issue 列表同时保留旧容器与当前结构的保护
 
 ## 网页个人校订
 
+`personalCorrectionUiRuntime` 还覆盖同一个译文节点反复失效与重译：旧观察器退出时必须释放节点身份，重新选中后继续观察原文变化，旧观察器的排队回调不能关闭新卡片。
+
 `personalCorrectionMemory`、`personalCorrectionDom`、`personalCorrectionTranslation`、`personalCorrectionComposition` 和三组 `personalCorrectionUi` 测试覆盖确认后保存、版本竞争、范围与语言隔离、近似候选、冲突拒绝自动复用、取消、节点归属、项目显式加入、编辑、删除与撤销；实际 Vue 模板检查语言信息归入页签栏、范围选择归入底部操作栏，以及范围帮助的悬停、键盘聚焦、Escape 收起与卸载清理。新增执行模块纳入严格四维覆盖率。
 
 生产 Chrome 扩展构建后运行 `node scripts/testing/run-personal-corrections-test.cjs --extension-dir .output/chrome-mv3 --playwright-root <捆绑 Node 包目录> --focus-safe-helper <focus-safe-browser.cjs 路径> --artifacts-dir <证据目录> --real-url https://example.com`。脚本使用第二屏临时 Edge 后台窗口和可信输入，翻译响应为确定性 Google 夹具；网页、双语渲染、后台消息和加密存储使用生产实现。验证原句重复复用时零额外 provider 请求、近似句只作草稿、两种语言与标题语境隔离、材料/项目范围、恢复重译、公共缓存隔离、页签栏右侧语言与底部紧凑范围的实际几何、范围帮助的真实悬停/焦点与 390px 提示边界、焦点恢复，保存 JSON、DOM 和截图。此证据不代表在线译文质量或 Firefox 实机验收。
@@ -125,6 +127,14 @@ GitHub 仓库列表和 Issue 列表同时保留旧容器与当前结构的保护
 播放器菜单和字幕外观设置共用 `videoSubtitleAppearance.bilingualOrder`，默认原文在上；切换只重排原文、读音和译文，读音始终紧跟原文，单语显示与字幕下载顺序保持各自语义。`videoSubtitleAppearance`、`videoSubtitleAppearanceSettingsLifecycle`、`videoUiI18n`、`videoSubtitleTrackPriorityRuntime`、`videoCaptionPlatformRuntime` 和 `videoNativeFullscreen` 覆盖归一化、持久化、即时更新、缓存/节点保留、单语和原生轨道选择。
 
 生产 Chrome 构建后，运行 `node scripts/testing/run-video-menu-ui-test.cjs --suite subtitle-order --extension-dir .output/chrome-mv3 --playwright-root <Node包目录> --focus-safe-helper scripts/testing/focus-safe-browser.cjs --runtime-diagnostics <浏览器测试技能>/scripts/runtime-diagnostics.cjs --artifacts-dir <证据目录>`。专项在第二屏临时 Edge 后台正常窗口中验证真实点击和键盘切换、字幕上下几何、无重复翻译请求、刷新后偏好、单语显示、390/320px 菜单与外部配置同步，并保存截图及运行时诊断。网页、媒体、原字幕和翻译响应使用确定性夹具，不代表原站、在线服务、Firefox 或 Safari 系统全屏实机验收。
+
+## 实现审计：取消、恢复与热路径
+
+`apiKeyRotation` 验证单密钥、无密钥和关闭轮询时的取消终态，凭据回显脱敏，以及无敏感元数据时保留原错误类和恢复标记。`informationHighlightArtifacts` 验证缓存命中期间取消、无视取消的连接或流读取、迟到响应释放和超时来源禁止回写；`documentHistory` 与 `documentHistoryCommitter` 验证 blocked/timeout 后的迟到连接释放、恢复连接与旧事件隔离。模型等待使用受控 transport，不能代替真实大文件或 CDN 下载验收。
+
+`inputBox` 与 `inputTranslationContentFeature` 覆盖 fieldset 继承禁用、首个 legend 例外、响应前再次检查及提示定位的按帧合并与卸载清理。`videoCaptionPlatformRuntime` 保证失败句 A→B→A 在退避期内仍可手动重试；`videoPretranslationController` 检查换句不重绑原生字幕监听，轨道增删只操作变化项。`paragraphCopyCore` 验证复制代码时保留首行缩进及内部空行。
+
+`emojiLiterals` 对简单 emoji 检查零分段器构造，复杂字素每次扫描只构造一次；`harnessMemoryRecall` 用 200 条学习笔记检查无检索信息的查询不构建搜索投影，并保留偏好排序和每次重读。操作计数和 Node 微基准只证明所测计算减少，不代表页面帧率、输入延迟、实机内存或全项目无缺陷。函数索引、人工审查与实际行为验证须分别记录，未审函数不能因类型检查或测试总数而视为审查完成。
 
 ## 视频完整句学习
 

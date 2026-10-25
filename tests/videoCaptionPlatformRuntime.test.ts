@@ -185,6 +185,26 @@ describe('平台字幕独立读音生命周期', () => {
 });
 
 describe('网页会议字幕生命周期', () => {
+    it('失败句在退避期重新出现时保留失败反馈与重试入口，主动重试可恢复', async () => {
+        const translate = vi.fn().mockRejectedValueOnce(new Error('offline')).mockResolvedValue('重试成功');
+        const f = fixture('https://meet.google.com/abc-defg-hij', `<span data-caption-text>${sentence}</span>`, translate);
+        const native = f.document.querySelector('span')!;
+        const dispose = f.start(); await vi.advanceTimersByTimeAsync(0);
+        const retry = f.shadow()!.querySelector<HTMLButtonElement>('button')!;
+        expect(retry.hidden).toBe(false);
+        expect(f.shadow()!.querySelector('.translation')!.textContent).toBe('这句翻译失败');
+        native.textContent = 'A different participant is speaking.'; await vi.advanceTimersByTimeAsync(300);
+        native.textContent = sentence; await vi.advanceTimersByTimeAsync(300);
+        expect(translate).toHaveBeenCalledTimes(2);
+        expect(retry.hidden).toBe(false);
+        expect(f.shadow()!.querySelector('.translation')!.textContent).toBe('这句翻译失败');
+        retry.click(); await vi.advanceTimersByTimeAsync(100);
+        expect(translate).toHaveBeenCalledTimes(3);
+        expect(retry.hidden).toBe(true);
+        expect(f.shadow()!.querySelector('.translation')!.textContent).toBe('重试成功');
+        dispose();
+    });
+
     it.each([
         ['https://meet.google.com/abc-defg-hij', '<span class="ygicle VbkSUe">'],
         ['https://teams.microsoft.com/v2/', '<span data-tid="closed-caption-text">'],

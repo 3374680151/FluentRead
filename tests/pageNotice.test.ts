@@ -6,6 +6,12 @@ import {sendErrorMessage, showPageNotice, dismissPageNotice} from '@/src/feature
 import {config} from '@/src/services/config/store';
 import {registerAllUiLanguageBundles} from './helpers/uiLanguageBundles';
 
+// 本文件只验证通知的外观与生命周期；配置权威水合由 config 专项覆盖，不在无扩展存储的 DOM 夹具中启动。
+vi.mock('@/src/services/config/store', async () => {
+    const {Config} = await import('@/src/core/config/model');
+    return {config: new Config()};
+});
+
 const originalDocument = globalThis.document;
 const originalWindow = globalThis.window;
 const originalBrowser = (globalThis as typeof globalThis & {browser?: unknown}).browser;

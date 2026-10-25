@@ -1,7 +1,7 @@
 /**
  * @file src/features/video-subtitle/content/platformRuntime.ts
  * 文件职责：在会议、Udemy 与 Disney+ 网页中挂载隔离的双语字幕，复用现有视频配置及翻译缓存。
- * 主要内容：观察原生字幕、读取浏览器字幕轨、自动开启明确的会议字幕按钮、优先目标语言人工轨，按保存的双语顺序排列稳定节点并让读音紧跟原文；可选读音行独立请求与取消，不等待译文，每轮只测量各视频一次，按当前文本、读音、顺序、尺寸和字体输入去重布局；长读音保留可读字号并在自有区域提供键盘和触摸滚动，处理失败重试、全屏、动态页面与所有权恢复。
+ * 主要内容：观察原生字幕、读取浏览器字幕轨、自动开启明确的会议字幕按钮、优先目标语言人工轨，按保存的双语顺序排列稳定节点并让读音紧跟原文；可选读音行独立请求与取消，不等待译文，每轮只测量各视频一次，按当前文本、读音、顺序、尺寸和字体输入去重布局；长读音保留可读字号并在自有区域提供键盘和触摸滚动，失败句在退避期再次出现仍保留重试入口，处理全屏、动态页面与所有权恢复。
  * 模块边界：只通过注入端口读取配置、翻译和保存设置；布局记录仅属于当前挂载，位置每轮重新读取，字体加载与卸载清除适配状态，不采集音频、不访问账号接口，不修改网站播放器实现。
  */
 import type {Config} from '@/src/core/config/model';
@@ -326,10 +326,14 @@ export function mountPlatformCaptions(ports: PlatformCaptionPorts): () => void {
         };
         if (human) { show(human); return; }
         fit();
-        void cache.request(source).then(show).catch(() => {
+        const showFailure = () => {
             if (disposed || current !== generation || !translatedLine || !retry) return;
             translatedLine.textContent = ports.label('这句翻译失败'); retry.hidden = false; fit();
-        });
+        };
+        void cache.request(source).then(text => {
+            if (!text && cache.hasFailure(source)) showFailure();
+            else show(text);
+        }).catch(showFailure);
     };
 
     const schedule = () => { if (!disposed && pendingTimer === undefined) pendingTimer = setTimeout(() => { pendingTimer = undefined; sync(); }, 80); };
