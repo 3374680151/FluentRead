@@ -26,15 +26,21 @@ export function installPageStyles(ctx: ContentScriptContext): () => void {
     // WeakMap 和 WeakRef 都不延长根的生命周期，关闭时仍可枚举尚存的自有 style。
     let shadowStyles = new WeakMap<ShadowRoot, HTMLStyleElement>();
     const liveStyles = new Set<WeakRef<HTMLStyleElement>>();
+    let styleSweep: Iterator<WeakRef<HTMLStyleElement>> | undefined;
     let appearanceCss = buildTranslationAppearanceCss(config.translationAppearance);
     let shadowCss = `${style.textContent}\n${appearanceCss}`;
     const unsubscribeRoots = subscribeTranslationStyleRoots(root => {
         if (root.ownerDocument !== style.ownerDocument) return;
         let shadowStyle = shadowStyles.get(root);
         if (!shadowStyle) {
-            // 无限滚动会不断创建组件；即使用户没有修改外观，也回收死亡登记项。
-            // 这里只读弱引用，不遍历宿主 DOM 或保留已卸载根。
-            liveStyles.forEach(reference => {if (!reference.deref()) liveStyles.delete(reference);});
+            // 无限滚动分批回收死亡登记，每次至多检查16项，不反复扫描所有存活根。
+            // 迭代器和集合都只持有弱引用，不延长宿主或样式节点的生命周期。
+            styleSweep ??= liveStyles.values();
+            for (let count = 0; count < 16; count++) {
+                const step = styleSweep.next();
+                if (step.done) {styleSweep = undefined; break;}
+                if (!step.value.deref()) liveStyles.delete(step.value);
+            }
             shadowStyle = root.ownerDocument.createElement('style');
             shadowStyle.id = 'fluent-read-shadow-translation-styles';
             shadowStyle.setAttribute('data-fr-translation-owned', 'true');
@@ -69,6 +75,7 @@ export function installPageStyles(ctx: ContentScriptContext): () => void {
         unsubscribeRoots();
         liveStyles.forEach(reference => reference.deref()?.remove());
         liveStyles.clear();
+        styleSweep = undefined;
         shadowStyles = new WeakMap();
         style.remove();
         syncTranslationAppearanceStyles(document, null);

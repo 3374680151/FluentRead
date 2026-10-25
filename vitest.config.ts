@@ -63,6 +63,7 @@ export default defineConfig({
         resolve(__dirname, 'src/features/settings/ui/ParagraphHandlingSettings.vue'),
         resolve(__dirname, 'src/features/settings/ui/SelectionSettings.vue'),
         resolve(__dirname, 'src/features/settings/ui/ClickSelectionSettings.vue'),
+        resolve(__dirname, 'src/features/settings/ui/InformationHighlightPreferences.vue'),
         resolve(__dirname, 'src/features/settings/ui/ReadingAssistanceSettings.vue'),
         resolve(__dirname, 'src/features/settings/ui/ExcludedLanguageSettings.vue'),
         resolve(__dirname, 'src/features/settings/ui/HarnessPromptSettings.vue'),

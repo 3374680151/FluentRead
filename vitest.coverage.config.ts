@@ -23,6 +23,7 @@ export default defineConfig({
                 'src/shared/dom/pointerSelectionSession.ts',
                 'src/features/selection-translation/content/clickSelection.ts',
                 'src/features/settings/ui/ClickSelectionSettings.vue',
+                'src/features/settings/ui/InformationHighlightPreferences.vue',
                 'src/features/full-page-translation/content/manpageLayout.ts',
                 'src/features/full-page-translation/content/bilingualFlowLayout.ts',
                 'src/features/full-page-translation/content/insideListLayout.ts',

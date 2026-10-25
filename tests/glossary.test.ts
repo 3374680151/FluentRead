@@ -3,7 +3,7 @@ import {findGlossaryRanges} from '@/src/core/glossary/match';
 import {createHash} from 'node:crypto';
 import {describe, expect, it, vi} from 'vitest';
 import {
-    protectGlossaryText, GlossaryPlaceholderError, buildGlossaryRevision, createGlossaryEntry, createGlossaryLibrary, exportGlossary,
+    protectGlossaryText, validateGlossaryProtectedTokens, GlossaryPlaceholderError, buildGlossaryRevision, createGlossaryEntry, createGlossaryLibrary, exportGlossary,
     GLOSSARY_LIMITS, normalizeGlossaryDomain, normalizeGlossaryIds, normalizeGlossaryLibraries,
     decodeGlossaryText, parseGlossaryImport, resolveGlossary, getGlossaryScopeReason, glossarySourcesOverlap, type GlossaryContext, type GlossaryLibrary,
 } from '@/src/core/glossary';
@@ -537,6 +537,44 @@ describe('术语占位符保护与本地回填', () => {
             const result = resolveGlossary([library({entries: [entry('API', first), {...entry('API', second), id: 'other'}]})], context());
             expect(result.conflicts[0]).toMatchObject({keptTarget: first || 'API', ignoredTarget: second || 'API'});
         }
+    });
+    it.each(['cat', 'CAT', 'cat_123', ' cat', '猫'])('完整术语标记紧邻译文 %s 时仍按标记身份接受', suffix => {
+        const packet = protectGlossaryText('猫cat', [entry('猫', 'kitten')]);
+        expect(packet.tokens).toHaveLength(1);
+        const translated = packet.tokens[0] + suffix;
+        expect(() => validateGlossaryProtectedTokens(packet.text, translated, packet.tokens)).not.toThrow();
+        expect(packet.restore(translated)).toBe('kitten' + suffix);
+    });
+    it('相邻已知标记和源中重复身份仍按准确出现次数验证', () => {
+        const packet = protectGlossaryText('猫 狗', [entry('猫', 'kitten'), entry('狗', 'puppy')]);
+        expect(packet.tokens).toHaveLength(2);
+        const [first, second] = packet.tokens;
+        const adjacent = `${first}${second}cat`;
+        expect(() => validateGlossaryProtectedTokens(packet.text, adjacent, packet.tokens)).not.toThrow();
+        expect(packet.restore(adjacent)).toBe('kittenpuppycat');
+        expect(() => validateGlossaryProtectedTokens(`${first} ${first}`, `${first}cat${first}dog`, [first])).not.toThrow();
+        expect(() => validateGlossaryProtectedTokens(`${first} ${first}`, `${first}cat`, [first])).toThrow(GlossaryPlaceholderError);
+    });
+    it('精确剥离已知标记后仍拒绝相邻的未知、损坏、重复及跨段标记', () => {
+        const packet = protectGlossaryText('猫cat', [entry('猫', 'kitten')]);
+        const other = protectGlossaryText('狗dog', [entry('狗', 'puppy')]);
+        const token = packet.tokens[0];
+        for (const result of ['', `${token}cat${token}`, `${token}cat__FRTERM_foreign_0__`,
+            `${token}cat__FRTERM_foreign`, `${token}cat${other.tokens[0]}`, token.slice(0, -1) + 'cat',
+            token.toLowerCase() + 'cat', null, [], 42]) {
+            expect(() => validateGlossaryProtectedTokens(packet.text, result, packet.tokens)).toThrow(GlossaryPlaceholderError);
+        }
+        expect(() => validateGlossaryProtectedTokens(packet.text, `${token}cat`, [...packet.tokens, ...other.tokens])).not.toThrow();
+        expect(() => validateGlossaryProtectedTokens(packet.text, `${token}cat${other.tokens[0]}`, [...packet.tokens, ...other.tokens])).toThrow(GlossaryPlaceholderError);
+        expect(() => validateGlossaryProtectedTokens('ordinary', null)).not.toThrow();
+        expect(() => validateGlossaryProtectedTokens('ordinary', null, [])).not.toThrow();
+    });
+    it('译文相邻正文变化不改变原文已有的字面占位符处理', () => {
+        const literal = '__FRTERM_existing_0__';
+        const packet = protectGlossaryText(`猫cat ${literal}`, [entry('猫', 'kitten')]);
+        const translated = `${packet.tokens[0]}dog ${literal}`;
+        expect(() => validateGlossaryProtectedTokens(packet.text, translated, packet.tokens)).not.toThrow();
+        expect(packet.restore(translated)).toBe(`kittendog ${literal}`);
     });
     it('输入碰撞时自动选择另一套标记，不覆盖原文中的相同前缀', () => {
         const spy = vi.spyOn(hashModule, 'sha256Hex').mockReturnValue('fixednonce00');

@@ -22,7 +22,14 @@ describe('本地 AI 完整视频字幕合并', () => {
     expect(second).toHaveLength(1);
     expect(second[0].text).toBe('接着出发。');
     expect(second[0].cueId).not.toBe(first[0].cueId);
-    const finalized = normalizeVideoAiSubtitleTimeline(consolidateVideoAiFullCues(mergeVideoAiSubtitleCues([...first, ...second])));
+    const merged = mergeVideoAiSubtitleCues([...first, ...second]).map(cue => {
+      if (!('availableAtMs' in cue) || typeof cue.availableAtMs !== 'number'
+        || !('spokenEndMs' in cue) || typeof cue.spokenEndMs !== 'number') {
+        throw new Error('合并字幕丢失稳定时间元数据');
+      }
+      return {...cue, availableAtMs: cue.availableAtMs, spokenEndMs: cue.spokenEndMs};
+    });
+    const finalized = normalizeVideoAiSubtitleTimeline(consolidateVideoAiFullCues(merged));
     expect(finalized.map(cue => cue.text)).toEqual(['早安，今天晴朗。', '接着出发。']);
   });
 

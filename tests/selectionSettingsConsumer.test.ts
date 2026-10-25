@@ -51,7 +51,7 @@ function loadClient(relative: string, components = new Map<string, Vue.Component
     expect(compiled.parseErrors).toEqual([]);
     const dependencies: Record<string, unknown> = {
         vue: Vue,
-        '@/src/ui/i18n': {useUiI18n: () => ({t: (key: string) => key, translateLegacy: (value: string) => value})},
+        '@/src/ui/i18n': {useUiI18n: () => ({t: (key: string, params?: Record<string, unknown>) => params ? key + ' ' + JSON.stringify(params) : key, translateLegacy: (value: string) => value})},
         '@/src/core/config/clickSelection': clickSelection,
         'element-plus': {ElMessage: {warning}},
         '@/src/core/config/selectionPreview': preview,
@@ -110,6 +110,17 @@ describe('SelectionSettings 真实模板消费者', () => {
         state.config.quickTranslationProfiles[0].hotkey='F9';await settle();await click(control(switchSelector));
         expect(state.config.selectionTranslatorMode).toBe('bilingual');expect(state.config.disableSelectionTranslator).toBe(false);
     });
+    it('恢复划词时重读智能高亮的已启用组合，停用高亮快捷键后恢复保留模式', async () => {
+        const config = Object.assign(new Config(), {on: false, selectionTranslatorMode: 'translation-only', disableSelectionTranslator: false, selectionClickSelectEnabled: true});
+        await mount(config); await click(control(switchSelector));
+        state.config.informationHighlight = {...state.config.informationHighlight, enabled: false, hotkeyEnabled: true, hotkey: 'Alt+Shift+S'};
+        await settle(); await click(control(switchSelector));
+        expect(state.config.selectionTranslatorMode).toBe('disabled'); expect(state.config.disableSelectionTranslator).toBe(true);
+        expect(warning).toHaveBeenCalledWith(expect.stringContaining('智能高亮')); expect(state.config.informationHighlight.hotkeyEnabled).toBe(true);
+        state.config.informationHighlight.hotkeyEnabled = false; await settle(); await click(control(switchSelector));
+        expect(state.config.selectionTranslatorMode).toBe('translation-only'); expect(state.config.disableSelectionTranslator).toBe(false);
+    });
+
     it('停用期间产生冲突保留原显示模式；关闭点选偏好后允许恢复', async () => {
         await mount(Object.assign(new Config(),{selectionTranslatorMode:'translation-only',disableSelectionTranslator:false,selectionClickSelectEnabled:true}));
         await click(control(switchSelector));state.config.hotkey='custom';state.config.customHotkey='Alt+Shift+S';await settle();

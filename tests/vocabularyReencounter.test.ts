@@ -2,13 +2,21 @@ import {parseHTML} from 'linkedom';
 import {afterEach, describe, expect, it, vi} from 'vitest';
 import {Config, normalizeConfig} from '@/src/core/config/model';
 import {createExpressionIndex, iterateExpressionMatches, matchExpressions, reencounterSentence, reencounterSnapshot, reencounterTerm, type ReencounterEntry} from '@/src/features/vocabulary/domain/reencounter';
-import {collectReadingGroups, scanReadingExpressions} from '@/src/features/vocabulary/content/readingText';
+import {scanReadingExpressionsWork, type ReadingScan} from '@/src/features/vocabulary/content/readingText';
 import {installReencounterScanner, REENCOUNTER_HIGHLIGHT} from '@/src/features/vocabulary/content/scanner';
 import type {VocabularyEntry} from '@/src/features/vocabulary/learningModel';
 import sharedRules from '@/src/ui/styles/vocabulary-reencounter.css?inline';
 
 const saved = (term: string, id = term): ReencounterEntry => ({id, term, sourceLanguage: 'en', reference: '', savedSentence: '', savedTitle: ''});
 const find = (text: string, terms: string[]) => matchExpressions(text, createExpressionIndex(terms.map(term => saved(term))));
+
+// Drain the same cooperative iterator used by the production scanner; no synchronous runtime-only facade.
+function runReadingScan(...args: Parameters<typeof scanReadingExpressionsWork>): ReadingScan {
+  const work = scanReadingExpressionsWork(...args);
+  let step = work.next();
+  while (!step.done) step = work.next();
+  return step.value;
+}
 
 function dom(html: string) {
   const {document, window} = parseHTML(`<html><head></head><body>${html}</body></html>`);
@@ -190,19 +198,19 @@ describe('paint-only reading text and lifecycle', () => {
   it('joins inline text, separates blocks and protected regions and leaves native nodes and markup unchanged', () => {
     const {document} = dom('<p id="a">We <em>take for</em> granted. <a href="#">art</a> art.</p><p>take</p><p>for granted</p><p>take<br>for granted</p><pre>art</pre><p hidden>art</p><p translate="no">art</p><div contenteditable>art</div><p data-display="none">art</p><p data-visibility="hidden">art</p><p data-visibility="collapse">art</p><div data-fr-translation-owned="true">art</div><p data-far>art</p><p><span></span>art</p>');
     const before = document.body.innerHTML; const native = document.querySelector('em')!.firstChild;
-    const terms = [saved('take for granted'), saved('art')];
-    const result = scanReadingExpressions(document, terms, createExpressionIndex(terms));
+    const terms = [saved('take for granted'), saved('art'), saved('takefor granted')];
+    const result = runReadingScan(document, terms, createExpressionIndex(terms));
     expect(result.occurrences.map(item => item.entry.term)).toEqual(['take for granted', 'art', 'art']);
     expect(result.occurrences[0].ranges.map(range => range.toString())).toEqual(['take for', ' granted']);
     expect(document.body.innerHTML).toBe(before); expect(document.querySelector('em')!.firstChild).toBe(native);
-    expect(collectReadingGroups(document).groups.some(group => group.text === 'takefor granted')).toBe(false);
+    expect(result.occurrences.every(hit => hit.entry.term !== 'takefor granted')).toBe(true);
   });
   it('collects open shadow roots and ignores plugin roots', () => {
     const {document} = dom('<div id="host"></div><div id="fluent-read-own">art</div><div id="empty"></div>');
     const root = document.getElementById('host')!.attachShadow({mode: 'open'});
     root.innerHTML = '<p>We like art.</p>';
     const terms = [saved('art')];
-    const result = scanReadingExpressions(document, terms, createExpressionIndex(terms));
+    const result = runReadingScan(document, terms, createExpressionIndex(terms));
     expect(result.roots).toEqual([document, root]); expect(result.occurrences).toHaveLength(1); expect(result.occurrences[0].root).toBe(root);
   });
   it('handles direct shadow text, slot projection and fallback text without losing native ownership', () => {
@@ -213,18 +221,18 @@ describe('paint-only reading text and lifecycle', () => {
     const assigned = document.getElementById('assigned')!;
     Object.defineProperty(root.querySelector('slot'), 'assignedNodes', {value: () => [assigned]});
     Object.defineProperty(root.querySelector('#fallback'), 'assignedNodes', {value: () => []});
-    const terms = [saved('art')]; const result = scanReadingExpressions(document, terms, createExpressionIndex(terms));
+    const terms = [saved('art')]; const result = runReadingScan(document, terms, createExpressionIndex(terms));
     expect(result.occurrences).toHaveLength(3);
     expect(result.occurrences.map(item => item.root)).toEqual([root, document, root]);
   });
   it('returns no ranges without a body, and limits nearby occurrences to 300', () => {
     const {document} = dom('<p>'+ 'art '.repeat(400) +'</p>');
     const terms = [saved('art')];
-    expect(scanReadingExpressions(document, terms, createExpressionIndex(terms)).occurrences).toHaveLength(300);
+    expect(runReadingScan(document, terms, createExpressionIndex(terms)).occurrences).toHaveLength(300);
     document.body.remove();
     // linkedom 会补建空 body；这里模拟真实 HTML 尚无 body 或 XML 文档的入口。
     Object.defineProperty(document, 'body', {value: null});
-    expect(collectReadingGroups(document).groups).toEqual([]);
+    expect(runReadingScan(document, terms, createExpressionIndex(terms))).toEqual({occurrences: [], roots: [document]});
   });
   it('adds only owned drawing styles, keeps other highlights and cancels pending work on disposal', async () => {
     vi.useFakeTimers();
@@ -292,15 +300,15 @@ describe('paint-only reading text and lifecycle', () => {
 
 
 describe('bounded reading ownership and fault cleanup', () => {
-  it('reads 20,000 nested inline elements through public collection and matching without changing text identity', () => {
+  it('reads 20,000 nested inline elements through the production work iterator without changing text identity', () => {
     const {document} = dom('<p id="deep">Before </p><p>Second art.</p>');
     const owner = document.getElementById('deep')!; let leaf = owner;
     for (let i = 0; i < 20_000; i++) {const child = document.createElement('span'); leaf.append(child); leaf = child;}
     const native = document.createTextNode('art'); leaf.append(native); owner.append(document.createTextNode(' after.'));
-    expect(() => collectReadingGroups(document)).not.toThrow();
-    expect(collectReadingGroups(document).groups.map(group => group.text)).toEqual(['Before art after.', 'Second art.']);
     const terms = [saved('art')];
-    expect(scanReadingExpressions(document, terms, createExpressionIndex(terms)).occurrences.map(hit => hit.ranges[0].toString())).toEqual(['art', 'art']);
+    const result = runReadingScan(document, terms, createExpressionIndex(terms));
+    expect(result.occurrences.map(hit => hit.sentence)).toEqual(['Before art after.', 'Second art.']);
+    expect(result.occurrences.map(hit => hit.ranges[0].toString())).toEqual(['art', 'art']);
     expect(leaf.firstChild).toBe(native); expect(native.data).toBe('art');
   });
   it('ends shadow and block groups before later siblings while keeping assigned text in its native root', () => {
@@ -310,9 +318,11 @@ describe('bounded reading ownership and fault cleanup', () => {
     const assigned = document.getElementById('assigned')!;
     Object.defineProperty(root.querySelector('slot'), 'assignedNodes', {value: () => [assigned]});
     Object.defineProperty(root.querySelector('#fallback'), 'assignedNodes', {value: () => []});
-    const result = collectReadingGroups(document);
-    expect(result.groups.map(group => group.text)).toEqual(['Before ', 'Shadow art.', 'Assigned art.', 'Fallback art.', ' After art.', 'Last art.']);
-    expect(result.groups.map(group => group.root)).toEqual([document, root, document, root, document, document]);
+    const terms = [saved('Before'), saved('art'), saved('Before Shadow'), saved('art After'), saved('art Last')];
+    const result = runReadingScan(document, terms, createExpressionIndex(terms));
+    expect(result.occurrences.map(hit => hit.entry.term)).toEqual(['Before', 'art', 'art', 'art', 'art', 'art']);
+    expect(result.occurrences.map(hit => hit.sentence)).toEqual(['Before', 'Shadow art.', 'Assigned art.', 'Fallback art.', 'After art.', 'Last art.']);
+    expect(result.occurrences.map(hit => hit.root)).toEqual([document, root, document, root, document, document]);
     expect(result.roots).toEqual([document, root]);
   });
   it('skips all page and range work for an empty or unusable expression index', () => {
@@ -320,7 +330,7 @@ describe('bounded reading ownership and fault cleanup', () => {
     document.getElementById('host')!.attachShadow({mode: 'open'}).innerHTML = '<p>art</p>';
     const style = vi.spyOn(window, 'getComputedStyle'); const geometry = vi.spyOn(window.HTMLElement.prototype, 'getBoundingClientRect');
     const range = vi.spyOn(document, 'createRange');
-    for (const entries of [[], [saved('!!!')]]) expect(scanReadingExpressions(document, entries, createExpressionIndex(entries))).toEqual({occurrences: [], roots: [document]});
+    for (const entries of [[], [saved('!!!')]]) expect(runReadingScan(document, entries, createExpressionIndex(entries))).toEqual({occurrences: [], roots: [document]});
     expect(style).not.toHaveBeenCalled(); expect(geometry).not.toHaveBeenCalled(); expect(range).not.toHaveBeenCalled();
   });
   it('removes unused drawing styles and observes a later nonempty book without keeping old shadow resources', async () => {
@@ -400,7 +410,7 @@ describe('bounded reading ownership and fault cleanup', () => {
       }})) as typeof range.getClientRects;
       return range;
     });
-    const terms = [saved('art')]; expect(scanReadingExpressions(document, terms, createExpressionIndex(terms)).occurrences).toHaveLength(1);
+    const terms = [saved('art')]; expect(runReadingScan(document, terms, createExpressionIndex(terms)).occurrences).toHaveLength(1);
     expect(reads).toBe(1);
     document.getSelection = (() => ({isCollapsed: true})) as unknown as typeof document.getSelection;
     const open = vi.fn(); const scanner = installReencounterScanner(document, {changed: vi.fn(), open});
@@ -455,7 +465,7 @@ describe('reading work stops and yields before blocking the page', () => {
   it('caps visible occurrences after geometry filtering, so an offscreen inline prefix cannot hide later visible hits', () => {
     const {document} = dom('<p>' + '<span data-range-far>art </span>'.repeat(350) + '<em>art art</em></p>');
     const terms = [saved('art')]; const native = document.querySelector('em')!.firstChild; const before = document.body.innerHTML;
-    const result = scanReadingExpressions(document, terms, createExpressionIndex(terms));
+    const result = runReadingScan(document, terms, createExpressionIndex(terms));
     expect(result.occurrences.map(hit => hit.ranges.map(range => range.toString()))).toEqual([['art'], ['art']]);
     expect(result.occurrences.every(hit => hit.ranges[0].startContainer === native)).toBe(true);
     expect(document.body.innerHTML).toBe(before);

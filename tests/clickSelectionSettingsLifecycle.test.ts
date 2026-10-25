@@ -77,6 +77,16 @@ async function edit(): Promise<void> {
         props.config.quickTranslationProfiles[0].enabled=false;handler('.recorder-port','onCancel')();await settle();toggle(true);
         expect(props.config.selectionClickSelectEnabled).toBe(true);
     });
+    it('智能高亮快捷键启用时不能反向开启或录制抢占，停用草稿不占用', async () => {
+        const source = config(); source.on = false; source.informationHighlight = {...source.informationHighlight, enabled: false, hotkeyEnabled: true, hotkey: DEFAULT_CLICK_SELECTION_HOTKEY};
+        await mount(source); toggle(true); expect(props.config.selectionClickSelectEnabled).toBe(false);
+        expect(warnings).toHaveBeenCalledWith(expect.stringContaining('智能高亮'));
+        await edit(); handler('.recorder-port', 'onConfirm')(DEFAULT_CLICK_SELECTION_HOTKEY); await settle();
+        expect(root.querySelector('.recorder-port')).not.toBeNull(); expect(props.config.informationHighlight.hotkeyEnabled).toBe(true);
+        props.config.informationHighlight.hotkeyEnabled = false; handler('.recorder-port', 'onCancel')(); await settle(); toggle(true); await settle();
+        expect(props.config.selectionClickSelectEnabled).toBe(true);
+    });
+
     it('默认关闭且紧凑，冲突时仍可编辑按键后开启；拒绝非布尔事件，关闭保留按键', async () => {
         await mount(); expect(root.textContent).toContain('两点选取'); expect(root.querySelector('kbd')?.textContent).toMatch(/(?:Alt|Option)\+Shift\+S/u);
         toggle('true'); expect(props.config.selectionClickSelectEnabled).toBe(false);

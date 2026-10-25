@@ -35,6 +35,7 @@ interface ClickSelectionConfig {
     customSectionTranslationHotkey?: string;
     inputBoxTranslationTrigger?: string;
     quickTranslationProfiles?: readonly QuickTranslationProfile[];
+    informationHighlight?: {hotkeyEnabled?: boolean; hotkey?: string};
 }
 
 /** 不接受单键或仅修饰键，避免正常输入或临时按住 Control 时进入点选模式。 */
@@ -68,6 +69,7 @@ export function findClickSelectionHotkeyConflict(config: ClickSelectionConfig, h
         {hotkey: config.paragraphCopyEnabled ? resolveParagraphCopyHotkey(config.paragraphCopyHotkey, config.customParagraphCopyHotkey) : '', feature: '段落复制'},
         {hotkey: config.sectionTranslationHotkeyEnabled ? resolveSectionTranslationHotkey(config.sectionTranslationHotkey, config.customSectionTranslationHotkey) : '', feature: '局部翻译'},
         {hotkey: inputBoxTranslationTriggerHotkey(config.inputBoxTranslationTrigger), feature: '输入框翻译'},
+        {hotkey: config.informationHighlight?.hotkeyEnabled === true ? config.informationHighlight.hotkey ?? '' : '', feature: '智能高亮'},
     ];
     const owner = owners.find(item => canonicalizeHotkey(item.hotkey).toLowerCase() === identity);
     if (owner) return owner.feature;

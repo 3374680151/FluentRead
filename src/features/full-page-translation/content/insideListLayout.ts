@@ -89,7 +89,12 @@ export function prepareInsideListTranslation(node: HTMLElement, content: HTMLEle
     try {
         const current = context(node);
         if (!current) return;
-        const previous = Array.from(node.children).slice(0, 256).find(child => child.matches(owned));
+        let previous: Element | undefined;
+        const children = node.children;
+        for (let index = 0; index < children.length && index < 256; index++) {
+            const child = children[index]!;
+            if (child.matches(owned)) {previous = child; break;}
+        }
         const active = previous?.getAttribute(activeAttribute) === 'true';
         const old = active ? insets.get(node) ?? clonedInset(previous as HTMLElement, current.width) : null;
         if (active && !old) return;

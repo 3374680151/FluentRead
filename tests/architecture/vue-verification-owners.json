@@ -216,13 +216,6 @@
       ],
       "scenario": "实际模型选择、资源准备与页面归属"
     },
-    "src/features/settings/ui/InformationHighlightPreferences.vue": {
-      "kind": "behavior",
-      "tests": [
-        "tests/informationHighlightUiLifecycle.test.ts"
-      ],
-      "scenario": "实际偏好组件更新与订阅生命周期"
-    },
     "src/features/settings/ui/InformationHighlightPreview.vue": {
       "kind": "frozen-debt",
       "sourceSha256": "aa880ae11e4e48e37dc075caed28505bc39ead5828a5570bc8050ea861caf7f0",
