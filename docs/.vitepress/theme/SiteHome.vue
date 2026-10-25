@@ -216,7 +216,7 @@ const faqs = [
       </div>
       <a
         class="fr-sponsor-slot"
-        href="mailto:a1914493943@gmail.com?subject=FluentRead%20sponsorship"
+        :href="link('/guide/support')"
       >
         <span class="fr-sponsor-plus" aria-hidden="true">+</span>
         <span class="fr-sponsor-copy">
