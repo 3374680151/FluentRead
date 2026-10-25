@@ -1,13 +1,13 @@
 <!--
  * @file src/features/settings/ui/ClickSelectionSettings.vue
  * 文件职责：在划词设置内提供默认关闭的两点选取入口与紧凑快捷键编辑。
- * 主要内容：说明快捷键启动后点击起终点、自动退出与 Esc 取消；录制复用既有对话框，所属配置、功能启停或设置分区变化立即失效，开启及确认时校验其他动作的快捷键占用。
+ * 主要内容：说明快捷键启动后点击起终点、自动退出与 Esc 取消；录制复用既有对话框，所属配置、功能启停或设置分区变化立即失效，开启及确认时校验其他动作的快捷键占用；开启后被其他入口占用时在原行说明原因并允许直接改键修复。
  * 模块边界：组件只修改传入配置，不持久化、不监听网页动作、不处理选区；配置与冲突归 core/config/clickSelection，实际点选由划词内容运行时负责。
  -->
 <template>
-  <SettingsItem label="两点选取" description="开启后按快捷键，再依次点击文字起点和终点，无需按住鼠标；完成自动退出，Esc 取消">
+  <SettingsItem label="两点选取" :description="description">
     <div class="fr-click-selection-controls">
-      <el-button size="small" :disabled="!context.active.value" aria-label="编辑两点选取快捷键" @click="openEditor">
+      <el-button size="small" :type="hotkeyConflict ? 'danger' : 'default'" :title="hotkeyConflict ? description : '编辑两点选取快捷键'" :disabled="!context.active.value" aria-label="编辑两点选取快捷键" @click="openEditor">
         <kbd data-i18n-ignore>{{ hotkeyDisplayName }}</kbd>
       </el-button>
       <el-switch :model-value="props.config.selectionClickSelectEnabled" :disabled="!context.active.value" class="settings-toggle" aria-label="两点选取" @change="setEnabled" />
@@ -34,6 +34,11 @@ const context = useSettingsActionContext(
 );
 const editorEpoch = ref(0);
 const hotkeyDisplayName = computed(() => parseHotkey(normalizeClickSelectionHotkey(props.config.selectionClickSelectHotkey)).displayName);
+const hotkeyConflict = computed(() => props.config.selectionClickSelectEnabled
+  ? findClickSelectionHotkeyConflict(props.config, props.config.selectionClickSelectHotkey) : '');
+const description = computed(() => hotkeyConflict.value
+  ? `快捷键已用于${hotkeyConflict.value}，请点击快捷键更换后使用`
+  : '开启后按快捷键，再依次点击文字起点和终点，无需按住鼠标；完成自动退出，Esc 取消');
 
 function closeEditor(): void { editorEpoch.value += 1; showEditor.value = false; }
 const openEditor = computed(() => {

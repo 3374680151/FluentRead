@@ -20,7 +20,7 @@ export interface ClickSelectionController {
 interface ClickSelectionOptions {
     onStateChange(state: ClickSelectionState): void;
     onComplete(): void;
-    onReject?(reason: 'range-too-large' | 'protected-content'): void;
+    onReject?(reason: 'range-too-large' | 'protected-content' | 'text-miss' | 'same-point'): void;
     acceptsRange?(range: Range): boolean;
 }
 interface Endpoint {node: Text; offset: number; text: string; root: Document | ShadowRoot}
@@ -186,7 +186,7 @@ export function createClickSelectionController(options: ClickSelectionOptions): 
             if (event.button !== 0 || Math.hypot(event.clientX - completed.x, event.clientY - completed.y) > MAX_TRAVEL) return true;
             armClick(completed);
             const point = completed.point;
-            if (!point) return true;
+            if (!point) { options.onReject?.('text-miss'); return true; }
             let didComplete = false;
             try {
                 if (!isCurrent(point, owner) || anchor && !isCurrent(anchor, owner)) { cancel(); return true; }
@@ -213,7 +213,7 @@ export function createClickSelectionController(options: ClickSelectionOptions): 
                 const range = owner.createRange();
                 range.setStart(first.node, first.offset);
                 range.setEnd(last.node, last.offset);
-                if (range.collapsed) return true;
+                if (range.collapsed) { options.onReject?.('same-point'); return true; }
                 if (!isBoundedRange(range, owner)) { options.onReject?.('range-too-large'); return true; }
                 if (options.acceptsRange ? !options.acceptsRange(range) : shouldIgnoreSelection(range)) {
                     options.onReject?.('protected-content');
