@@ -15,7 +15,7 @@ vi.mock('onnxruntime-web/webgpu', () => ({env: {wasm: {}}, InferenceSession: {cr
     constructor(public type: string, public data: Float32Array, public dims: number[]) {}
     dispose() {}
 }}));
-vi.mock('ppu-paddle-ocr/web', () => ({DetectionService: class {
+vi.mock('ppu-paddle-ocr/web', () => ({RecognitionService: class {}, DetectionService: class {
     platform = {canvas: {createProcessor: () => ({findRegions: () => []})}};
     constructor(public session: unknown, public options: unknown) {sdk.detectors.push(this);}
 }, PaddleOcrService: class {

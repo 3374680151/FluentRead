@@ -3,6 +3,7 @@
  * 文件职责：在扩展独立 Worker 中按需运行 PaddleOCR 漫画识别，并隔离排队、取消、失败和空闲释放。
  * 主要内容：延迟导入浏览器 OCR 和本地 ONNX WASM，用频繁读取的画布完成 OCR 预处理，透明像素仅在识别画布上按前景亮度合成对比底色，读取已校验模型并融合 ONNX 执行图，硬件可用时加速识别，GPU 故障有界切换 CPU；SVG 复用已解码原图异步转为无损 PNG 后进入 Worker，取消或失败释放自有画布且保留借用原图；大图以有重叠的原像素瓦片识别并按物理行去重，整页原文与放大的独立气泡共同参与可靠性回退，竖列与纯像素估角的浅底斜行共用每页四框复识别预算，斜行只以高置信且有增益的原框结果替换，预处理另有像素预算，普通图片保留物理行供严格段落策略使用；滚动取消保留轻量模型端口，Worker owner 有界收尾，GPU 挂起重建一次 CPU 后端，空闲三分钟释放会话，统一清理 OCR 与修补会话。
  * 检测裁切：通过 SDK 公开处理器入口按原始字行短边计算留白，检测平面短边不足十二像素时保留原高度留白，不丢弃细小框；沿用原裁边、舍入与缩放顺序，水平框保持原语义，竖列不因列长吞入邻列和注音；复用原会话和一次区域检测。低置信纯拉丁竖框用原配额尝试反向，CJK 保留原批次复识别，反向与斜行共用整页两百万预处理像素预算，超额框回原框识别；同一次气泡扫描额外输出大型曲边气泡的布局归属，不创建大型局部识别裁图。
+ * 识别颜色：仅装饰原生识别缩放副本的一次既有读回，在完整不透明端点边缘和原页像素预算内补足红通道缺失对比；复用原会话，不改裁切、原图或检测输入，推理收尾恢复上下文，页级 finally 清理取消信号。
  * 模块边界：不访问宿主 DOM、不翻译文本、不处理译图；仅漫画及显式选择 PaddleOCR 的单张图片使用本模型；通用识别与圈选继续由 Tesseract 负责。
  */
 import {localWasmThreads, paceLocalInference} from '@/src/shared/onnx/resources';
@@ -17,6 +18,7 @@ import {mangaInpaintingRuntime} from './mangaInpainting';
 import {encodeImageCanvas} from './imageEncoding';
 import {flattenOcrAlpha} from './ocrPixels';
 import {mergeMangaOcrTiles, planMangaOcrTiles, type MangaOcrTileResult} from './mangaOcrTiles';
+import {createMangaOcrColorAdapter,withMangaOcrColorRead} from './mangaOcrColor';
 import {MANGA_DESKEW_PIXEL_BUDGET,planMangaOcrDeskew,trimMangaOcrDeskew} from './mangaOcrDeskew';
 
 interface MangaOcrPort {
@@ -112,9 +114,35 @@ export async function createBrowserMangaOcr(signal?: AbortSignal, progress?: Pro
         mjs: mangaExtensionUrl('/fluent-read-ai/ort-wasm-simd-threaded.asyncify.mjs'),
         wasm: mangaExtensionUrl('/fluent-read-ai/ort-wasm-simd-threaded.asyncify.wasm'),
     });
-    const {PaddleOcrService,DetectionService} = await import('ppu-paddle-ocr/web');
+    const {PaddleOcrService,DetectionService,RecognitionService} = await import('ppu-paddle-ocr/web');
     const gpu=await probeWebGpu();
     let activeSignal=signal;
+    const colorAdapter=createMangaOcrColorAdapter();
+    class MangaRecognition extends RecognitionService {
+        private pendingColorReads=new Set<()=>void>();
+        constructor(...args:ConstructorParameters<typeof RecognitionService>){
+            super(...args);
+            const createProcessor=this.platform.canvas.createProcessor.bind(this.platform.canvas);
+            this.platform.canvas.createProcessor=canvas=>{
+                const processor=createProcessor(canvas),resize=processor.resize.bind(processor);
+                processor.resize=options=>{
+                    // 返回值才是 SDK 后续读取的处理器；不假定 resize 一定返回原对象。
+                    const resized=resize(options),output=resized.toCanvas(),context=output.getContext('2d');
+                    if(context){
+                        const restore=withMangaOcrColorRead(context,output.width,output.height,colorAdapter,
+                            consumed=>this.pendingColorReads.delete(consumed));
+                        if(restore)this.pendingColorReads.add(restore);
+                    }
+                    return resized;
+                };
+                return processor;
+            };
+        }
+        async run(...args:Parameters<InstanceType<typeof RecognitionService>['run']>){
+            try{return await super.run(...args);}
+            finally{for(const restore of this.pendingColorReads)restore();this.pendingColorReads.clear();}
+        }
+    }
     class MangaDetection extends DetectionService {
         constructor(session:ConstructorParameters<typeof DetectionService>[0],options:ConstructorParameters<typeof DetectionService>[1]){
             super(session,options);
@@ -134,7 +162,7 @@ export async function createBrowserMangaOcr(signal?: AbortSignal, progress?: Pro
         private inferenceFailure: {error: unknown} | undefined;
         private remainingRetries=4;
         private remainingPreprocessingPixels=MANGA_DESKEW_PIXEL_BUDGET;
-        beginMangaPage(): void {this.remainingRetries=4;this.remainingPreprocessingPixels=MANGA_DESKEW_PIXEL_BUDGET;}
+        beginMangaPage(): void {this.remainingRetries=4;this.remainingPreprocessingPixels=MANGA_DESKEW_PIXEL_BUDGET;colorAdapter.beginPage(activeSignal);}
         private checkInferenceFailure(): void {
             if(this.inferenceFailure)throw this.inferenceFailure.error;
         }
@@ -228,6 +256,7 @@ export async function createBrowserMangaOcr(signal?: AbortSignal, progress?: Pro
         async initialize() {
             await super.initialize();
             if(this.detectionSession)this.detector=new MangaDetection(this.detectionSession,this.options.detection);
+            if(this.recognitionSession)this.recognitor=new MangaRecognition(this.recognitionSession,this.options.recognition,this.options.debugging);
             for(const [key,session] of [['detection',this.detectionSession],['recognition',this.recognitionSession]] as const) {
                 if(session && gpu.available)this.checks.push(protectMangaSession(session,async()=>{
                     assertMangaOcrActive(activeSignal);
@@ -255,9 +284,11 @@ export async function createBrowserMangaOcr(signal?: AbortSignal, progress?: Pro
         return {
             recognize: async (image, options) => {
                 activeSignal=options.signal;
+                try {
                 assertMangaOcrActive(options.signal);
                 service.beginMangaPage();
                 const bitmap=options.decodedImage ?? await createImageBitmap(new Blob([await (await fetch(image)).arrayBuffer()]));
+                try {
                 const canvas=createOcrCanvas();
                 try {
                     assertMangaOcrActive(options.signal);
@@ -310,11 +341,13 @@ export async function createBrowserMangaOcr(signal?: AbortSignal, progress?: Pro
                     assertMangaOcrActive(options.signal);
                     const layoutBubbles=assignMangaLayoutBubbles(pixels.data,canvas.width,canvas.height,ownership,page.results);
                     return {results:page.results,bubbles,...(layoutBubbles.length?{layoutBubbles}:{})};
-                }finally{canvas.width=0;canvas.height=0;if ('close' in bitmap) bitmap.close();}
+                }finally{canvas.width=0;canvas.height=0;}
+                }finally{if ('close' in bitmap)bitmap.close();}
+                }finally{try{colorAdapter.endPage();}finally{activeSignal=undefined;}}
             },
             destroy: () => service.destroy(),
         };
-    } catch (error) { await Promise.resolve().then(()=>service.destroy()).catch(()=>undefined); throw error; }
+    } catch (error) { colorAdapter.endPage();activeSignal=undefined;await Promise.resolve().then(()=>service.destroy()).catch(()=>undefined);throw error; }
 }
 
 function createOcrCanvas(): HTMLCanvasElement | OffscreenCanvas {

@@ -1,13 +1,14 @@
 vi.mock('@/src/shared/onnx/resources', async original => ({...await original<any>(), paceLocalInference: mocks.pace}));
 import {afterEach, beforeEach, describe, expect, it, vi} from 'vitest';
 const mocks = vi.hoisted(() => ({assets:vi.fn(),remove:vi.fn(),initialize:vi.fn(),recognize:vi.fn(),retryRecognition:vi.fn(),destroy:vi.fn(),options:vi.fn(),
-    gpu:vi.fn(),cpuCreate:vi.fn(),sessions:[] as any[],detectors:[] as any[],createProcessor:vi.fn(),inpaintDispose:vi.fn(),bitmapClose:vi.fn(),contexts:[] as any[],canvases:[] as any[],
+    gpu:vi.fn(),cpuCreate:vi.fn(),sessions:[] as any[],detectors:[] as any[],recognitors:[] as any[],recognitionProcessor:vi.fn(),recognitionRun:vi.fn(),createProcessor:vi.fn(),inpaintDispose:vi.fn(),bitmapClose:vi.fn(),contexts:[] as any[],canvases:[] as any[],
     workerPrepare:vi.fn(),workerRequest:vi.fn(),workerRelease:vi.fn(),workerDispose:vi.fn(),encode:vi.fn(),planDeskew:vi.fn(),trimDeskew:vi.fn(),pace:vi.fn((operation:()=>Promise<unknown>)=>operation()),
     wasm:{numThreads:0,wasmPaths:undefined as unknown,proxy:true}}));
 vi.mock('@/src/features/image-translation/services/mangaOcrAssets', async importOriginal => ({...await importOriginal<any>(),loadMangaOcrAssets:mocks.assets,removeMangaOcrAssets:mocks.remove}));
 vi.mock('onnxruntime-web/webgpu',()=>({env:{wasm:mocks.wasm},InferenceSession:{create:mocks.cpuCreate}}));
 vi.mock('@/src/shared/onnx/webgpu',()=>({probeWebGpu:mocks.gpu}));
 vi.mock('ppu-paddle-ocr/web',()=>({
+    RecognitionService:class{platform={canvas:{createProcessor:(canvas:unknown)=>mocks.recognitionProcessor(canvas)}};constructor(public session:unknown,public options:unknown,public debugging:unknown){mocks.recognitors.push(this);}async run(...args:unknown[]){return mocks.recognitionRun.apply(this,args);}},
     DetectionService:class{platform={canvas:{createProcessor:(canvas:unknown)=>mocks.createProcessor(canvas)}};constructor(public session:unknown,public options:unknown){mocks.detectors.push(this);}},
     PaddleOcrService:class{constructor(public options:any){mocks.options(options)}recognitor={run:mocks.retryRecognition};detectionSession=mocks.sessions[0];recognitionSession=mocks.sessions[1];async initialize(){return mocks.initialize();}recognize=mocks.recognize;destroy=mocks.destroy;}
 }));
@@ -16,13 +17,14 @@ vi.mock('@/src/features/image-translation/services/mangaInferenceClient',async o
 vi.mock('@/src/features/image-translation/services/imageEncoding',()=>({encodeImageCanvas:mocks.encode}));
 vi.mock('@/src/features/image-translation/services/mangaOcrDeskew',async original=>({...await original<any>(),planMangaOcrDeskew:mocks.planDeskew,trimMangaOcrDeskew:mocks.trimDeskew}));
 import {createBrowserMangaOcr, createMangaOcrRuntime, mangaOcrRuntime, removeMangaModels, disposeMangaModels,padMangaOcrDetectionBox,shouldRotateMangaOcrRetry} from '@/src/features/image-translation/services/mangaOcr';
+import * as mangaOcrColor from '@/src/features/image-translation/services/mangaOcrColor';
 import {planMangaOcrTiles, mergeMangaOcrTiles} from '@/src/features/image-translation/services/mangaOcrTiles';
 const opaquePixels=()=>{const pixels=new Uint8ClampedArray(200*200*4);for(let index=3;index<pixels.length;index+=4)pixels[index]=255;return pixels;};
 const response = {results:[{text:'Hello world',confidence:0.99,box:{x:10,y:10,width:100,height:20}}]};
 const deferred = <T,>() => {let resolve!:(v:T)=>void,reject!:(e:unknown)=>void;const promise=new Promise<T>((a,b)=>{resolve=a;reject=b});return {promise,resolve,reject}};
 const tick = async () => {for(let i=0;i<6;i++)await Promise.resolve()};
-beforeEach(()=>{vi.useFakeTimers();vi.clearAllMocks();mocks.contexts=[];mocks.canvases=[];mocks.sessions=[];mocks.detectors=[];mocks.createProcessor.mockReset();mocks.gpu.mockResolvedValue({available:false,info:''});mocks.assets.mockResolvedValue({charactersDictionary:new ArrayBuffer(4)});mocks.initialize.mockResolvedValue(undefined);mocks.destroy.mockResolvedValue(undefined);mocks.remove.mockResolvedValue(undefined);mocks.inpaintDispose.mockResolvedValue(undefined);mocks.recognize.mockResolvedValue(response);vi.stubGlobal('GPUDevice',class{get adapterInfo(){return {};}});vi.stubGlobal('chrome',{runtime:{getURL:(p:string)=>'chrome-extension://test'+p}});vi.stubGlobal('fetch',vi.fn(async()=>new Response(new Uint8Array([1,2,3]))));
-    mocks.retryRecognition.mockReset().mockResolvedValue([]);mocks.planDeskew.mockReset().mockReturnValue(undefined);mocks.trimDeskew.mockReset().mockReturnValue(undefined);mocks.workerPrepare.mockReset().mockResolvedValue(undefined);mocks.workerRequest.mockReset().mockResolvedValue(response);mocks.workerRelease.mockReset().mockResolvedValue(undefined);mocks.encode.mockReset().mockResolvedValue('data:image/png;base64,rasterized');
+beforeEach(()=>{vi.useFakeTimers();vi.clearAllMocks();mocks.contexts=[];mocks.canvases=[];mocks.sessions=[];mocks.detectors=[];mocks.recognitors=[];mocks.recognitionProcessor.mockReset();mocks.createProcessor.mockReset();mocks.gpu.mockResolvedValue({available:false,info:''});mocks.assets.mockResolvedValue({charactersDictionary:new ArrayBuffer(4)});mocks.initialize.mockResolvedValue(undefined);mocks.destroy.mockResolvedValue(undefined);mocks.remove.mockResolvedValue(undefined);mocks.inpaintDispose.mockResolvedValue(undefined);mocks.recognize.mockResolvedValue(response);vi.stubGlobal('GPUDevice',class{get adapterInfo(){return {};}});vi.stubGlobal('chrome',{runtime:{getURL:(p:string)=>'chrome-extension://test'+p}});vi.stubGlobal('fetch',vi.fn(async()=>new Response(new Uint8Array([1,2,3]))));
+    mocks.recognitionRun.mockReset().mockImplementation((...args:unknown[])=>mocks.retryRecognition(...args));mocks.retryRecognition.mockReset().mockResolvedValue([]);mocks.planDeskew.mockReset().mockReturnValue(undefined);mocks.trimDeskew.mockReset().mockReturnValue(undefined);mocks.workerPrepare.mockReset().mockResolvedValue(undefined);mocks.workerRequest.mockReset().mockResolvedValue(response);mocks.workerRelease.mockReset().mockResolvedValue(undefined);mocks.encode.mockReset().mockResolvedValue('data:image/png;base64,rasterized');
     vi.stubGlobal('createImageBitmap',vi.fn(async()=>({width:200,height:200,close:mocks.bitmapClose})));
     vi.stubGlobal('document',{createElement:vi.fn(()=>{const ctx={drawImage:vi.fn(),fillRect:vi.fn(),putImageData:vi.fn(),translate:vi.fn(),rotate:vi.fn(),getImageData:vi.fn(()=>({data:opaquePixels()}))};const canvas={width:0,height:0,getContext:vi.fn(()=>ctx)};mocks.contexts.push(ctx);mocks.canvases.push(canvas);return canvas;})});
 });
@@ -917,5 +919,116 @@ describe('漫画本地神经 OCR 会话',()=>{
         mocks.initialize.mockRejectedValueOnce(new Error('init failed'));await expect(createBrowserMangaOcr()).rejects.toThrow('init failed');expect(mocks.destroy).toHaveBeenCalledOnce();
         const abort=new AbortController();mocks.initialize.mockImplementationOnce(async()=>abort.abort());await expect(createBrowserMangaOcr(abort.signal)).rejects.toMatchObject({name:'AbortError'});expect(mocks.destroy).toHaveBeenCalledTimes(2);
         const cancelled=new AbortController();cancelled.abort();await expect(createBrowserMangaOcr(cancelled.signal)).rejects.toMatchObject({name:'AbortError'});
+    });
+});
+
+// 公有 SDK 端口执行原 resize→toCanvas→一次 read，不把简单 recognize stub 当作真实预处理证明。
+describe('识别颜色适配器的公有 SDK 接入与页生命周期',()=>{
+    const recognitionOptions={flatten:true as const,noCache:true as const,strategy:'per-box' as const};
+    function colorPort(width=8){
+        const pixels=new Uint8ClampedArray(width*48*4).fill(255);pixels[(width+2)*4+1]=0;pixels[(width+2)*4+2]=0;
+        const native=vi.fn((..._args:unknown[])=>({data:new Uint8ClampedArray(pixels)})),context={getImageData:native};
+        const canvas={width,height:48,getContext:vi.fn((_type:string)=>context)},returned={toCanvas:()=>canvas};
+        const resize=vi.fn(()=>returned),processor={resize};mocks.recognitionProcessor.mockImplementation(()=>({resize}));
+        return {pixels,native,context,canvas,returned,resize,processor};
+    }
+    function watchPages(){
+        const original=mangaOcrColor.createMangaOcrColorAdapter,adapters:Array<ReturnType<typeof original>>=[];
+        vi.spyOn(mangaOcrColor,'createMangaOcrColorAdapter').mockImplementation(()=>{const adapter=original();vi.spyOn(adapter,'beginPage');vi.spyOn(adapter,'endPage');adapters.push(adapter);return adapter;});
+        return adapters;
+    }
+    it('复用原 recognition session/字典/调试配置，只读取原 resize 返回的新处理器一次且不写画布或重建模型',async()=>{
+        const nativeSessionRun=vi.fn(),session={run:nativeSessionRun,release:vi.fn()},dictionary=['字'],debugging={debug:false};mocks.sessions=[undefined,session];
+        mocks.initialize.mockImplementationOnce(async()=>{const options=mocks.options.mock.calls[0][0];options.recognition.charactersDictionary=dictionary;options.debugging=debugging;});
+        const sample=colorPort(),before=new Uint8ClampedArray(sample.pixels),seen:number[]=[];
+        mocks.recognitionRun.mockImplementation(async function(this:any,...args:unknown[]){
+            expect(this).toBe(mocks.recognitors[0]);const processor=this.platform.canvas.createProcessor(args[0]);
+            const returned=processor.resize({width:8,height:48});expect(returned).toBe(sample.returned);
+            const out=returned.toCanvas().getContext('2d').getImageData(0,0,8,48);seen.push(out.data[(8+2)*4]);return [];
+        });
+        const port=await createBrowserMangaOcr(),recognitor=mocks.recognitors[0];
+        expect(recognitor.session).toBe(session);expect(recognitor.options).toBe(mocks.options.mock.calls[0][0].recognition);expect(recognitor.options.charactersDictionary).toBe(dictionary);expect(recognitor.debugging).toBe(debugging);
+        mocks.recognize.mockImplementationOnce(async canvas=>({results:await recognitor.run(canvas,[],dictionary,'per-box',recognitionOptions)}));
+        await port.recognize('color',recognitionOptions);
+        expect(seen).toEqual([76]);expect(sample.native).toHaveBeenCalledOnce();expect(sample.native).toHaveBeenCalledWith(0,0,8,48);expect(sample.context.getImageData).toBe(sample.native);
+        expect(sample.resize).toHaveBeenCalledOnce();expect(sample.resize).toHaveBeenCalledWith({width:8,height:48});expect(sample.pixels).toEqual(before);
+        expect(mocks.canvases).toHaveLength(1);expect(mocks.contexts[0].putImageData).not.toHaveBeenCalled();expect(mocks.cpuCreate).not.toHaveBeenCalled();expect(nativeSessionRun).not.toHaveBeenCalled();expect(session.release).not.toHaveBeenCalled();
+        // 外层页 finally 已结束预算，直接借用同一端口不能归一旧页面或持有旧取消信号。
+        await recognitor.run({},[],dictionary);expect(seen).toEqual([76,255]);await port.destroy();expect(mocks.destroy).toHaveBeenCalledOnce();
+    });
+    it.each(['unused','throw','native-read'])('无读取/SDK失败/原生read失败均在run收尾恢复原描述符并保留首因：%s',async stage=>{
+        mocks.sessions=[undefined,{run:vi.fn()}];const sample=colorPort(),failure=new Error('exact '+stage),descriptor=Object.getOwnPropertyDescriptor(sample.context,'getImageData');
+        if(stage==='native-read')sample.native.mockImplementation(()=>{throw failure;});
+        mocks.recognitionRun.mockImplementation(async function(this:any){this.platform.canvas.createProcessor({}).resize({width:8,height:48});expect(sample.context.getImageData).not.toBe(sample.native);if(stage==='throw')throw failure;if(stage==='native-read')sample.context.getImageData();return [];});
+        const port=await createBrowserMangaOcr(),recognitor=mocks.recognitors[0];mocks.recognize.mockImplementationOnce(async()=>({results:await recognitor.run({},[])}));
+        if(stage==='unused')await port.recognize('unused',recognitionOptions);else await expect(port.recognize('failure',recognitionOptions)).rejects.toBe(failure);
+        expect(Object.getOwnPropertyDescriptor(sample.context,'getImageData')).toEqual(descriptor);await port.destroy();
+    });
+    it('原run仍pending时不提前还原；调用方abort先拒绝但等原生操作settle后才结束页面并移除hook',async()=>{
+        mocks.sessions=[undefined,{run:vi.fn()}];const sample=colorPort(),started=deferred<void>(),pending=deferred<void>(),controller=new AbortController(),adapters=watchPages();
+        mocks.recognitionRun.mockImplementation(async function(this:any){this.platform.canvas.createProcessor({}).resize({width:8,height:48});started.resolve();await pending.promise;return [];});
+        const port=await createBrowserMangaOcr(),recognitor=mocks.recognitors[0];mocks.recognize.mockImplementationOnce(async()=>({results:await recognitor.run({},[])}));
+        const runtime=createMangaOcrRuntime(async()=>port),result=runtime.recognize('pending','en',200,200,controller.signal);await started.promise;controller.abort();await expect(result).rejects.toMatchObject({name:'AbortError'});
+        expect(sample.context.getImageData).not.toBe(sample.native);expect(recognitor.pendingColorReads.size).toBe(1);expect(adapters[0].endPage).not.toHaveBeenCalled();pending.resolve();await runtime.dispose();
+        expect(sample.context.getImageData).toBe(sample.native);expect(recognitor.pendingColorReads.size).toBe(0);expect(adapters[0].endPage).toHaveBeenCalledOnce();expect(adapters[0].beginPage).toHaveBeenCalledOnce();expect(adapters[0].beginPage).toHaveBeenCalledWith(controller.signal);
+    });
+    it('200个独立裁图在首次read前立即退出持有集合，原生推理尚pending时集合已空',async()=>{
+        const started=deferred<void>(),pending=deferred<void>(),nativeInference=vi.fn(()=>pending.promise),session={run:nativeInference};mocks.sessions=[undefined,session];
+        let recognitor:any,reads=0,resizes=0;
+        mocks.recognitionProcessor.mockImplementation(()=>({resize:()=>{
+            resizes++;const native=()=>{expect(recognitor.pendingColorReads.size).toBe(0);reads++;return {data:new Uint8ClampedArray(8*48*4).fill(255)};};
+            const context={getImageData:native},canvas={width:8,height:48,getContext:()=>context};return {toCanvas:()=>canvas};
+        }}));
+        mocks.recognitionRun.mockImplementation(async function(this:any){
+            for(let index=0;index<200;index++){
+                const output=this.platform.canvas.createProcessor({}).resize({width:8,height:48}).toCanvas();
+                expect(this.pendingColorReads.size).toBe(1);output.getContext('2d').getImageData(0,0,8,48);expect(this.pendingColorReads.size).toBe(0);
+            }
+            started.resolve();await this.session.run({});return [];
+        });
+        const port=await createBrowserMangaOcr();recognitor=mocks.recognitors[0];mocks.recognize.mockImplementationOnce(async()=>({results:await recognitor.run({},[])}));
+        const result=port.recognize('200 crops',recognitionOptions);await started.promise;
+        expect(reads).toBe(200);expect(resizes).toBe(200);expect(nativeInference).toHaveBeenCalledOnce();expect(recognitor.pendingColorReads.size).toBe(0);
+        pending.resolve();await result;expect(recognitor.pendingColorReads.size).toBe(0);await port.destroy();
+    });
+    it('不可装饰上下文不登记空清理函数，原生读回仍只运行一次',async()=>{
+        mocks.sessions=[undefined,{run:vi.fn()}];const sample=colorPort();Object.freeze(sample.context);
+        mocks.recognitionRun.mockImplementation(async function(this:any){const output=this.platform.canvas.createProcessor({}).resize({width:8,height:48}).toCanvas();expect(this.pendingColorReads.size).toBe(0);output.getContext('2d').getImageData(0,0,8,48);return [];});
+        const port=await createBrowserMangaOcr();mocks.recognize.mockImplementationOnce(async()=>({results:await mocks.recognitors[0].run({},[])}));
+        await port.recognize('frozen',recognitionOptions);expect(sample.native).toHaveBeenCalledOnce();expect(sample.context.getImageData).toBe(sample.native);await port.destroy();
+    });
+    it('原处理器无2d上下文时保持原返回对象，不新增回读或吞掉原后续错误',async()=>{
+        mocks.sessions=[undefined,{run:vi.fn()}];const sample=colorPort();sample.canvas.getContext.mockReturnValue(null as any);
+        mocks.recognitionRun.mockImplementation(async function(this:any){expect(this.platform.canvas.createProcessor({}).resize({width:8,height:48})).toBe(sample.returned);return [];});
+        const port=await createBrowserMangaOcr();mocks.recognize.mockImplementationOnce(async()=>({results:await mocks.recognitors[0].run({},[])}));await port.recognize('null',recognitionOptions);expect(sample.native).not.toHaveBeenCalled();await port.destroy();
+    });
+    it('同一原页的两个瓦片与气泡共享2M颜色预算，超预算仍做原单读且新页重置',async()=>{
+        mocks.sessions=[undefined,{run:vi.fn()}];const sample=colorPort(256),seen:number[]=[];
+        const pagePixels=new Uint8ClampedArray(2400*200*4);for(let i=3;i<pagePixels.length;i+=4)pagePixels[i]=255;
+        for(let y=40;y<90;y++)for(let x=30;x<80;x++)pagePixels.fill(255,(y*2400+x)*4,(y*2400+x)*4+4);
+        const factory=vi.mocked(document.createElement).getMockImplementation()!;vi.mocked(document.createElement).mockImplementation(()=>{const c=factory('canvas');mocks.contexts.at(-1).getImageData.mockReturnValue({data:pagePixels});return c;});
+        mocks.recognitionRun.mockImplementation(async function(this:any){const output=this.platform.canvas.createProcessor({}).resize({width:256,height:48}).toCanvas();seen.push(output.getContext('2d').getImageData(0,0,256,48).data[(256+2)*4]);return [];});
+        let call=0;const adapters=watchPages(),port=await createBrowserMangaOcr(),recognitor=mocks.recognitors[0];mocks.recognize.mockImplementation(async()=>{const count=[81,81,2][call++%3];for(let i=0;i<count;i++)await recognitor.run({},[]);return {results:[]};});
+        const source={naturalWidth:2400,naturalHeight:200} as HTMLImageElement;
+        for(let i=0;i<2;i++)await port.recognize('tiles+bubble',{...recognitionOptions,decodedImage:source});
+        expect(call).toBe(6);expect(seen).toEqual([...Array(162).fill(76),255,255,...Array(162).fill(76),255,255]);
+        expect(adapters[0].beginPage).toHaveBeenCalledTimes(2);expect(adapters[0].endPage).toHaveBeenCalledTimes(2);expect(sample.native).toHaveBeenCalledTimes(328);expect(sample.context.getImageData).toBe(sample.native);await port.destroy();
+    });
+    it.each(['pre-aborted','fetch','bitmap','canvas'])('原页进入前/获取或解码失败也结束颜色页、清除取消信号且不遗留资源：%s',async stage=>{
+        const native=vi.fn().mockResolvedValue({}),session={run:native},adapters=watchPages();mocks.sessions=[undefined,session];
+        const controller=new AbortController(),failure=new Error('setup '+stage),port=await createBrowserMangaOcr();
+        if(stage==='pre-aborted')controller.abort();
+        if(stage==='fetch')vi.mocked(fetch).mockRejectedValueOnce(failure);
+        if(stage==='bitmap')vi.mocked(createImageBitmap).mockRejectedValueOnce(failure);
+        if(stage==='canvas')vi.mocked(document.createElement).mockImplementationOnce(()=>{throw failure;});
+        if(stage==='pre-aborted')await expect(port.recognize('setup',{...recognitionOptions,signal:controller.signal})).rejects.toMatchObject({name:'AbortError'});
+        else await expect(port.recognize('setup',{...recognitionOptions,signal:controller.signal})).rejects.toBe(failure);
+        expect(adapters[0].endPage).toHaveBeenCalledOnce();expect(adapters[0].beginPage).toHaveBeenCalledTimes(stage==='pre-aborted'?0:1);expect(mocks.bitmapClose).toHaveBeenCalledTimes(stage==='canvas'?1:0);
+        // 页取消信号不得污染原会话下一次调用；不创建第二个模型或释放共享session。
+        controller.abort();await expect(session.run()).resolves.toEqual({});expect(native).toHaveBeenCalledOnce();await port.destroy();
+    });
+    it('初始化中止也结束颜色控制器，初始化首因不被destroy失败覆盖',async()=>{
+        const adapters=watchPages(),failure=new Error('initialize exact');mocks.initialize.mockRejectedValueOnce(failure);mocks.destroy.mockRejectedValueOnce(new Error('cleanup failed'));
+        await expect(createBrowserMangaOcr()).rejects.toBe(failure);expect(adapters[0].beginPage).not.toHaveBeenCalled();expect(adapters[0].endPage).toHaveBeenCalledOnce();
     });
 });
