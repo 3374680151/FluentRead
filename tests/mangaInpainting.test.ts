@@ -186,6 +186,40 @@ describe('漫画局部神经修补',()=>{
         await runtime.repair(pixels(),128,128,[region],undefined,undefined,undefined,[{color:'rgb(255,255,255)',uniform:true}]);
         expect(mocks.background).not.toHaveBeenCalled();expect(create).not.toHaveBeenCalled();await runtime.dispose();
     });
+    it('仅显式独占均匀页复用输入视图，默认和关闭选项继续返回独立副本',async()=>{
+        const create=vi.fn(),runtime=createMangaInpaintingRuntime(create),storage=new Uint8ClampedArray(128*128*4+32).fill(37);
+        const input=storage.subarray(16,storage.length-16),before=input.slice(),uniform=[{color:'#fff',uniform:true}];
+        for(const options of [undefined,{}, {reuseUniformPixels:false}]){
+            const result=await runtime.repair(input,128,128,[region],undefined,undefined,undefined,uniform,options);
+            expect(result).toEqual(before);expect(result).not.toBe(input);expect(result.buffer).not.toBe(input.buffer);
+            result[0]=99;expect(input).toEqual(before);
+        }
+        const result=await runtime.repair(input,128,128,[region],undefined,undefined,undefined,uniform,{reuseUniformPixels:true});
+        expect(result).toBe(input);expect(result.byteOffset).toBe(16);expect(result).toEqual(before);
+        expect(storage.subarray(0,16).every(value=>value===37)).toBe(true);expect(storage.subarray(storage.length-16).every(value=>value===37)).toBe(true);
+        expect(create).not.toHaveBeenCalled();expect(mocks.background).not.toHaveBeenCalled();expect(vi.getTimerCount()).toBe(0);await runtime.dispose();
+    });
+    it('独占选项不改变复杂或分类不完整页面的原生输入、输出及副本契约',async()=>{
+        const inputs:Float32Array[]=[],port={run:vi.fn(async patch=>{inputs.push(patch.image.slice());return zero(patch);}),release:vi.fn()};
+        const runtime=createMangaInpaintingRuntime(async()=>port),input=pixels(),original=input.slice();
+        const uniform={color:'#fff',uniform:true},sparse=Array<{color:string;uniform:boolean}>(2);sparse[0]=uniform;
+        for(const backgrounds of [[uniform,{color:'#fff',uniform:false}],sparse,undefined]){
+            const before=await runtime.repair(input,128,128,[region,region],undefined,undefined,undefined,backgrounds);
+            const split=inputs.length,after=await runtime.repair(input,128,128,[region,region],undefined,undefined,undefined,backgrounds,{reuseUniformPixels:true});
+            expect(after).not.toBe(input);expect(after.buffer).not.toBe(input.buffer);expect(after).toEqual(before);expect(input).toEqual(original);
+            const count=inputs.length-split;expect(inputs.slice(split)).toEqual(inputs.slice(split-count,split));
+        }
+        await runtime.dispose();
+    });
+    it('借用均匀像素仍在异步返回前核对取消，等待模型删除期间不能提前返回引用',async()=>{
+        const create=vi.fn(),runtime=createMangaInpaintingRuntime(create),input=pixels(),uniform=[{color:'#fff',uniform:true}],controller=new AbortController();
+        const canceled=runtime.repair(input,128,128,[region],controller.signal,undefined,undefined,uniform,{reuseUniformPixels:true});controller.abort();
+        await expect(canceled).rejects.toMatchObject({name:'AbortError'});
+        const gate=deferred<void>(),removing=withMangaModelRemoval(()=>gate.promise);let completed=false;
+        const pending=runtime.repair(input,128,128,[region],undefined,undefined,undefined,uniform,{reuseUniformPixels:true}).then(result=>{completed=true;return result;});
+        try{await tick();expect(completed).toBe(false);}finally{gate.resolve();await removing;}
+        expect(await pending).toBe(input);expect(create).not.toHaveBeenCalled();await runtime.dispose();
+    });
     it('两个真实 Offscreen 漫画请求重叠时，确认均匀页不等待另一页的模型，复杂页仍串行',async()=>{
         const gate=deferred<void>(),entered:string[]=[],completed:string[]=[];
         const port={run:vi.fn(async patch=>{await gate.promise;return zero(patch);}),release:vi.fn()};

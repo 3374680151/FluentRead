@@ -38,10 +38,66 @@ function validateQualityFixtureExpectations(fixture) {
         assert.ok(validBox(region.bbox,fixture.width,fixture.height),'Negative regions remain inside the source image');
         assert.ok(!(fixture.regions||[]).some(text=>intersects(text.bbox,region.bbox)),'A negative region contains no declared source text');
     }
-    if(fixture.readingOrder) {
+    const validateOrderReferences=order=>{
+        assert.ok(order.every(id=>{
+            const matches=(fixture.regions||[]).filter(region=>region.id===id);
+            return matches.length===1&&matches[0].vertical===true;
+        }),'Vertical paragraph order references unique actual vertical source regions');
+        assert.ok(order.every(id=>{
+            const anchor=fixture.regions.find(region=>region.id===id).anchor;
+            return typeof anchor==='string'&&normalizeOcrAnchor(anchor).length>0;
+        }),'Vertical paragraph order references normalized nonempty source anchors');
+    };
+    if(fixture.readingOrder!==undefined) {
         assert.ok(Array.isArray(fixture.readingOrder)&&fixture.readingOrder.length>=2&&new Set(fixture.readingOrder).size===fixture.readingOrder.length,'A declared paragraph order uses distinct text region IDs');
-        assert.ok(fixture.readingOrder.every(id=>(fixture.regions||[]).some(region=>region.id===id&&region.vertical)),'Vertical paragraph order references actual vertical source regions');
+        validateOrderReferences(fixture.readingOrder);
     }
+    if(fixture.readingOrderGroups!==undefined) {
+        const groups=fixture.readingOrderGroups;
+        assert.ok(fixture.readingOrder===undefined,'Choose one paragraph order declaration');
+        assert.ok(Array.isArray(groups)&&groups.length>=2&&groups.length<=24,'Independent paragraph groups form a bounded array');
+        const ids=new Set();
+        for(const order of groups) {
+            assert.ok(Array.isArray(order)&&order.length>=2&&new Set(order).size===order.length,'Each paragraph group uses distinct text region IDs');
+            validateOrderReferences(order);
+            for(const id of order){assert.ok(!ids.has(id),'Paragraph groups use distinct source region IDs across speakers');ids.add(id);}
+        }
+    }
+}
+
+/** 同一气泡的主列必须依次同段，不同气泡必须可匹配到不同段；注音不强行混入主列。 */
+function evaluateQualityReadingOrder(fixture,texts) {
+    const groups=fixture.readingOrderGroups;
+    const fallback=fixture.readingOrder??(fixture.regions||[]).filter(region=>region.vertical).sort((a,b)=>b.bbox.x0-a.bbox.x0).map(region=>region.id);
+    const orders=groups??(fallback.length>=2?[fallback]:[]);
+    if(!orders.length)return {qualityFailures:[]};
+    const normalized=texts.map(normalizeOcrAnchor);
+    const checks=orders.map(order=>{
+        const anchors=order.map(id=>fixture.regions.find(region=>region.id===id).anchor);
+        const matches=[];
+        for(const [index,paragraph] of normalized.entries()) {
+            let cursor=0;
+            if(anchors.every(anchor=>{const needle=normalizeOcrAnchor(anchor),position=paragraph.indexOf(needle,cursor);if(position<0)return false;cursor=position+needle.length;return true;}))matches.push(index);
+        }
+        return {anchors,matches,paragraphIndex:matches[0]??-1,found:matches.length>0};
+    });
+    const qualityFailures=checks.filter(check=>!check.found).map(({matches:_matches,...check})=>({type:'vertical-paragraph-order',...check,reason:'Each declared group of main columns must share one actual OCR paragraph in source order'}));
+    if(groups&&qualityFailures.length===0) {
+        // 增广匹配允许不同位置的相同对白，不能把每组都绑定到首个匹配段落。
+        const owners=new Map();
+        function assign(group,seen) {
+            for(const paragraph of checks[group].matches) {
+                if(seen.has(paragraph))continue;seen.add(paragraph);
+                if(!owners.has(paragraph)||assign(owners.get(paragraph),seen)){owners.set(paragraph,group);return true;}
+            }
+            return false;
+        }
+        const separate=checks.every((_,index)=>assign(index,new Set()));
+        if(!separate)qualityFailures.push({type:'vertical-paragraph-separation',reason:'Independent speakers must match distinct actual OCR paragraphs'});
+        for(const [paragraph,group] of owners)checks[group].paragraphIndex=paragraph;
+    }
+    const values=checks.map(({matches:_matches,...check})=>check);
+    return {...(groups?{verticalParagraphGroups:values}:{verticalParagraphOrder:values[0]}),qualityFailures};
 }
 
 function evaluateQualityFixture(fixture,{texts,lines}) {
@@ -81,4 +137,4 @@ function evaluateQualityFixture(fixture,{texts,lines}) {
     return {anchors,negativeDetections,sourceCharacterInventory,qualityFailures};
 }
 
-module.exports={normalizeOcrAnchor,countAnchorOccurrences,validateQualityFixtureExpectations,evaluateQualityFixture};
+module.exports={normalizeOcrAnchor,countAnchorOccurrences,validateQualityFixtureExpectations,evaluateQualityReadingOrder,evaluateQualityFixture};

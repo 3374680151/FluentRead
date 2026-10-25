@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""生成二十种安全、文字可核对的漫画/图片翻译夹具；只需现有 Pillow 和显式本机字体。"""
+"""生成二十八种安全、文字可核对的漫画/图片翻译夹具；只需现有 Pillow 和显式本机字体。"""
 
 from __future__ import annotations
 
@@ -11,7 +11,7 @@ import unicodedata
 from pathlib import Path
 
 import PIL
-from PIL import Image, ImageDraw, ImageFont, ImageOps
+from PIL import Image, ImageDraw, ImageFont, ImageOps, ImageFilter
 
 
 ENGLISH_FONT = Path("/System/Library/Fonts/Supplemental/Arial Bold.ttf")
@@ -82,7 +82,7 @@ class Page:
             "anchor":text,"translation":translation,"bbox":box,"vertical":True,"characterAdvance":advance})
 
     def protect(self, x, y):
-        self.record["protectedProbes"].append({"x":x,"y":y,"rgb":list(self.image.getpixel((x,y)))})
+        self.record["protectedProbes"].append({"x":x,"y":y,"rgb":list(self.image.getpixel((x,y)))[:3]})
 
     def negative(self, box, label):
         """声明确实没有字的画面区域；最终 OCR 原始行框不得进入这里。"""
@@ -98,6 +98,23 @@ class Page:
         self.record["regions"].append({"id":f"line-{len(self.record['regions'])+1}","text":text,"anchor":text,
             "translation":translation,"bbox":{"x0":x+bounds[0],"y0":y+bounds[1],"x1":x+bounds[2],"y1":y+bounds[3]},
             "vertical":False,"rotationDegrees":angle})
+
+    def styled_line(self, text, x, y, font, *, angle=0, blur_radius=0, prefix_length=0,
+                    tail_fill=(15,20,25), translation=""):
+        """先冻结文字，再确定性地改变字形外观；不读取或模拟 OCR 结果。"""
+        raw=self.draw.textbbox((0,0),text,font=font)
+        layer=Image.new("RGBA",(raw[2]-raw[0]+24,raw[3]-raw[1]+24))
+        draw=ImageDraw.Draw(layer);position=(12-raw[0],12-raw[1])
+        draw.text(position,text,font=font,fill=(*tail_fill,255))
+        if prefix_length:draw.text(position,text[:prefix_length],font=font,fill=(10,15,20,255))
+        if blur_radius:layer=layer.filter(ImageFilter.GaussianBlur(blur_radius))
+        if angle:layer=layer.rotate(angle,resample=Image.Resampling.BICUBIC,expand=True)
+        bounds=layer.getbbox()
+        if self.image.mode=="RGBA":self.image.alpha_composite(layer,(x,y))
+        else:self.image.paste(layer,(x,y),layer)
+        self.record["regions"].append({"id":f"line-{len(self.record['regions'])+1}","text":text,"anchor":text,
+            "translation":translation,"bbox":{"x0":x+bounds[0],"y0":y+bounds[1],"x1":x+bounds[2],"y1":y+bounds[3]},
+            "vertical":False,"rotationDegrees":angle,"blurRadius":blur_radius,"blackPrefixLength":prefix_length})
 
 
 def generate(output: Path, english: Path, japanese: Path, handwriting: Path = HANDWRITING_FONT,
@@ -364,6 +381,131 @@ def generate(output: Path, english: Path, japanese: Path, handwriting: Path = HA
     p.negative((20,15,115,110),"header-avatar-icon");p.negative((120,920,885,1215),"wordless-landscape-attachment")
     p.protect(745,990);p.protect(360,1140);pages.append(p)
 
+    # 第四轮：先声明真值，再绘制易混字、复合排版和无字纹理；旧二十张仍逐字节保持。
+    p=Page("confusable-signs-clear-soft",(2400,1500),"en","paired clear and mildly blurred physical labels retain true OT, OO, IT and mixed alphanumeric identifiers without semantic correction",color=(193,203,205))
+    p.record["stressors"]=["true-OT-not-07","O0-I1-Z2-S5-T7-B8","paired-clear-soft","real-duplicate-occurrences"]
+    labels=["NOTE OT","O0 I1 1I Z2 2Z S5 5S T7 7T B8 8B","NOTE 07","CODE OO","CHECK IT"]
+    for column,left in enumerate([65,1255]):
+        for row,label in enumerate(labels):
+            top=70+row*275
+            p.draw.rounded_rectangle((left,top,left+1080,top+215),radius=12,fill=(247,245,225),outline=(63,78,78),width=6)
+            for cx in [left+22,left+1058]:p.draw.ellipse((cx-5,top+17,cx+5,top+27),fill=(93,103,105))
+            p.styled_line(label,left+55,top+70,mono(34 if row==1 else 52),blur_radius=0.7 if column else 0,
+                          translation="保留实际标牌和序列号。")
+    p.draw.rectangle((1170,100,1230,1430),fill=(94,114,122))
+    for y in range(150,1400,135):p.draw.line((1175,y,1225,y+40),fill=(186,195,194),width=4)
+    p.negative((1160,95,1240,1440),"unlabelled-centre-brace");p.protect(1200,750);pages.append(p)
+
+    p=Page("oblique-black-prefix-gray-tail",(1600,1350),"en","full sentences on angled sign strips with a black first word or letter and a gray remaining line",color=(204,216,215))
+    p.record["stressors"]=["mixed-foreground-contrast","black-prefix","positive-and-negative-slant"]
+    for box in [[(90,80),(1460,40),(1510,340),(145,395)],[(100,475),(1430,530),(1390,825),(55,775)],[(145,955),(1470,900),(1515,1190),(110,1260)]]:
+        p.draw.polygon(box,fill=(243,240,220),outline=(64,78,74),width=5)
+    p.styled_line("WE ARE STILL ON THE PLATFORM",160,100,en(48),angle=7,prefix_length=2,tail_fill=(134,139,127),translation="我们仍在站台上。")
+    p.styled_line("I WILL KEEP THE NOTE",200,570,en(58),angle=-8,prefix_length=1,tail_fill=(143,143,130),translation="我会保存这张纸条。")
+    p.styled_line("A QUIET STOP AFTER RAIN",220,955,en(54),angle=6,prefix_length=1,tail_fill=(135,141,132),translation="雨后安静的一站。")
+    for x in [40,1510]:p.draw.rectangle((x,390,x+25,470),fill=(77,108,113))
+    p.negative((25,385,80,475),"left-sign-bracket");p.protect(50,430);pages.append(p)
+
+    p=Page("vertical-dialogue-ruby-neighbors",(1280,1700),"ja","two separate vertical dialogue balloons with four main columns, three neighboring ruby annotations and an outside caption")
+    p.record["stressors"]=["four-main-vertical-columns","three-ruby-neighbors","separate-speaker-balloons","outside-caption"]
+    p.panel((25,25,1255,1675),fill=(238,234,219));p.balloon((650,95,1210,1165));p.balloon((80,285,610,1360))
+    p.vertical("「星を見に行こう」",1050,210,ja(38),advance=50,translation="去看星星吧。")
+    p.vertical("切符は二枚あるよ",900,210,ja(38),advance=50,translation="我有两张车票。")
+    p.vertical("ほし",1100,260,ja(20),advance=24,translation="星星")
+    p.record["regions"][-1]["role"]="furigana"
+    p.vertical("きっぷ",950,210,ja(20),advance=24,translation="车票")
+    p.record["regions"][-1]["role"]="furigana"
+    p.vertical("雨がやんだら出発",460,440,ja(38),advance=50,translation="雨停后出发。")
+    p.vertical("小さな橋で待って",300,440,ja(38),advance=50,translation="在小桥边等我。")
+    p.vertical("はし",350,590,ja(20),advance=24,translation="桥")
+    p.record["regions"][-1]["role"]="furigana"
+    p.record["readingOrderGroups"]=[["line-1","line-2"],["line-5","line-6"]]
+    p.line("午後七時の約束",710,1510,ja(42),translation="下午七点的约定。")
+    p.draw.arc((80,1390,550,1620),180,355,fill=(76,118,139),width=20)
+    p.draw.line((90,1535,540,1535),fill=(76,118,139),width=8)
+    p.negative((65,1380,575,1645),"wordless-arched-bridge");p.protect(300,1510);pages.append(p)
+
+    p=Page("newspaper-columns-photo-inset",(1500,1900),"en","three narrow newspaper columns separated by thin rules, serif body lines and a wordless photo inset with its own small caption",color=(242,235,215))
+    p.record["stressors"]=["three-column-newspaper","thin-serif-body","photo-inset-caption","vertical-rules"]
+    for y in range(0,1900,17):p.draw.line((0,y,1499,y),fill=(233,227,208),width=1)
+    p.line("THE EVENING READER",170,75,en(76),translation="晚间读者")
+    p.draw.line((70,200,1430,200),fill=(54,58,52),width=4)
+    columns=[("Readers share","a quiet corner","after the storm."),("A paper bird","crossed the town","before sunrise."),("The last train","will leave from","platform eight.")]
+    for column,lines in enumerate(columns):
+        x=95+column*470
+        for row,value in enumerate(lines):p.line(value,x,290+row*95,italic(43),translation="报纸中的原始报道。")
+    for x in [510,980]:p.draw.line((x,255,x,650),fill=(86,89,78),width=2)
+    p.draw.rectangle((300,750,1200,1360),fill=(180,197,190),outline=(57,74,70),width=4)
+    p.draw.polygon([(320,1335),(550,900),(785,1335)],fill=(127,157,141))
+    p.draw.polygon([(655,1335),(925,960),(1180,1335)],fill=(143,170,151))
+    p.draw.arc((410,1110,1090,1430),180,355,fill=(84,113,107),width=35)
+    p.line("A bridge above the river.",385,1410,sans(31),translation="河流上方的一座桥。")
+    p.line("FIELD REPORT 2026",150,1660,mono(36),translation="2026现场报道")
+    p.negative((320,780,1180,1340),"newspaper-wordless-landscape");p.protect(550,1220);p.protect(1000,1320);pages.append(p)
+
+    p=Page("border-connected-second-lines",(1500,1400),"en","mandatory second lines share ink with enclosing borders while an outside caption stays separate",color=(227,230,221))
+    p.record["stressors"]=["text-touches-frame","mandatory-second-line","outside-narration","local-omission-trap"]
+    p.draw.rectangle((70,100,1430,335),fill=(255,252,229),outline=(20,31,34),width=4)
+    p.line("THE FIRST LINE IS ONLY THE START",70,125,en(43),translation="第一行只是开始。")
+    second=p.line("THE SECOND LINE MUST STAY",70,303,en(43),translation="第二行必须保留。")
+    assert second[3]>=331,"The lower glyphs must actually meet the frame ink"
+    p.line("A small note outside the frame.",260,420,sans(42),translation="框外还有一条小旁白。")
+    p.draw.polygon([(100,700),(260,555),(420,700),(350,875),(185,875)],fill=(100,145,145),outline=(47,77,79),width=5)
+    for x in [130,190,250,310,370]:p.draw.line((x,690,x-20,820),fill=(214,222,193),width=5)
+    p.draw.rectangle((445,990,1415,1190),fill=(249,247,226),outline=(20,31,34),width=5)
+    p.line("READ THE WHOLE MESSAGE",445,1005,en(45),translation="请读完整条消息，")
+    p.line("EVEN THE QUIET LAST WORDS",445,1144,en(43),translation="包括轻声说出的最后几个字。")
+    p.negative((90,535,435,900),"unlettered-kite");p.protect(260,750);pages.append(p)
+
+    p=Page("wordless-dense-pseudo-script",(1600,1400),"ja","dense original linework made only from geometry, with no assigned letters, numbers, words or speech; texture may resemble writing",color=(242,237,218))
+    p.record["stressors"]=["dense-wordless-line-art","pseudo-script-texture","small-loop-grid","full-page-negative"]
+    for row in range(14):
+        for column in range(16):
+            x=42+column*96;y=35+row*95;shade=55+(row*17+column*13)%75
+            for stroke in range(4):
+                dx=(column*13+row*7+stroke*19)%55;dy=(row*11+column*5+stroke*23)%55
+                p.draw.arc((x+dx//2,y+dy//2,x+40+dx//2,y+42+dy//2),35+stroke*53,205+stroke*29,fill=(shade,shade+8,shade+5),width=2)
+                p.draw.line((x+dx,y+dy,x+12+(dy*3)%58,y+13+(dx*5)%62),fill=(shade+22,shade+27,shade+18),width=2)
+            p.draw.line((x+6,y+79,x+77,y+75),fill=(159,162,141),width=1)
+    p.record["expectedNoText"]=True;p.negative((0,0,1600,1400),"entire-unlettered-texture")
+    p.protect(500,500);p.protect(1000,900);pages.append(p)
+
+    p=Page("transparent-notification-overlay",(1400,1000),"en","true RGBA notification overlay with transparent outer pixels, translucent panels, opaque source text and wordless UI icons")
+    p.image=Image.new("RGBA",p.image.size,(0,0,0,0));p.draw=ImageDraw.Draw(p.image)
+    p.record["stressors"]=["true-RGBA-alpha","translucent-overlay-ui","small-time","opaque-protected-art"]
+    p.record["imageMode"]="RGBA"
+    p.draw.rounded_rectangle((65,65,1335,930),radius=55,fill=(231,242,247,185),outline=(76,115,136,240),width=5)
+    p.draw.ellipse((110,105,250,245),fill=(83,127,145,255));p.draw.ellipse((145,133,215,193),fill=(210,229,229,255))
+    p.line("MIRA",300,140,en(48),translation="米拉")
+    p.line("TRANSLATION READY",135,320,en(62),translation="翻译已就绪")
+    p.line("Original artwork stays visible.",135,460,sans(48),translation="原始画面仍然可见。")
+    p.line("Retry only this image.",135,560,sans(48),translation="只重试这张图片。")
+    p.line("09:17",1100,160,mono(30),translation="09:17")
+    p.draw.rounded_rectangle((135,685,590,780),radius=26,fill=(49,95,120,255))
+    p.draw.rounded_rectangle((705,685,1240,780),radius=26,fill=(218,230,231,255),outline=(99,127,136,255),width=3)
+    p.line("OPEN",300,715,en(34),fill=(255,255,255),translation="打开")
+    p.line("DISMISS",875,715,en(34),translation="关闭")
+    p.draw.rounded_rectangle((135,835,1240,855),radius=10,fill=(136,179,180,255))
+    p.negative((95,90,265,260),"unlettered-avatar");p.negative((120,820,1255,870),"unlabelled-progress-track")
+    p.protect(180,170);p.protect(300,845);pages.append(p)
+
+    p=Page("map-inset-rotated-marginalia",(1500,1800),"en","an illustrated route map with two orthogonally rotated margin labels, a horizontal serif callout and a small inset caption",color=(229,236,214))
+    p.record["stressors"]=["plus-minus-90-degree-text","map-grid","serif-callout","small-inset-caption"]
+    for x in range(150,1370,85):p.draw.line((x,100,x,1630),fill=(186,204,180),width=2)
+    for y in range(100,1650,85):p.draw.line((150,y,1370,y),fill=(186,204,180),width=2)
+    p.draw.line((470,90,700,340,580,650,850,910,760,1250,1100,1620),fill=(108,169,188),width=70)
+    p.draw.polygon([(240,550),(355,400),(500,590),(390,740)],fill=(133,166,121),outline=(82,121,91),width=4)
+    p.styled_line("NORTH OF THE OLD BRIDGE",25,220,en(43),angle=90,translation="老桥的北边")
+    p.styled_line("RIVER WALK 2026",1390,430,en(42),angle=-90,translation="2026河畔漫步")
+    p.draw.rounded_rectangle((300,800,1320,1010),radius=25,fill=(254,250,222),outline=(102,123,90),width=4)
+    p.line("Meet at the stone steps.",365,875,italic(60),translation="在石阶旁见面。")
+    p.draw.rectangle((600,1190,1325,1540),fill=(216,225,220),outline=(61,98,93),width=5)
+    p.draw.arc((680,1300,1250,1630),180,355,fill=(90,123,112),width=35)
+    p.line("The small bridge is still open.",625,1580,sans(31),translation="小桥仍然开放。")
+    p.line("ZONE B8",945,1665,mono(42),translation="B8区域")
+    p.negative((200,375,525,765),"unlabelled-map-hill");p.negative((620,1210,1305,1515),"bridge-inset-art")
+    p.protect(350,570);p.protect(1000,1425);pages.append(p)
+
     records=[]
     for p in pages:
         for region in p.record["regions"]:
@@ -403,7 +545,8 @@ def generate(output: Path, english: Path, japanese: Path, handwriting: Path = HA
         thumb=p.image.copy();thumb.thumbnail((360,440))
         x=20+(i%3)*400;y=35+(i//3)*520
         draw.text((x,y-24),p.record["name"],font=en(17),fill="black")
-        sheet.paste(thumb,(x+(360-thumb.width)//2,y))
+        position=(x+(360-thumb.width)//2,y)
+        sheet.paste(thumb,position,thumb if thumb.mode=="RGBA" else None)
     sheet.save(output/"contact-sheet.png",format="PNG",optimize=False)
     cards="\n".join(f'<article><h2>{html.escape(r["name"])}</h2><p>{html.escape(r["scene"])}</p><img src="{r["file"]}" alt="{html.escape(r["name"])}"></article>' for r in records)
     (output/"gallery.html").write_text('<!doctype html><meta charset="utf-8"><title>FluentRead #1068 corpus</title><style>body{font:16px system-ui;background:#eee;margin:24px}main{display:grid;grid-template-columns:repeat(3,1fr);gap:24px}article{background:white;padding:16px}h2{font-size:18px}img{width:100%;height:auto}</style><h1>FluentRead #1068 deterministic manga corpus</h1><p>'+str(len(records))+' independent OCR inputs, including a wordless negative page. Ground truth: manifest.json.</p><main>'+cards+'</main>')

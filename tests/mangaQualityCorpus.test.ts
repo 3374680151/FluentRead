@@ -3,13 +3,46 @@ import {describe,expect,it} from 'vitest';
 import {createRequire} from 'node:module';
 import {readFileSync} from 'node:fs';
 import {createHash} from 'node:crypto';
+import {runInNewContext} from 'node:vm';
+import ts from 'typescript';
 const require=createRequire(import.meta.url);
-const {normalizeOcrAnchor,countAnchorOccurrences,validateQualityFixtureExpectations,evaluateQualityFixture}=require('../scripts/testing/manga-quality-corpus.cjs');
+const {normalizeOcrAnchor,countAnchorOccurrences,validateQualityFixtureExpectations,evaluateQualityFixture,evaluateQualityReadingOrder}=require('../scripts/testing/manga-quality-corpus.cjs');
 const box=(x0:number,y0:number,x1:number,y1:number)=>({x0,y0,x1,y1});
 const text=(sourceText:string,bbox=box(10,10,90,30),sourceBoxes?:ReturnType<typeof box>[])=>({text:'受控译文',sourceText,bbox,...(sourceBoxes?{sourceBoxes}:{})});
 const fixture=(overrides:any={})=>({name:'actual-quality',width:400,height:300,expectedSource:['WAIT FOR ME','WAIT FOR ME','GO NOW'],expectedAnchors:['WAIT FOR ME','GO NOW'],anchorOccurrences:{'WAIT FOR ME':2,'GO NOW':1},regions:[{id:'line-1',bbox:box(10,10,90,30)}],forbiddenRegions:[{id:'robot',bbox:box(200,100,300,250)}],...overrides});
 const naturalRoot=new URL('./fixtures/manga-natural/',import.meta.url);
 const naturalManifest=JSON.parse(readFileSync(new URL('manifest.json',naturalRoot),'utf8'));
+
+describe('真实漫画runner多轮layout采集的有界容量',()=>{
+    it('32景五轮保留全部160次响应及预留，承诺以外的记录仍有硬上限',async()=>{
+        const source=readFileSync(new URL('../scripts/testing/run-manga-translation-test.cjs',import.meta.url),'utf8');
+        const ast=ts.createSourceFile('runner.cjs',source,ts.ScriptTarget.Latest,true,ts.ScriptKind.JS);
+        let initializer='',observer='';
+        const visit=(node:ts.Node)=>{
+            if(ts.isVariableDeclaration(node)&&node.name.getText(ast)==='layoutTraceLimit')initializer=node.initializer!.getText(ast);
+            if(ts.isCallExpression(node)&&node.expression.getText(ast)==='worker.evaluate'&&node.arguments[0]?.getText(ast).startsWith('({live,trace,traceLayout,layoutTraceLimit})=>'))observer=node.arguments[0].getText(ast);
+            ts.forEachChild(node,visit);
+        };
+        visit(ast);expect(initializer).not.toBe('');expect(observer).not.toBe('');
+        const limit=runInNewContext(initializer,{qualityFixtures:Array(32),pipelineRounds:5});
+        expect(limit).toBeGreaterThanOrEqual(160);expect(limit).toBeLessThanOrEqual(168);
+        const response={lines:[{text:'受控译文',sourceText:'actual source',bbox:box(10,10,90,30)}]};
+        const chrome={runtime:{sendMessage:(_message:unknown,callback?:Function)=>{if(callback)callback(response);return Promise.resolve(response);},onMessage:{addListener:()=>undefined}}};
+        const sandbox:any={chrome,fetch:()=>{throw new Error('Layout trace replay must not fetch');}};
+        const observe=runInNewContext(`(${observer})`,sandbox);
+        observe({live:false,trace:false,traceLayout:true,layoutTraceLimit:limit});
+        for(let index=0;index<limit+3;index++){
+            const message={type:'FLUENT_READ_IMAGE_TRANSLATE_OFFSCREEN',requestId:String(index)};
+            if(index%2)chrome.runtime.sendMessage(message,(value:unknown)=>expect(value).toBe(response));
+            else expect(await chrome.runtime.sendMessage(message)).toBe(response);
+        }
+        const results=sandbox.__mangaTest.layoutResults;
+        expect(results).toHaveLength(limit);expect(results[159].requestId).toBe('159');
+        expect(results[159].lines[0].sourceText).toBe('actual source');
+        await chrome.runtime.sendMessage({type:'UNRELATED',requestId:'host'});
+        expect(results).toHaveLength(limit);
+    });
+});
 
 describe('漫画 source truth、重复锚点与负场景质量门禁',()=>{
     it('Unicode全角及空白规范化不改变真实重复次数，并保留重叠子串计数',()=>{
@@ -74,10 +107,49 @@ describe('漫画 source truth、重复锚点与负场景质量门禁',()=>{
         expect(()=>evaluateQualityFixture(fixture(),{texts:[],lines:[text('bad',box(-1,0,20,20))]})).toThrow('valid image coordinates');
     });
     it('竖排主列顺序显式引用主文字，较小注音可独立记录而不强行混入段落断言',()=>{
-        const f=fixture({regions:[{id:'main-right',bbox:box(150,20,180,90),vertical:true},{id:'main-left',bbox:box(100,20,130,90),vertical:true},{id:'furigana',bbox:box(185,20,195,50),vertical:true}],readingOrder:['main-right','main-left']});
+        const f=fixture({expectedSource:['WAIT FOR ME','GO NOW','ふりがな'],expectedAnchors:['WAIT FOR ME','GO NOW','ふりがな'],anchorOccurrences:{'WAIT FOR ME':1,'GO NOW':1,'ふりがな':1},regions:[{id:'main-right',text:'WAIT FOR ME',anchor:'WAIT FOR ME',bbox:box(150,20,180,90),vertical:true},{id:'main-left',text:'GO NOW',anchor:'GO NOW',bbox:box(100,20,130,90),vertical:true},{id:'furigana',text:'ふりがな',anchor:'ふりがな',bbox:box(185,20,195,50),vertical:true}],readingOrder:['main-right','main-left']});
         expect(()=>validateQualityFixtureExpectations(f)).not.toThrow();
-        expect(()=>validateQualityFixtureExpectations({...f,readingOrder:['main-right','missing']})).toThrow('references actual vertical source regions');
+        expect(()=>validateQualityFixtureExpectations({...f,readingOrder:['main-right','missing']})).toThrow('actual vertical source regions');
         expect(()=>validateQualityFixtureExpectations({...f,readingOrder:['main-right','main-right']})).toThrow('distinct text region IDs');
+    });
+    it('旧读序声明不能用false、0、空串或null关闭门禁，引用缺少有效锚点或有歧义的ID须提前拒绝',()=>{
+        const regions=[{id:'right',text:'GO NOW',anchor:'GO NOW',bbox:box(100,20,130,90),vertical:true},{id:'left',text:'WAIT FOR ME',anchor:'WAIT FOR ME',bbox:box(50,20,80,90),vertical:true}];
+        const f=fixture({regions,expectedSource:['GO NOW','WAIT FOR ME'],expectedAnchors:['GO NOW','WAIT FOR ME'],anchorOccurrences:{'GO NOW':1,'WAIT FOR ME':1},readingOrder:['right','left']});
+        expect(()=>validateQualityFixtureExpectations(f)).not.toThrow();
+        for(const readingOrder of [false,0,'',null])expect(()=>validateQualityFixtureExpectations({...f,readingOrder})).toThrow();
+        for(const anchor of [undefined,'','…'])expect(()=>validateQualityFixtureExpectations({...f,regions:regions.map((region,index)=>index===0?{...region,anchor}:region)})).toThrow();
+        expect(()=>validateQualityFixtureExpectations({...f,regions:[...regions,{...regions[0],anchor:'AMBIGUOUS'}]})).toThrow();
+    });
+    it('两位说话人的竖排气泡分别声明读序，拒绝无效、重复或跨组复用文字ID',()=>{
+        const regions=['RIGHT FIRST','RIGHT SECOND','LEFT FIRST','LEFT SECOND'].map((value,index)=>({id:`main-${index}`,text:value,anchor:value,bbox:box(20+index*30,20,40+index*30,90),vertical:true}));
+        const source=regions.map(region=>region.text),groups=[['main-0','main-1'],['main-2','main-3']];
+        const f=fixture({regions,expectedSource:source,expectedAnchors:source,anchorOccurrences:Object.fromEntries(source.map(value=>[value,1])),readingOrderGroups:groups});
+        expect(()=>validateQualityFixtureExpectations(f)).not.toThrow();
+        for(const readingOrderGroups of [[['main-0','main-1']],[['main-0','main-0'],['main-2','main-3']],[['main-0','main-1'],['main-1','main-3']],[['main-0','missing'],['main-2','main-3']]]) {
+            expect(()=>validateQualityFixtureExpectations({...f,readingOrderGroups})).toThrow();
+        }
+        expect(()=>validateQualityFixtureExpectations({...f,readingOrder:['main-0','main-1']})).toThrow();
+        expect(()=>validateQualityFixtureExpectations({...f,regions:regions.map((region,index)=>index===3?{...region,vertical:false}:region)})).toThrow();
+        for(const anchor of [undefined,'','…'])expect(()=>validateQualityFixtureExpectations({...f,regions:regions.map((region,index)=>index===2?{...region,anchor}:region)})).toThrow();
+        expect(()=>validateQualityFixtureExpectations({...f,regions:[...regions,{...regions[2],anchor:'AMBIGUOUS'}]})).toThrow();
+    });
+    it('每个气泡内都必须先右后左且不同气泡各占实际段落，不能用合并段落掩盖错序',()=>{
+        const source=['RIGHT FIRST','RIGHT SECOND','LEFT FIRST','LEFT SECOND'];
+        const regions=source.map((value,index)=>({id:`main-${index}`,text:value,anchor:value,bbox:box(20+index*30,20,40+index*30,90),vertical:true}));
+        const f=fixture({regions,expectedSource:source,expectedAnchors:source,anchorOccurrences:Object.fromEntries(source.map(value=>[value,1])),readingOrderGroups:[['main-0','main-1'],['main-2','main-3']]});
+        const actual=['RIGHT FIRST RIGHT SECOND','LEFT FIRST LEFT SECOND'];
+        expect(evaluateQualityReadingOrder(f,actual).qualityFailures).toEqual([]);
+        expect(evaluateQualityReadingOrder(f,[actual[1],actual[0]]).qualityFailures).toEqual([]);
+        for(const reversed of [['RIGHT SECOND RIGHT FIRST',actual[1]],[actual[0],'LEFT SECOND LEFT FIRST']]) {
+            expect(evaluateQualityReadingOrder(f,reversed).qualityFailures).toContainEqual(expect.objectContaining({type:'vertical-paragraph-order'}));
+        }
+        expect(evaluateQualityReadingOrder(f,[actual.join(' ') ]).qualityFailures).toContainEqual(expect.objectContaining({type:'vertical-paragraph-separation'}));
+        // 两个气泡说同一句话仍是两个真实段落，不能都绑定到first-match。
+        const repeated=source.map((_value,index)=>index%2?'WAIT HERE':'COME ALONG');
+        const duplicateDialogue={...f,regions:regions.map((region,index)=>({...region,text:repeated[index],anchor:repeated[index]})),expectedSource:repeated,expectedAnchors:['COME ALONG','WAIT HERE'],anchorOccurrences:{'COME ALONG':2,'WAIT HERE':2}};
+        expect(()=>validateQualityFixtureExpectations(duplicateDialogue)).not.toThrow();
+        expect(evaluateQualityReadingOrder(duplicateDialogue,['COME ALONG WAIT HERE','COME ALONG WAIT HERE']).qualityFailures).toEqual([]);
+        expect(evaluateQualityReadingOrder(duplicateDialogue,['COME ALONG WAIT HERE']).qualityFailures).toContainEqual(expect.objectContaining({type:'vertical-paragraph-separation'}));
     });
     it('日英混排与全角价格保留精确文字，数字0误认成拉丁O必须失败',()=>{
         const f=fixture({expectedSource:['桃の紅茶 380円','PEACH TEA'],expectedAnchors:['桃の紅茶 380円','PEACH TEA'],anchorOccurrences:{'桃の紅茶 380円':1,'PEACH TEA':1}});
@@ -106,15 +178,45 @@ describe('漫画 source truth、重复锚点与负场景质量门禁',()=>{
         expect(result.sourceCharacterInventory.excess).toEqual([]);
         expect(result.qualityFailures).toEqual([expect.objectContaining({type:'artwork-ocr-false-positive',sourceText:'…',regionId:'robot'})]);
     });
+    it('真OT与07、OO、IT和混合序列号独立保留，不能以数字纠错覆盖合法字母',()=>{
+        const labels=['NOTE OT','NOTE 07','CODE OO','CHECK IT','O0 I1 1I Z2 2Z S5 5S T7 7T B8 8B'];
+        const source=[...labels,...labels],f=fixture({expectedSource:source,expectedAnchors:labels,anchorOccurrences:Object.fromEntries(labels.map(label=>[label,2]))});
+        expect(()=>validateQualityFixtureExpectations(f)).not.toThrow();
+        expect(evaluateQualityFixture(f,{texts:source,lines:source.map(value=>text(value))}).qualityFailures).toEqual([]);
+        const replaced=source.map(value=>value.replace(/\bOT\b/gu,'07'));
+        const result=evaluateQualityFixture(f,{texts:replaced,lines:replaced.map(value=>text(value))});
+        expect(result.qualityFailures).toContainEqual(expect.objectContaining({type:'ocr-anchor',anchor:'NOTE OT',occurrences:0,expectedOccurrences:2}));
+        expect(result.qualityFailures).toContainEqual(expect.objectContaining({type:'duplicate-anchor',anchor:'NOTE 07',occurrences:4,expectedOccurrences:2}));
+        expect(result.qualityFailures).toContainEqual(expect.objectContaining({type:'unexpected-ocr-characters'}));
+    });
+    it('易混字符互换即使字符库存完全相同也失败，不能把库存等同序列号正确率',()=>{
+        const exact='O0 I1 1I Z2 2Z S5 5S T7 7T B8 8B';
+        const f=fixture({expectedSource:[exact],expectedAnchors:[exact],anchorOccurrences:{[exact]:1}});
+        const shuffled='0O 1I I1 2Z Z2 5S S5 7T T7 8B B8';
+        const result=evaluateQualityFixture(f,{texts:[shuffled],lines:[text(shuffled)]});
+        expect(result.sourceCharacterInventory.excess).toEqual([]);
+        expect(result.qualityFailures).toEqual([expect.objectContaining({type:'ocr-anchor',anchor:exact,occurrences:0})]);
+    });
+    it('斜告示首字、连接边框的第二行及框外旁白均是必需真值，其他正确行不能补偿缺字',()=>{
+        const source=['WE ARE STILL HERE','I WILL KEEP THE NOTE','A QUIET STOP','THE SECOND LINE MUST STAY','A small note outside the frame.'];
+        const f=fixture({expectedSource:source,expectedAnchors:source,anchorOccurrences:Object.fromEntries(source.map(value=>[value,1]))});
+        for(const [index,replacement] of [[0,'E ARE STILL HERE'],[1,'WILL KEEP THE NOTE'],[2,'QUIET STOP'],[3,''],[4,'']] as const) {
+            const actual=source.map((value,line)=>line===index?replacement:value).filter(Boolean);
+            const result=evaluateQualityFixture(f,{texts:actual,lines:actual.map(value=>text(value))});
+            expect(result.sourceCharacterInventory.excess).toEqual([]);
+            expect(result.qualityFailures).toContainEqual(expect.objectContaining({type:'ocr-anchor',anchor:source[index],occurrences:0}));
+        }
+    });
 });
 
 describe('固定原创自然漫画的来源、PNG和独立source truth',()=>{
-    it('两张PNG的长度、SHA与IHDR尺寸均匹配；九条真值、无字区域和保护点坐标自洽',()=>{
-        expect(naturalManifest.fixtures.map((f:any)=>f.name)).toEqual(['natural-station-journey-ink','natural-rain-market-color']);
-        expect(naturalManifest.fixtures.reduce((count:number,f:any)=>count+f.expectedSource.length,0)).toBe(9);
+    it('四张PNG的长度、SHA与IHDR尺寸均匹配；十八条真值、无字区域和保护点坐标自洽',()=>{
+        expect(naturalManifest.fixtures.map((f:any)=>f.name)).toEqual(['natural-station-journey-ink','natural-rain-market-color','natural-orbital-greenhouse-repair','natural-woodland-leaf-boat']);
+        expect(naturalManifest.fixtures.reduce((count:number,f:any)=>count+f.expectedSource.length,0)).toBe(18);
         const provenance=JSON.parse(readFileSync(new URL('provenance.json',naturalRoot),'utf8'));
         expect(provenance).toMatchObject({mode:'built-in image_gen',regenerable:false});
         expect(provenance.inkPrompt).toContain('A QUIET MORNING');expect(provenance.colorPrompt).toContain('THE LAST BUS IS LATE.');
+        expect(provenance.orbitalGreenhousePrompt).toContain('THE PUMP IS STILL WARM.');expect(provenance.woodlandLeafBoatPrompt).toContain('A LEAF CAN BE A BOAT.');
         for(const f of naturalManifest.fixtures) {
             const png=readFileSync(new URL(f.file,naturalRoot));
             expect(png.subarray(0,8)).toEqual(Buffer.from([137,80,78,71,13,10,26,10]));

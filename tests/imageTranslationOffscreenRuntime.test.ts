@@ -151,6 +151,23 @@ describe('Offscreen 图片完整操作生命周期', () => {
         await expect(translateImageInOffscreen('manga','en','',controller.signal,'cancel-manga',true)).rejects.toThrow('已取消');
         expect(canvases[0].toDataURL).not.toHaveBeenCalled();expect(images[0].src).toBe('');
     });
+    it.each([true,false])('漫画独占ImageData启用均匀复用，仅独立修补结果需要拷回：%s',async reuse=>{
+        mocks.mangaRecognize.mockResolvedValue([{...lines[0],fontSize:10}]);
+        const input=new Uint8ClampedArray(32*16*4).fill(91),set=vi.spyOn(input,'set');
+        vi.stubGlobal('document',{createElement:vi.fn(()=>{
+            const canvas=makeCanvas();if(canvases.length===1)canvas.context.getImageData.mockReturnValue({data:input});return canvas;
+        })});
+        mocks.sampleManga.mockReturnValue([{color:'rgb(255,255,255)',uniform:reuse}]);
+        mocks.repair.mockImplementationOnce(async(pixels,_w,_h,_regions,_signal,_preparing,_repair,backgrounds,options)=>{
+            expect(pixels).toBe(input);expect(backgrounds[0].uniform).toBe(reuse);expect(options).toEqual({reuseUniformPixels:true});
+            if(reuse)return pixels;const result=new Uint8ClampedArray(pixels);result[0]=173;return result;
+        });
+        await translateImageInOffscreen('manga','en','',undefined,'owned-pixels',true);
+        expect(set).toHaveBeenCalledTimes(reuse?0:1);expect(input[0]).toBe(reuse?91:173);
+        expect(mocks.mangaDraw.mock.calls[0][1]).toBe(input);
+        expect(canvases[0].context.putImageData).toHaveBeenCalledOnce();expect(canvases[0].context.putImageData).toHaveBeenCalledWith({data:input},0,0);
+        expect(mocks.encode).toHaveBeenCalledOnce();expect(images[0].src).toBe('');expect(canvases.every(canvas=>canvas.width===0&&canvas.height===0)).toBe(true);
+    });
     it.each([false, true])('漫画进度按请求所有权投递，解码宽高可安全回退，带信号=%s', async withSignal => {
         imageOptions.push({naturalWidth: 0, naturalHeight: 0});
         const controller = new AbortController();let notify!: (stage: string, progress?: number) => void;

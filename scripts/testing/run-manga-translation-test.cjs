@@ -11,7 +11,7 @@ const assert = require('node:assert/strict');
 const {createHash} = require('node:crypto');
 const {execFileSync} = require('node:child_process');
 const {ensureImageTranslationModelFiles, defaultImageTranslationModelCacheDirectory, readImageTranslationModelManifest} = require('./image-model-cache.cjs');
-const {normalizeOcrAnchor,validateQualityFixtureExpectations,evaluateQualityFixture} = require('./manga-quality-corpus.cjs');
+const {validateQualityFixtureExpectations,evaluateQualityReadingOrder,evaluateQualityFixture} = require('./manga-quality-corpus.cjs');
 function arg(name, fallback) {const index = process.argv.indexOf(`--${name}`); return index < 0 ? fallback : process.argv[index + 1];}
 let extensionDir = path.resolve(arg('extension-dir', '.output/chrome-mv3'));
 let diagnosticFixture;
@@ -85,6 +85,7 @@ if(errorRecoveryTest)assert.ok(!liveSite&&!liveTranslation&&!readerSmoke&&!canva
     'Error recovery uses only its controlled fixture with prefetch disabled, without live/pipeline/other reader modes');
 const pipelineRounds=Number(arg('pipeline-rounds',qualityManifest?'1':'3'));
 if(pipelineInputs)assert.ok(Number.isInteger(pipelineRounds)&&pipelineRounds>=(qualityManifest?1:2)&&pipelineRounds<=5,qualityManifest?'Quality scenes allow 1–5 bounded rounds':'Measure first use separately from bounded warm runs (2–5 rounds)');
+const layoutTraceLimit=Math.max(100,(qualityFixtures?.length??0)*pipelineRounds+8);
 const graphOverride=arg('pipeline-graph',null);
 const gpuDiagnosis=process.argv.includes('--gpu-diagnosis');
 const forceCpu=process.argv.includes('--pipeline-cpu');
@@ -1028,7 +1029,6 @@ async function verifyPipelinePerformance(extensionId) {
         report.pipeline.push(result);
         if(!fixture?.expectedNoText)assert.ok(texts.length>0,'Actual text recognition ran');
         if(fixture){
-            const normalize=normalizeOcrAnchor;
             result.expectedSource=fixture.expectedSource;
             const layout=await worker.evaluate(id=>globalThis.__mangaTest.layoutResults.find(result=>result.requestId===id),requestId);
             assert.ok(layout,'Quality scene captures its actual offscreen OCR layout');result.ocrLines=layout.lines;
@@ -1038,17 +1038,8 @@ async function verifyPipelinePerformance(extensionId) {
                 result.wordlessPage={noTextTransport:texts.length===0,noBitmap:!displayedBitmap,sourcePreserved:JSON.stringify(await page.locator('.zao-image').first().evaluate(image=>({src:image.src,srcset:image.getAttribute('srcset'),sizes:image.getAttribute('sizes'),style:image.getAttribute('style')})))===JSON.stringify(sourceState)};
                 if(!result.wordlessPage.noBitmap||!result.wordlessPage.sourcePreserved)result.qualityFailures.push({type:'wordless-page-render',reason:'A wordless source must remain visible without a translated bitmap',...result.wordlessPage});
             }
-            const verticalColumns=fixture.readingOrder?fixture.readingOrder.map(id=>fixture.regions.find(region=>region.id===id)):(fixture.regions||[]).filter(region=>region.vertical).sort((a,b)=>b.bbox.x0-a.bbox.x0);
-            if(verticalColumns.length>=2){
-                const anchors=verticalColumns.map(region=>region.anchor);
-                const paragraphIndex=texts.findIndex(text=>{
-                    const paragraph=normalize(text);let cursor=0;
-                    for(const anchor of anchors){const needle=normalize(anchor),index=paragraph.indexOf(needle,cursor);if(index<0)return false;cursor=index+needle.length;}
-                    return true;
-                });
-                result.verticalParagraphOrder={anchors,paragraphIndex,found:paragraphIndex>=0};
-                if(paragraphIndex<0)result.qualityFailures.push({type:'vertical-paragraph-order',...result.verticalParagraphOrder,reason:'Declared main columns must share one actual OCR paragraph in the source right-to-left order'});
-            }
+            const {qualityFailures:orderFailures,...order}=evaluateQualityReadingOrder(fixture,texts);
+            Object.assign(result,order);result.qualityFailures.push(...orderFailures);
             result.protectedPixels=await page.evaluate(async({source,translated,probes})=>{
                 const sample=async src=>{const image=new Image();image.src=src;await image.decode();const canvas=document.createElement('canvas');canvas.width=image.naturalWidth;canvas.height=image.naturalHeight;const ctx=canvas.getContext('2d',{willReadFrequently:true});ctx.drawImage(image,0,0);return {width:canvas.width,height:canvas.height,pixels:probes.map(({x,y})=>Array.from(ctx.getImageData(x,y,1,1).data))};};
                 return {source:await sample(source),translated:await sample(translated)};
@@ -1515,7 +1506,7 @@ await import('./mangaInferenceWorker.real.js');self.removeEventListener('message
         imageTranslationMangaEnabled:true,imageTranslationMangaDownloadConfirmed:true,imageTranslationMangaPromptEnabled:false,imageTranslationHoverEnabled:false,disableFloatingBall:false,
         imageTranslationMangaPrefetchPages:prefetchPages,
         service:'google',from:sourceLanguage,to:targetLanguage,useCache:true,enableAIContext:false,animations:false});
-    await worker.evaluate(({live,trace,traceLayout})=>{
+    await worker.evaluate(({live,trace,traceLayout,layoutTraceLimit})=>{
         const original=globalThis.fetch.bind(globalThis);
         const test=globalThis.__mangaTest={operations:[],inputs:[],requests:[],transportRequests:[],cancellations:[],textBatches:[],progress:[],sourceRequests:[]};
         if(traceLayout){
@@ -1523,7 +1514,7 @@ await import('./mangaInferenceWorker.real.js');self.removeEventListener('message
             const send=chrome.runtime.sendMessage.bind(chrome.runtime);
             chrome.runtime.sendMessage=function(...args){
                 const message=args[0],observe=response=>{
-                    if(message?.type==='FLUENT_READ_IMAGE_TRANSLATE_OFFSCREEN'&&Array.isArray(response?.lines)&&test.layoutResults.length<100)
+                    if(message?.type==='FLUENT_READ_IMAGE_TRANSLATE_OFFSCREEN'&&Array.isArray(response?.lines)&&test.layoutResults.length<layoutTraceLimit)
                         test.layoutResults.push({requestId:message.requestId,lines:response.lines.map(({text,sourceText,bbox,fontSize,sourceBoxes,vertical})=>({text,sourceText,bbox,fontSize,sourceBoxes,vertical}))});
                     return response;
                 };
@@ -1571,7 +1562,7 @@ await import('./mangaInferenceWorker.real.js');self.removeEventListener('message
             if(!live&&/^(?:translate(?:-pa)?\.googleapis\.com|translate\.google\.(?:com|co\.uk))$/.test(endpoint.hostname))throw new Error('Unexpected Google fixture transport');
             return original(input,options);
         };
-    },{live:liveTranslation,trace:traceReader,traceLayout});
+    },{live:liveTranslation,trace:traceReader,traceLayout,layoutTraceLimit});
     await worker.evaluate(async()=>{await chrome.offscreen.createDocument({url:chrome.runtime.getURL('offscreen.html'),reasons:['DOM_PARSER'],justification:'Verify local manga processing in an isolated test profile'});});
     modelObserver=await observeModelDownloads(extensionId);
     if(scrollIntentTest)await modelObserver.command('Runtime.evaluate',{expression:`(()=>{
