@@ -11,6 +11,8 @@ const mocks = vi.hoisted(() => ({
         disableSelectionTranslator: false,
         customSelectionTranslatorHotkey: '',
         selectionTranslatorBidirectional: false,
+        selectionClickSelectEnabled: false,
+        selectionClickSelectHotkey: 'Alt+Shift+S',
         from: 'auto',
         to: 'zh',
     },
@@ -91,6 +93,8 @@ beforeEach(() => {
         disableSelectionTranslator: false,
         customSelectionTranslatorHotkey: '',
         selectionTranslatorBidirectional: false,
+        selectionClickSelectEnabled: false,
+        selectionClickSelectHotkey: 'Alt+Shift+S',
         from: 'auto',
         to: 'zh',
     });
@@ -124,6 +128,19 @@ function visibleSelection(text: string): Selection {
 }
 
 describe('全文翻译快捷键状态联动', () => {
+    it('两点选取在尚无选区时预留启动键，关闭或受限 frame 不检查选区几何', async () => {
+        mocks.config.selectionClickSelectEnabled = true;
+        const {createContentHotkeyRuntime} = await import('@/src/app/content/hotkeyRuntime');
+        const event = keyboardEvent({key: 'S', code: 'KeyS', shiftKey: true}) as unknown as KeyboardEvent;
+        expect(createContentHotkeyRuntime(() => false).selectionShortcutPorts.shouldReserveSelectionShortcut(event)).toBe(true);
+        expect(mocks.shouldClaimConfiguredHotkey).not.toHaveBeenCalled();
+        expect(mocks.getSelection).not.toHaveBeenCalled();
+        expect(createContentHotkeyRuntime(() => true).selectionShortcutPorts.shouldReserveSelectionShortcut(event)).toBe(false);
+        expect(createContentHotkeyRuntime(() => false, {selectionAvailable: false}).selectionShortcutPorts.shouldReserveSelectionShortcut(event)).toBe(false);
+        mocks.config.selectionClickSelectEnabled = false;
+        expect(createContentHotkeyRuntime(() => false).selectionShortcutPorts.shouldReserveSelectionShortcut(event)).toBe(false);
+    });
+
     it('仅右键触发不占用划词快捷键', async () => {
         mocks.config.selectionTranslatorTrigger = 'contextMenu';
         mocks.config.customSelectionTranslatorHotkey = 'Ctrl+Shift+Y';

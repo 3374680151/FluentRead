@@ -2,6 +2,7 @@
 
 // 使用临时 Edge profile 验证划词翻译的触发矩阵；--context-menu-only 只运行右键入口专项，
 // --lifecycle-only 仅检查宿主节点恢复、启停、路由、失败重试与键盘/窄屏界面。
+// --click-selection-only 只验证按需两点选取；通过 --runtime-diagnostics 传入 CDP 诊断收集器。
 // Popup 快捷抽屉提供独立启用开关与双语/仅译文选择；触发方式、显示延迟和自定义快捷键在完整设置页修改，
 // 两个真实扩展页面同时打开，断言设置页写入、Popup 模式同步与网页中的真实划词手势结果一致。
 // 该脚本只操作本次创建的隔离 profile，不连接用户正在使用的浏览器。
@@ -44,7 +45,12 @@ function parseArgs(argv) {
     zoomOnly: argv.includes('--zoom-only'),
     scrollOnly: argv.includes('--scroll-only'),
     inlineCodeOnly: argv.includes('--inline-code-only'),
+    clickSelectionOnly: argv.includes('--click-selection-only'),
+    runtimeDiagnostics: readArg(argv, 'runtime-diagnostics', ''),
   };
+  if (args.clickSelectionOnly && (!args.runtimeDiagnostics || !fs.existsSync(args.runtimeDiagnostics))) {
+    throw new Error('两点选取专项需要 --runtime-diagnostics <runtime-diagnostics.cjs> 以采集扩展隔离世界及后台诊断');
+  }
   if (!args.playwrightRoot) throw new Error('必须传入 --playwright-root，或设置 PLAYWRIGHT_ROOT');
   args.extensionDir = path.resolve(args.extensionDir);
   args.artifactsDir = path.resolve(args.artifactsDir);
@@ -1188,6 +1194,273 @@ async function triggerShortcut(page, label, settleMs = 450) {
   await page.waitForTimeout(settleMs);
 }
 
+// 两点选取使用真实 CDP 鼠标/键盘创建原生选区；只用 DOM Range 读取字形坐标，不代替被测手势。
+async function runClickSelectionCases({page, popup, context, extensionId, result, args, runtimeDiagnostics}) {
+  const hotkey = 'Alt+Shift+S';
+  const initial = await readStoredConfig(popup);
+  assert(initial.selectionClickSelectEnabled === false && initial.selectionClickSelectHotkey === hotkey,
+    '新临时配置没有保留两点选取默认关闭及推荐快捷键');
+  await patchStoredConfig(popup, {
+    on: true, disableSelectionTranslator: false, selectionTranslatorMode: 'bilingual',
+    selectionTranslatorTrigger: 'icon', selectionTranslatorDelay: 0, selectionTranslatorAutoDismiss: false,
+    selectionClickSelectEnabled: false, selectionClickSelectHotkey: hotkey,
+    from: 'auto', to: 'zh-Hans', hotkey: 'none', floatingBallHotkey: 'none',
+    harness: {...initial.harness, enabled: false},
+  });
+  await resetFixture(page);
+  await page.evaluate(() => {
+    const main = document.querySelector('#selection-test-fixture');
+    main.style.maxWidth = '960px';
+    main.insertAdjacentHTML('beforeend', `
+      <p id="second">Another paragraph keeps its own words and punctuation for reading.</p>
+      <p><a id="click-link" href="#click-result">Follow this link</a>
+      <button id="click-button" type="button">Count click</button>
+      <input id="click-input" aria-label="Host editor" value="Host input" /></p>
+      <p id="click-editable" contenteditable="true">An editable paragraph stays editable.</p>
+      <p id="click-long" style="max-width:720px;word-break:break-all;font-size:14px;line-height:1.2"></p>
+      <p id="click-result">Link target</p>`);
+    document.querySelector('#click-long').textContent = 'abcdefghijklmnopqrst'.repeat(260);
+    document.querySelector('#click-button').addEventListener('click', () => {
+      document.querySelector('#click-button').dataset.clicks = String(Number(document.querySelector('#click-button').dataset.clicks || 0) + 1);
+    });
+  });
+  const text = await page.locator('#target').textContent();
+  const secondText = await page.locator('#second').textContent();
+  const check = (id, evidence = {}) => result.cases.push({id: `click-selection.${id}`, status: 'passed', ...evidence});
+  const state = async () => {
+    const {root} = await getSelectionUiTree(page);
+    const node = findCdpNode(root, candidate => ['start', 'end'].includes(cdpAttribute(candidate, 'data-click-selection-state')));
+    return {state: cdpAttribute(node, 'data-click-selection-state') || 'idle', text: cdpText(node)};
+  };
+  const waitState = async expected => {
+    const deadline = Date.now() + 5000;
+    let current;
+    do {
+      current = await state();
+      if (current.state === expected) return current;
+      await page.waitForTimeout(35);
+    } while (Date.now() < deadline);
+    throw new Error(`两点选取应为 ${expected}，实际为 ${JSON.stringify(current)}`);
+  };
+  const waitAreaSelecting = async expected => {
+    const deadline = Date.now() + 10000;
+    do {
+      const {root} = await getSelectionUiTree(page);
+      const selecting = Boolean(findCdpNode(root, node => hasCdpClass(node, 'fr-area-selecting')));
+      if (selecting === expected) return;
+      await page.waitForTimeout(35);
+    } while (Date.now() < deadline);
+    throw new Error(`圈选选择阶段没有变为 ${expected}`);
+  };
+  const selection = () => page.evaluate(() => {
+    const current = window.getSelection();
+    return {text: current?.toString() || '', collapsed: current?.isCollapsed, anchor: current?.anchorOffset, focus: current?.focusOffset,
+      anchorId: current?.anchorNode?.parentElement?.id, focusId: current?.focusNode?.parentElement?.id};
+  });
+  const point = async (selector, offset, end = false, reveal = false) => {
+    const locate = () => page.locator(selector).evaluate((element, {offset, end}) => {
+      const node = element.firstChild;
+      if (!node || node.nodeType !== Node.TEXT_NODE || offset < 0 || offset >= node.textContent.length) throw new Error('缺少字形坐标');
+      const range = document.createRange(); range.setStart(node, offset); range.setEnd(node, offset + 1);
+      const rect = range.getClientRects()[0];
+      return {x: rect.left + rect.width * (end ? .9 : .1), y: rect.top + rect.height / 2};
+    }, {offset, end});
+    let position = await locate();
+    if (reveal) {
+      await page.evaluate(({y}) => window.scrollBy(0, y - innerHeight / 2), position);
+      position = await locate();
+    }
+    return position;
+  };
+  const clickText = async (selector, offset, end = false, reveal = false) => {
+    const position = await point(selector, offset, end, reveal);
+    await page.mouse.click(position.x, position.y);
+  };
+  const begin = async () => {
+    await activateInputPage(page);
+    await page.evaluate(() => document.activeElement instanceof HTMLElement && document.activeElement.blur());
+    await page.keyboard.press(hotkey);
+    return waitState('start');
+  };
+  const screenshot = async label => {
+    const screenshotPath = path.join(args.artifactsDir, `${label}.png`);
+    await page.screenshot({path: screenshotPath}); result.screenshots.push(screenshotPath);
+  };
+
+  runtimeDiagnostics.setPhase('default-disabled');
+  await activateInputPage(page);
+  await page.keyboard.press(hotkey);
+  await clickText('#target', 0);
+  assert((await state()).state === 'idle', '默认关闭时快捷键不应开始选取');
+  check('disabled-by-default');
+
+  runtimeDiagnostics.setPhase('settings-persistence');
+  let options = await openSelectionOptions(context, extensionId, result);
+  await activateInputPage(options);
+  await options.getByRole('switch', {name: '两点选取', exact: true}).locator('xpath=ancestor::div[contains(concat(" ", normalize-space(@class), " "), " el-switch " )][1]').click();
+  // 开关刚反馈就关闭页面，验证已有配置保存管线能处理短生命周期页面。
+  await options.close();
+  const persistDeadline = Date.now() + 10000;
+  while (!(await readStoredConfig(popup)).selectionClickSelectEnabled) {
+    assert(Date.now() < persistDeadline, '两点选取开关关闭设置页后没有持久化');
+    await page.waitForTimeout(50);
+  }
+  options = await openSelectionOptions(context, extensionId, result);
+  const reopened = await options.getByRole('switch', {name: '两点选取', exact: true}).getAttribute('aria-checked');
+  assert(reopened === 'true', '重新打开设置页后两点选取丢失');
+  const optionsShot = path.join(args.artifactsDir, 'click-selection-settings-reopened.png');
+  await options.screenshot({path: optionsShot}); result.screenshots.push(optionsShot);
+  result.persistenceCases = [{field: 'selectionClickSelectEnabled', before: false, after: true, reopened: true, quickClose: true}];
+  result.quickClose = true;
+  result.crossPageSync = {optionsToStoredConfig: true, pageShortcut: 'verified below'};
+  result.latestWriteWins = 'existing persistence pipeline; this suite checks the new boolean only';
+  await options.close();
+  await page.waitForTimeout(300);
+  check('settings-enable-quick-close-reopen');
+
+  runtimeDiagnostics.setPhase('native-selection-forward-reverse');
+  await begin();
+  await screenshot('click-selection-start');
+  await clickText('#target', 5);
+  await waitState('end');
+  await screenshot('click-selection-end');
+  await clickText('#target', 35, true);
+  await waitState('idle');
+  let selected = await selection();
+  assert(selected.text === text.slice(5, 36) && selected.anchor === 5 && selected.focus === 36,
+    `正向选区错误：${JSON.stringify(selected)}`);
+  await waitForSelectionUi(page, {indicator: true, tooltip: false}, '两点选取复用原划词图标');
+  await screenshot('click-selection-completed');
+  check('forward-native-selection-and-existing-entry', {selected});
+  result.crossPageSync.pageShortcut = true;
+  await begin(); await clickText('#target', 35, true);
+  await waitState('end'); selected = await selection();
+  assert(selected.collapsed === true && selected.anchor === 36 && selected.focus === 36,
+    `重启后第一点未清除旧高亮：${JSON.stringify(selected)}`);
+  check('new-anchor-collapses-previous-native-selection', {selected});
+  await clickText('#target', 5);
+  await waitState('idle'); selected = await selection();
+  assert(selected.text === text.slice(5, 36) && selected.anchor === 36 && selected.focus === 5,
+    `反向选区错误：${JSON.stringify(selected)}`);
+  check('reverse-native-selection', {selected});
+
+  await begin(); await clickText('#target', 8); await clickText('#second', 20, true);
+  await waitState('idle'); selected = await selection();
+  assert(selected.anchorId === 'target' && selected.focusId === 'second'
+    && selected.text.startsWith(text.slice(8)) && selected.text.endsWith(secondText.slice(0, 21)),
+    `跨段选区错误：${JSON.stringify(selected)}`);
+  check('cross-paragraph', {selected});
+
+  runtimeDiagnostics.setPhase('cancel-and-safe-host-interactions');
+  await begin(); await clickText('#target', 4); await page.keyboard.press('Escape');
+  await waitState('idle'); check('escape-cancel');
+  await begin(); await page.keyboard.press(hotkey); await waitState('idle'); check('shortcut-toggle-cancel');
+  await begin(); await page.keyboard.press('PageDown');
+  // 浏览器的可信翻页有动画尾段，先等其完成再测试下一轮字形坐标。
+  await page.waitForTimeout(500); await waitState('start');
+  await page.keyboard.press('a'); await waitState('idle');
+  await page.evaluate(() => window.scrollTo(0, 0));
+  await page.waitForFunction(() => window.scrollY === 0);
+  check('paging-preserves-mode-and-main-key-cancels');
+  await begin(); await clickText('#target', 9); await clickText('#target', 9);
+  await waitState('end'); await clickText('#target', 25, true); await waitState('idle');
+  selected = await selection(); assert(selected.text === text.slice(9, 26), '同点点击后没有保留有效起点');
+  check('same-point-retry', {selected});
+  await begin(); await page.mouse.click(8, 30); await waitState('start');
+  await clickText('#target', 0); await waitState('end'); await page.mouse.click(8, 30); await waitState('end');
+  await page.keyboard.press('Escape'); check('blank-space-keeps-stage');
+  for (const selector of ['#click-button', '#click-input', '#click-editable']) {
+    await begin(); await page.locator(selector).click(); await waitState('idle');
+    if (selector === '#click-button') assert(await page.locator(selector).getAttribute('data-clicks') === '1', '按钮原点击被吞');
+    else assert(await page.locator(selector).evaluate(element => document.activeElement === element), '编辑区原焦点被吞');
+    check(`host-${selector.slice(1)}-passes-through`);
+  }
+  await begin(); await page.locator('#click-link').click(); await waitState('idle');
+  assert(page.url().endsWith('#click-result'), '两点模式吞掉了链接导航');
+  check('host-link-navigation');
+  await page.evaluate(() => {window.scrollTo(0, 0); history.replaceState(null, '', '/');});
+
+  runtimeDiagnostics.setPhase('dynamic-source-scroll-and-limits');
+  await begin(); await clickText('#target', 4);
+  await page.locator('#target').evaluate(element => {element.firstChild.replaceWith(document.createTextNode(element.textContent));});
+  await clickText('#second', 15); await waitState('idle');
+  assert((await selection()).text === '', '已移除的起点被复用');
+  check('replaced-anchor-cancels');
+  await begin(); await clickText('#target', 3);
+  await page.evaluate(() => window.scrollBy(0, 160));
+  await clickText('#second', 30, true); await waitState('idle'); selected = await selection();
+  assert(selected.anchorId === 'target' && selected.focusId === 'second', '滚动使有效起点丢失');
+  check('scroll-between-clicks', {selected});
+  await page.evaluate(() => window.scrollTo(0, 0));
+  await begin(); await clickText('#click-long', 0, false, true); await clickText('#click-long', 4500, true, true);
+  assert((await selection()).text.length <= 4096, '超过4096字符的选区没有被拒绝');
+  await page.keyboard.press('Escape'); await waitState('idle'); check('long-range-rejected');
+  await page.evaluate(() => window.scrollTo(0, 0));
+
+  runtimeDiagnostics.setPhase('pointer-session-mutual-exclusion');
+  const sectionHost = page.locator('[data-fluent-read-ui="section-picker"]');
+  const sectionProfile = {id: 'click-selection-section', enabled: true, action: 'section', hotkey: 'Alt+Shift+R',
+    service: 'microsoft', model: '', targetLanguage: 'zh-Hans', displayMode: 'bilingual', fullPageMode: 'inherit'};
+  const hoverProfile = {...sectionProfile, id: 'click-selection-hover', action: 'hover', hotkey: 'Alt+Shift+H'};
+  await begin();
+  await patchStoredConfig(popup, {sectionTranslationHotkeyEnabled: false, quickTranslationProfiles: [sectionProfile, hoverProfile]});
+  await page.waitForTimeout(200); await waitState('start');
+  await page.keyboard.press(sectionProfile.hotkey);
+  await sectionHost.waitFor({state: 'attached'}); await waitState('idle');
+  check('section-profile-replaces-click-selection', {sectionHosts: await sectionHost.count()});
+  await page.keyboard.press(hotkey);
+  await sectionHost.waitFor({state: 'detached'}); await waitState('start');
+  await clickText('#target', 3); await waitState('end'); await clickText('#target', 22, true);
+  await waitState('idle'); selected = await selection();
+  assert(selected.text === text.slice(3, 23) && await sectionHost.count() === 0,
+    `两点选取接管局部选择器后未独占手势：${JSON.stringify(selected)}`);
+  await page.keyboard.press('Escape'); await waitState('idle');
+  assert(await sectionHost.count() === 0, '退出两点选择后仍残留局部选择器');
+  check('click-selection-replaces-section-picker', {selected});
+  await begin();
+  const hoverPoint = await point('#neighbor', 8);
+  await page.mouse.move(hoverPoint.x, hoverPoint.y);
+  await page.keyboard.press(hoverProfile.hotkey); await waitState('idle');
+  await page.locator('#neighbor .fluent-read-bilingual-content').waitFor({state: 'attached', timeout: 15000});
+  assert(await sectionHost.count() === 0, '悬停方案执行后仍残留局部选择器');
+  check('hover-profile-cancels-click-selection', {fixtureTranslation: await page.locator('#neighbor .fluent-read-bilingual-content').innerText()});
+  await patchStoredConfig(popup, {quickTranslationProfiles: []});
+  await page.waitForTimeout(150);
+  await patchStoredConfig(popup, {selectionAreaEnabled: true, selectionAreaHotkey: 'Shift+Z'});
+  await page.waitForTimeout(150); await begin();
+  await page.keyboard.press('Shift+Z'); await waitState('idle'); await waitAreaSelecting(true);
+  check('area-selection-replaces-click-selection');
+  await page.keyboard.press(hotkey); await waitAreaSelecting(false); await waitState('start');
+  await page.keyboard.press('Escape'); await waitState('idle'); await waitAreaSelecting(false);
+  assert(await sectionHost.count() === 0, '圈选与两点选取切换后仍残留局部选择器');
+  check('click-selection-replaces-area-selection');
+  await patchStoredConfig(popup, {selectionAreaEnabled: false});
+  await page.waitForTimeout(150);
+
+  runtimeDiagnostics.setPhase('disable-unmount-and-native-drag');
+  await begin(); await clickText('#target', 2);
+  await patchStoredConfig(popup, {selectionClickSelectEnabled: false});
+  await waitState('idle'); await page.keyboard.press(hotkey); await waitState('idle');
+  check('config-disable-cancels');
+  const start = await point('#target', 0), end = await point('#target', 20, true);
+  await page.mouse.move(start.x, start.y); await page.mouse.down(); await page.mouse.move(end.x, end.y, {steps: 8}); await page.mouse.up();
+  selected = await selection(); assert(selected.text === text.slice(0, 21), `普通拖选回归：${JSON.stringify(selected)}`);
+  check('ordinary-drag-selection', {selected});
+  await patchStoredConfig(popup, {selectionClickSelectEnabled: true});
+  await page.waitForTimeout(150); await begin(); await clickText('#target', 2);
+  await patchStoredConfig(popup, {disableSelectionTranslator: true, selectionTranslatorMode: 'disabled'});
+  await page.locator('#fluent-read-selection-translator-container').waitFor({state: 'detached'});
+  await page.keyboard.press(hotkey); check('feature-unmount');
+  await assertBackgroundFocus('click selection final');
+  await runtimeDiagnostics.flush(); runtimeDiagnostics.assertClean();
+  result.runtimeDiagnostics = runtimeDiagnostics.snapshot();
+  result.providerEvidence = 'Production extension in temporary isolated Edge, trusted CDP input and native Selection. Pointer-session takeover uses a local Microsoft HTTP response fixture for the hover profile; no live-provider, system shortcut, Firefox, Safari, mobile hardware or cross-frame selection claim.';
+  result.ok = result.consoleErrors.length === 0;
+  assert(result.ok, `两点选取控制台异常：${JSON.stringify(result.consoleErrors)}`);
+  fs.writeFileSync(path.join(args.artifactsDir, 'report.json'), `${JSON.stringify(result, null, 2)}\n`);
+  process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+}
+
 async function main() {
   const args = parseArgs(process.argv.slice(2));
   fs.mkdirSync(args.artifactsDir, { recursive: true });
@@ -1198,12 +1471,13 @@ async function main() {
   let closeBrowser;
   let browserStartAttempted = false;
   let primaryError;
+  let runtimeDiagnostics;
   const result = {
     ok: false,
     extensionDir: args.extensionDir,
     artifactsDir: args.artifactsDir,
     browser: 'Microsoft Edge',
-    testScope: args.lifecycleOnly ? 'selection-host-lifecycle-only'
+    testScope: args.clickSelectionOnly ? 'click-selection-only' : args.lifecycleOnly ? 'selection-host-lifecycle-only'
       : args.contextMenuOnly ? 'context-menu-only' : 'selection-trigger-filter-or-matrix',
     profileMode: 'temporary-isolated',
     windowMode: args.headed ? 'headed-dedicated-profile' : 'background-visible-no-focus',
@@ -1293,7 +1567,7 @@ async function main() {
       context = browserSession.context;
       createIsolatedPage = () => focusSafe.newPageWithoutForeground(context);
       activateInputPage = page => focusSafe.activateExtensionTabWithoutForeground(context, page);
-      if (args.contextMenuOnly || args.lifecycleOnly) {
+      if (args.contextMenuOnly || args.lifecycleOnly || args.clickSelectionOnly) {
         const browserPid = await getGuardedBrowserPid(browserSession);
         result.ownedBrowserPid = browserPid;
         assertBackgroundFocus = async label => {
@@ -1320,10 +1594,17 @@ async function main() {
       result.focusPolicy = 'foreground-authorized';
       result.windowPlacement = { mode: 'headed-explicit-foreground', windowState: 'normal', viewport: { width: 1280, height: 900 } };
     }
+    if (args.clickSelectionOnly) {
+      runtimeDiagnostics = require(path.resolve(args.runtimeDiagnostics)).createRuntimeDiagnostics();
+      await runtimeDiagnostics.start(context);
+    }
     const {worker, extensionId} = await waitForWorker(context);
+    runtimeDiagnostics?.setExtensionId(extensionId);
     const attachWorkerDiagnostics = (target) => {
       target.on('console', (message) => {
-        recordConsoleIssue(`worker ${message.type()}: ${message.text()}`);
+        if (!args.clickSelectionOnly || ['error', 'warning', 'warn'].includes(message.type())) {
+          recordConsoleIssue(`worker ${message.type()}: ${message.text()}`);
+        }
       });
     };
     attachWorkerDiagnostics(worker);
@@ -1377,6 +1658,11 @@ async function main() {
     page.on('console', (message) => { if (message.type() === 'error') recordConsoleIssue(`console: ${message.text()}`); });
     await page.goto('https://example.com/', { waitUntil: 'domcontentloaded', timeout: 60000 });
     await waitForContentScript(page);
+
+    if (args.clickSelectionOnly) {
+      await runClickSelectionCases({page, popup, context, extensionId, result, args, runtimeDiagnostics});
+      return;
+    }
 
     if (args.lifecycleOnly) {
       const saved = await readStoredConfig(popup);
@@ -3160,6 +3446,17 @@ async function main() {
     primaryError = error;
     result.ok = false;
     result.error = error.stack || error.message || String(error);
+    if (args.clickSelectionOnly && context) {
+      for (const [index, failedPage] of context.pages().entries()) {
+        try {
+          const screenshot = path.join(args.artifactsDir, `click-selection-failure-${index}.png`);
+          await failedPage.screenshot({path: screenshot, timeout: 5000});
+          result.screenshots.push(screenshot);
+        } catch (captureError) {
+          (result.captureGaps ||= []).push({surface: `page-${index}`, error: String(captureError.message || captureError)});
+        }
+      }
+    }
     process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
     process.exitCode = 1;
   } finally {
@@ -3174,6 +3471,13 @@ async function main() {
         if (resource === 'profile') result.retainedProfile = profileDir;
       }
     };
+    if (runtimeDiagnostics) {
+      await cleanup('runtime diagnostics', async () => {
+        await runtimeDiagnostics.flush();
+        runtimeDiagnostics.write(args.artifactsDir, result);
+        await runtimeDiagnostics.stop();
+      });
+    }
     let browserClosed = !browserStartAttempted;
     await cleanup('browser', async () => {
       if (closeBrowser) {await closeBrowser(); browserClosed = true;}

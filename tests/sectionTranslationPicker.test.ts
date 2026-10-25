@@ -226,6 +226,30 @@ afterEach(() => {
 });
 
 describe('局部翻译选择模式', () => {
+    it('真实选择器在指针会话交接时退出未确认选择，旧释放不影响新模式', async () => {
+        const h = await createHarness();
+        // createHarness 重置模块后再加载，必须与真实 picker 使用同一份会话身份。
+        const {claimPointerSelectionSession} = await import('@/src/shared/dom/pointerSelectionSession');
+        const previous = vi.fn(), next = vi.fn(), latest = vi.fn();
+        const releasePrevious = claimPointerSelectionSession(previous);
+        expect(h.picker.startSectionPicker(h.options as never)).toBe(true);
+        h.flushFrames();
+        expect(previous).toHaveBeenCalledOnce();
+        expect(h.picker.isSectionPickerActive()).toBe(true);
+        expect(h.host()).not.toBeNull();
+        const releaseNext = claimPointerSelectionSession(next);
+        expect(h.host()).toBeNull();
+        expect(h.picker.isSectionPickerActive()).toBe(false);
+        expect(h.onPick).not.toHaveBeenCalled();
+        releasePrevious();
+        h.picker.stopSectionPicker();
+        const releaseLatest = claimPointerSelectionSession(latest);
+        expect(next).toHaveBeenCalledOnce();
+        releaseNext();
+        releaseLatest();
+        expect(latest).not.toHaveBeenCalled();
+    });
+
     it('从段落间隙起划时收窄到实际经过的段落，往返经过外壳不扩大或丢失已选块', async () => {
         const h = await createHarness({initialPoint: {x: 50, y: 110}});
         h.document.elementFromPoint = (_x, y) => y >= 60 && y <= 100 ? h.byId('para')
