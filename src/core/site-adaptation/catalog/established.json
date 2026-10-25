@@ -545,6 +545,14 @@
       },
       {
         "css": [
+          "ytd-video-renderer .metadata-snippet-text"
+        ],
+        "key": "youtube-search-card-description",
+        "resolve": "closest",
+        "atomic": true
+      },
+      {
+        "css": [
           "#description-inline-expander yt-attributed-string",
           "ytd-text-inline-expander yt-attributed-string"
         ],
@@ -578,7 +586,15 @@
       "yt-live-chat-app",
       "ytd-video-preview",
       "input#search",
-      "ytd-comment-simplebox-renderer"
+      "ytd-comment-simplebox-renderer",
+      "ytd-video-renderer ytd-channel-name",
+      "ytd-video-renderer #metadata-line",
+      "yt-lockup-view-model yt-content-metadata-view-model a[href^=\"/@\"]"
+    ],
+    "watchIgnore": [
+      "ytd-video-renderer ytd-channel-name",
+      "ytd-video-renderer #metadata-line",
+      "yt-lockup-view-model yt-content-metadata-view-model a[href^=\"/@\"]"
     ]
   },
   {

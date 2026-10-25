@@ -18,6 +18,23 @@ Chrome/Edge MV3 的公开图标和实际消费的两份内容入口样式使用�
 
 网页兼容维护集与生命周期验收见 [网页翻译稳定性维护](maintainers/web-stability.md)。该入口显式选择十个独立站点，复用已有正文与保护区契约，并将宿主 DOM 探针、原生站点操作、在线供应商和不同浏览器的证据分开记录。`fullPageVisibilityScheduling` 新增路由观察选项刷新、断连 ShadowRoot 回收/重新插入，以及重连观察器时保留待投递保护区变化；`contentFeatureMounting` 与划词 `--lifecycle-only` 验证入口被移除后的恢复、取消、错误重试、禁用和窄屏键盘操作。
 
+真实站点 runner 与矩阵执行必须显式提供 `--runtime-diagnostics-helper <浏览器翻译测试技能>/scripts/runtime-diagnostics.cjs`，不依赖开发者固定安装路径。`--list` 只读取清单，无需该 helper。一键回归的 `--network --allow-network` 同样接收该参数，也可通过 `FLUENTREAD_RUNTIME_DIAGNOSTICS_HELPER` 指定；普通改动仍应显式用 `--cases` 选择受影响站点。受控供应商只向首次选定的 `chrome-extension://<id>/` worker 注入响应，网站的 HTTP(S) worker 与其它扩展不被注入、不计入供应商证据；选定扩展的 worker 重启、丢失或身份变化仍会失败。
+
+站点默认使用 `fullPageScope: "finite-page"`，要求滚动到稳定底部。无限信息流可显式配置 `"initial-corpus"`：每轮翻译开始时冻结覆盖选择器中当前已载入的全部可读正文，逐个给予可见机会并要求每个 owner 完成，随后验证恢复原文和再次翻译；第二轮以该轮开始时已载入的集合重新取证。此范围禁止 `trackDynamic`，不会追逐无限新增的节点，不宣称抵达信息流底部，也不代表未配置区域、无限滚动或分页加载验收。结果保存 `fullPageScope`、`fullPageBoundary` 以及各轮完整覆盖数量，缺失初始正文仍会失败。
+
+Bing 普通搜索会在悬停时把 `/ck/a?u=a1<base64>` 跟踪链接改为同目标的直链。交互检查仅在 `https://www.bing.com/search` 对该已观察格式核对解码后的 HTTP(S) 目标，证据仍保存前后原始 href；其它站点、路径、协议、伪造域名或目的地变化继续失败，不按整站忽略链接变化。
+
+```bash
+node scripts/run-site-translation-matrix.cjs \
+  --cases example-com,wikipedia-united-states --mode both --allow-network --background \
+  --controlled-provider --extension-dir .output/chrome-mv3 --playwright-root <Node包目录> \
+  --focus-safe-helper scripts/testing/focus-safe-browser.cjs \
+  --runtime-diagnostics-helper <浏览器翻译测试技能>/scripts/runtime-diagnostics.cjs \
+  --artifacts-dir <证据目录>
+```
+
+采集在创建供应商配置页和导航目标页之前启动，每个本轮页面在导航前等待 Runtime/Log 附着；后台 target 重新出现时继续采集。既有功能证据保存后，目标页在三秒预算内导航到 `about:blank`，在采集仍开启时观察相关文档卸载；导航失败单独保留并令本轮失败，不覆盖原始功能异常。功能断言完成后仍需通过诊断门禁，扩展错误、告警、归属不明日志、附着失败或后台未观察到都会失败。失败与成功均保存 `runtime-diagnostics.json` 和 `result.json`，并继续关闭自有浏览器与清理临时 profile；省略证据目录时生成临时证据目录并打印路径。报告保留采集器的 `completeCoverage=false`、首次后台附着前空窗、重启附着空窗和跨进程 iframe 等 limitations，零条日志只代表声明范围内未观察到阻断项，不能写成全程运行时干净。受控响应只验证真实站点 DOM 与扩展链路，不证明在线翻译质量。
+
 `contentRuntimeLifecycle` 与 `qqMailFrameRuntime` 验证冷启动的两次取消边界：配置就绪后先检查文档销毁或扩展上下文失效，避免为已经退出的顶层、QQ、网易及受支持正文 frame 开始读取和解析界面语言包；语言资源已经开始等待时，完成后仍须复核，禁止迟到挂载。有效页面继续等待语言包，失败仍沿用中文回退；往返缓存中的暂停不是销毁，恢复继续复用原生命周期。本层不取消已经共享的资源请求，也不改变后台 frame 授权时序。
 
 ## 缓存清理等待与恢复

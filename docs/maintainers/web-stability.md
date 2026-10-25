@@ -28,6 +28,7 @@ node scripts/testing/run-resource-safe.mjs -- node scripts/run-site-translation-
   --controlled-provider --stability-probes \
   --extension-dir .output/chrome-mv3 --playwright-root <Node包目录> \
   --focus-safe-helper scripts/testing/focus-safe-browser.cjs \
+  --runtime-diagnostics-helper <浏览器翻译测试技能>/scripts/runtime-diagnostics.cjs \
   --artifacts-dir <证据目录>
 ```
 

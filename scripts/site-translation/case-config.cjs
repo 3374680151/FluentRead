@@ -200,6 +200,7 @@ function normalizeCaseConfig(caseName, caseConfig) {
     mutableForbiddenSelectors,
     fullCoverageSelectors,
     coverageRules,
+    fullPageScope: caseConfig.fullPageScope ?? 'finite-page',
     hoverTargets,
     interactionSelectors: normalizeSelectorList(caseConfig.interactionSelectors),
     interactionScenarios: normalizeInteractionScenarios(caseConfig.interactionScenarios),
@@ -210,6 +211,12 @@ function normalizeCaseConfig(caseName, caseConfig) {
 
 function collectBaseCaseConfigErrors(caseName, caseConfig, normalized = normalizeCaseConfig(caseName, caseConfig)) {
   const errors = [];
+  if (!['finite-page', 'initial-corpus'].includes(normalized.fullPageScope)) {
+    errors.push(`${caseName} 的 fullPageScope 必须是 finite-page 或 initial-corpus`);
+  }
+  if (normalized.fullPageScope === 'initial-corpus' && normalized.coverageRules.some(rule => rule.trackDynamic)) {
+    errors.push(`${caseName} 的 initial-corpus 不得启用 trackDynamic，避免把无限新增正文当作有限覆盖集合`);
+  }
   if (caseConfig.prepareScrollSelector !== undefined &&
       (typeof caseConfig.prepareScrollSelector !== 'string' || !caseConfig.prepareScrollSelector.trim())) {
     errors.push(`${caseName} 的 prepareScrollSelector 必须是非空 selector`);

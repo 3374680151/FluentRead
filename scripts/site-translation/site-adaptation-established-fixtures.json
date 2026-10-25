@@ -96,6 +96,44 @@
     "forbidden": [
       "#navigation",
       "#movie_player"
+    ],
+    "variants": [
+      {
+        "name": "search-results",
+        "url": "https://www.youtube.com/results?search_query=machine+translation",
+        "html": "<nav id=\"navigation\">Search navigation remains unchanged</nav><main><ytd-video-renderer id=\"video-card\"><h3 id=\"search-title\"><a id=\"video-title\" href=\"/watch?v=search123\"><yt-formatted-string>How machine translation makes documents easier to read</yt-formatted-string></a></h3><ytd-channel-name id=\"channel-name\"><yt-formatted-string><a id=\"channel-link\" href=\"/@example\">Example Machine Learning Channel</a></yt-formatted-string></ytd-channel-name><div id=\"metadata-line\"><span>Two million views</span><span>Published three weeks ago</span></div><div class=\"metadata-snippet-container\"><a class=\"metadata-snippet-timestamp\" hidden><span>Duplicate hidden snippet remains untouched</span></a><yt-formatted-string id=\"search-description\" class=\"metadata-snippet-text\">This introduction explains <span id=\"search-inline\">how translation models work</span> with ordinary sentences.</yt-formatted-string></div></ytd-video-renderer><yt-lockup-view-model id=\"course-card\"><h3 id=\"lockup-title\"><a class=\"ytLockupMetadataViewModelTitle\" href=\"/watch?v=course123&amp;list=example\"><span role=\"text\">A complete course about machine translation</span></a></h3><yt-content-metadata-view-model><div role=\"group\"><span><a id=\"lockup-channel\" href=\"/@course-author\">Example University Course Author</a></span></div><div id=\"lesson-title\" role=\"group\"><span><a id=\"lesson-link\" href=\"/watch?v=lesson123&amp;list=example\">The first lesson introduces translation models and their applications</a></span></div></yt-content-metadata-view-model></yt-lockup-view-model><p id=\"ordinary-prose\">An independent explanation of channel metadata remains readable outside result cards.</p><div id=\"movie_player\">Player controls remain unchanged</div></main>",
+        "required": [
+          "#search-title",
+          "#search-description",
+          "#lockup-title",
+          "#lesson-title",
+          "#ordinary-prose"
+        ],
+        "forbidden": [
+          "#navigation",
+          "#channel-name",
+          "#metadata-line",
+          "#lockup-channel",
+          ".metadata-snippet-timestamp",
+          "#movie_player"
+        ],
+        "sourceAssertions": {
+          "required": [
+            "How machine translation",
+            "This introduction explains",
+            "A complete course",
+            "The first lesson",
+            "An independent explanation"
+          ],
+          "forbidden": [
+            "Example Machine Learning Channel",
+            "Two million views",
+            "Published three weeks ago",
+            "Example University Course Author",
+            "Duplicate hidden snippet"
+          ]
+        }
+      }
     ]
   },
   {

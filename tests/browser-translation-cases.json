@@ -978,5 +978,80 @@
     "fullPageHotkey": "Alt+T",
     "service": "freeTranslation",
     "notes": "NASA 科学新闻长文；正文与页面主标题逐节点覆盖，搜索框受保护。"
+  },
+  "youtube-search-results": {
+    "url": "https://www.youtube.com/results?search_query=machine+translation&hl=en",
+    "fullPageScope": "initial-corpus",
+    "hoverSelector": "ytd-video-renderer h3",
+    "requiredSelectors": [
+      "ytd-video-renderer h3"
+    ],
+    "coverageRules": [
+      {
+        "name": "video-titles",
+        "selector": "ytd-video-renderer h3",
+        "kind": "heading",
+        "minInitial": 2
+      }
+    ],
+    "forbiddenSelectors": [
+      "ytd-video-renderer ytd-channel-name a[href]",
+      "ytd-video-renderer #metadata-line .inline-metadata-item"
+    ],
+    "dynamicForbiddenSelectors": [
+      "ytd-video-renderer ytd-channel-name a[href]",
+      "ytd-video-renderer #metadata-line .inline-metadata-item"
+    ],
+    "interactionSelectors": [
+      "ytd-video-renderer h3 a[href]"
+    ],
+    "modes": [
+      "hover",
+      "full"
+    ],
+    "tier": "required",
+    "hoverHotkey": "Control",
+    "fullPageHotkey": "Alt+T",
+    "service": "freeTranslation",
+    "notes": "YouTube 搜索视频标题可读，频道名、播放量和发布时间保持原文；不代表首页、登录态或视频字幕验收。"
+  },
+  "bing-search-results": {
+    "url": "https://www.bing.com/search?q=machine+translation&setlang=en-us",
+    "fullPageScope": "initial-corpus",
+    "hoverSelector": "#b_results > .b_algo h2",
+    "requiredSelectors": [
+      "#b_results > .b_algo h2",
+      "#b_results > .b_algo .b_caption > p"
+    ],
+    "coverageRules": [
+      {
+        "name": "result-titles",
+        "selector": "#b_results > .b_algo h2",
+        "kind": "heading",
+        "minInitial": 2
+      },
+      {
+        "name": "result-summaries",
+        "selector": "#b_results > .b_algo .b_caption > p",
+        "kind": "content",
+        "minInitial": 2
+      }
+    ],
+    "forbiddenSelectors": [
+      "#b_results > .b_algo .b_attribution",
+      "#b_header"
+    ],
+    "interactionSelectors": [
+      "#b_results > .b_algo h2 a[href]"
+    ],
+    "modes": [
+      "hover",
+      "full"
+    ],
+    "tier": "required",
+    "hoverHotkey": "Control",
+    "fullPageHotkey": "Alt+T",
+    "service": "freeTranslation",
+    "notes": "普通网页搜索的标题与摘要；地址、搜索框与导航保持原文。验证码或页面无普通结果时记录站点限制。"
   }
 }

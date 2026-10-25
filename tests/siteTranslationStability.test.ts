@@ -9,6 +9,7 @@ import {shouldSkipTranslationForTarget} from '@/src/core/language/detect';
 import {protectGlossaryText} from '@/src/core/glossary/protection';
 import {createTranslationSourceSnapshot, applyTranslationsToSnapshot, buildWholeBlockTranslationSource} from '@/src/core/translation/serialization';
 import {createTranslationCore} from './helpers/translationCore';
+import websiteRules from '@/src/core/site-adaptation/catalog/websites.json';
 import {appendBilingualTranslation} from '@/src/features/full-page-translation/content/renderer';
 import {translateMicrosoftTextsWithTransport} from '@/src/providers/translation/microsoftTransport';
 import {afterEach, beforeEach, describe, expect, it, vi} from 'vitest';
@@ -389,9 +390,9 @@ describe('controlled provider attribution', () => {
   const transportGlobal = globalThis as typeof globalThis & {__frCompatibilityTransport?: {requests: number; texts: number; active: number}};
   const originalFetch = globalThis.fetch;
   afterEach(() => {globalThis.fetch = originalFetch; delete transportGlobal.__frCompatibilityTransport;});
-  async function setup() {
+  async function setup(initialOtherWorkers: Array<{url: () => string; evaluate: (fn: (value?: boolean) => unknown, value?: boolean) => unknown}> = []) {
     const worker = {url: () => 'chrome-extension://isolated/background.js', evaluate: async (fn: (value?: boolean) => unknown, value?: boolean) => fn(value)};
-    let workers = [worker];
+    let workers = [...initialOtherWorkers, worker];
     const context = Object.assign(new EventEmitter(), {serviceWorkers: () => workers});
     const popup = {goto: vi.fn(), evaluate: vi.fn().mockResolvedValue({success: true}), close: vi.fn()};
     const api = await installControlledProvider(context, async () => popup, 1000);
@@ -408,6 +409,31 @@ describe('controlled provider attribution', () => {
     expect(await (await fetch('https://example.test/public')).text()).toBe('public page');
     expect(fetchOther).toHaveBeenCalledOnce();
     api.dispose(); expect(context.listenerCount('serviceworker')).toBe(0);
+  });
+  it('never injects website or other extension workers and attributes responses only to the selected extension', async () => {
+    const website = {url: () => 'https://www.youtube.com/sw.js', evaluate: vi.fn()};
+    const otherExtension = {url: () => 'chrome-extension://unrelated/background.js', evaluate: vi.fn()};
+    const {api, context, worker, setWorkers} = await setup([website]);
+    try {
+      context.emit('serviceworker', website);
+      context.emit('serviceworker', otherExtension);
+      setWorkers([website, otherExtension, worker]);
+      await fetch('https://edge.microsoft.com/translate/translatetext', {method: 'POST', body: JSON.stringify(['Reading source'])});
+      await expect(api.snapshot()).resolves.toMatchObject({workerSelection: 'exact-extension-origin', workerCount: 1, requests: 1});
+      expect(website.evaluate).not.toHaveBeenCalled();
+      expect(otherExtension.evaluate).not.toHaveBeenCalled();
+    } finally {api.dispose();}
+    expect(context.listenerCount('serviceworker')).toBe(0);
+  });
+  it('continues to reject replacement workers of the same extension even if transport injection succeeds', async () => {
+    const {api, context, worker, setWorkers} = await setup();
+    try {
+      await fetch('https://edge.microsoft.com/translate/translatetext', {method: 'POST', body: JSON.stringify(['Reading source'])});
+      const replacement = {url: worker.url, evaluate: worker.evaluate};
+      setWorkers([replacement]);
+      context.emit('serviceworker', replacement);
+      await expect(api.snapshot()).rejects.toThrow('changed or disappeared');
+    } finally {api.dispose();}
   });
   it('passes the real Microsoft transport and language validator for long English prose without echoing the source', async () => {
     const source = 'The researchers discovered that modern translation systems require careful evaluation across different websites because unexpected changes in document structure can interrupt the reading experience and prevent readers from understanding important information.';
@@ -512,6 +538,36 @@ describe('controlled provider attribution', () => {
       expect(() => assertControlledPageEvidence(readControlledPageEvidenceInPage(), 'missing-style-evidence')).toThrow('complete source');
     } finally {vi.unstubAllGlobals();}
   });
+  it.each(['matching-rule', 'ordinary-span', 'other-site', 'other-page', 'other-container', 'missing-prose'] as const)(
+    'matches the production Bing date omission without exempting other visible source: %s', variant => {
+      const url = 'https://www.bing.com/search?q=machine+translation';
+      const {document, window} = parseHTML('<html><body><ul id="b_results"><li class="b_algo"><div class="b_caption"><p><span class="news_dt">Nov 26, 2024</span>&nbsp;· Machine translation research explains how multilingual systems preserve useful reading context across different websites.</p></div></li></ul></body></html>');
+      Object.defineProperty(document, 'baseURI', {value: url});
+      vi.stubGlobal('document', document);vi.stubGlobal('Node', window.Node);
+      vi.stubGlobal('location', {hostname: 'www.bing.com', pathname: '/search'});
+      try {
+        const rule = websiteRules.find(item => item.id === 'bing-search')!;
+        expect(rule.match).toMatchObject({hosts: ['www.bing.com'], paths: ['/search']});
+        expect(rule.omit).toContain('#b_results > .b_algo .b_caption .news_dt');
+        const core = createTranslationCore({url: new URL(url)}), owner = document.querySelector('p')!;
+        const snapshot = createTranslationSourceSnapshot(owner, core.shouldStayOriginal, undefined, undefined, core.shouldOmitFromTranslation);
+        expect(snapshot.slots.map(slot => slot.source).join(' ')).not.toContain('Nov 26, 2024');
+        expect(snapshot.slots.map(slot => slot.source).join(' ')).toContain('Machine translation research');
+        const output = appendBilingualTranslation(owner, applyTranslationsToSnapshot(snapshot,
+          snapshot.slots.map(slot => encodeControlledTranslation(slot.source))), {sourceSkeleton: snapshot.clone});
+        expect(output.textContent).not.toContain('Nov 26, 2024');
+        if (variant === 'ordinary-span') owner.querySelector('.news_dt')!.removeAttribute('class');
+        if (variant === 'other-site') vi.stubGlobal('location', {hostname: 'ordinary.example', pathname: '/search'});
+        if (variant === 'other-page') vi.stubGlobal('location', {hostname: 'www.bing.com', pathname: '/images/search'});
+        if (variant === 'other-container') document.querySelector('.b_algo')!.className = 'b_ad';
+        if (variant === 'missing-prose') output.textContent = encodeControlledTranslation('Machine translation research');
+        const evidence = readControlledPageEvidenceInPage();
+        if (variant === 'matching-rule') {
+          expect(evidence[0].omittedParts).toContainEqual({tag: 'span', text: 'Nov 26, 2024', reason: 'site-rule-omission'});
+          expect(assertControlledPageEvidence(evidence, 'bing-production-date-omission')).toMatchObject({owners: 1});
+        } else expect(() => assertControlledPageEvidence(evidence, variant)).toThrow('complete source');
+      } finally {vi.unstubAllGlobals();}
+    });
   it.each([
     {clip: 'rect(0px, 0px, 0px, 0px)'},
     {clip: 'rect(1px 1px 1px 1px)'},

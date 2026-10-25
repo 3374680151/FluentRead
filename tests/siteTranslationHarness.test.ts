@@ -4452,3 +4452,27 @@ describe('geometry-bounded long-page scrolling',()=>{
     const fixture=await scrollFixture({extent:30000,endless:true});await expect(fixture.run()).rejects.toThrow('2048');expect(fixture.moves).toBeLessThanOrEqual(2050);
   });
 });
+
+describe('Bing native search redirect equivalence', () => {
+  const {interactionHrefsEquivalent} = require('../scripts/site-translation/interaction-url.cjs');
+  const page = 'https://www.bing.com/search?q=machine+translation';
+  const target = 'https://www.machinetranslation.com/';
+  const redirect = `https://www.bing.com/ck/a?p=tracking&u=a1${Buffer.from(target).toString('base64url')}&ntb=1`;
+
+  it('keeps the same destination when Bing changes an observed tracking URL to a direct result link', () => {
+    expect(interactionHrefsEquivalent(redirect, target, page)).toBe(true);
+    expect(interactionHrefsEquivalent(target, target, 'https://example.com')).toBe(true);
+  });
+
+  it('still rejects a different destination, protocol, foreign redirect host, page or malformed payload', () => {
+    for (const [before, after, url] of [
+      [redirect, 'https://other.example/', page],
+      [redirect, 'http://www.machinetranslation.com/', page],
+      [redirect.replace('www.bing.com', 'www.bing.com.evil.test'), target, page],
+      [redirect, target, 'https://www.bing.com/images/search'],
+      [redirect, target, 'https://example.com/search'],
+      ['https://www.bing.com/ck/a?u=a1!!invalid', target, page],
+      [`https://www.bing.com/ck/a?u=a1${Buffer.from('javascript:alert(1)').toString('base64')}`, 'javascript:alert(1)', page],
+    ]) expect(interactionHrefsEquivalent(before, after, url)).toBe(false);
+  });
+});

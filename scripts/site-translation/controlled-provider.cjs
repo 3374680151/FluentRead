@@ -90,6 +90,9 @@ function readControlledPageEvidenceInPage() {
   // Match the SQLite documentation profile exactly; ordinary page buttons are not protected prose.
   const sqliteDocument = ['sqlite.org', 'www.sqlite.org'].includes(globalThis.location?.hostname) &&
     /^(?:\/lang.*|\/syntax\/.*|\/c3ref\/.*|\/docs\.html)$/u.test(globalThis.location?.pathname || '');
+  // 与生产 Bing 正文规则的日期 omit 完全相同；普通日期 span 和其它页面仍参与完整源文比较。
+  const bingOmitted = globalThis.location?.hostname === 'www.bing.com' && globalThis.location?.pathname === '/search'
+    ? '#b_results > .b_algo .b_caption .news_dt' : '';
   const literalToken = /^[\w.+/-]+(?:(?:\s*,\s*[\w.+/-]+)+|(?:\s+--?\w[\w-]*)+)?$/u;
   const isProtected = (node, live) => node.matches(protectedSelector) || siteProtected && node.matches(siteProtected) ||
     sqliteDocument && node.matches('button') ||
@@ -132,6 +135,7 @@ function readControlledPageEvidenceInPage() {
               /^(?:0(?:\.\d+)?|1(?:\.0+)?)px$/u.test(style.width) && /^(?:0(?:\.\d+)?|1(?:\.0+)?)px$/u.test(style.height)) reason = 'computed-clipped-accessibility';
         }
       } catch { /* Unavailable styles cannot exempt visible source text. */ }
+      if (bingOmitted && node.matches(bingOmitted)) reason = 'site-rule-omission';
       if (reason) {omittedParts.push({tag: node.localName, text: node.textContent, reason}); clonedElements[position].remove();}
     });
     source.querySelectorAll(artifact).forEach(node => node.remove());
@@ -218,42 +222,56 @@ async function installControlledProvider(context, createPage, timeout) {
   const install = worker => worker.evaluate(controlledProviderRuntime, true);
   const errors = [];
   const workers = new Set();
-  const onWorker = worker => {workers.add(worker); void install(worker).catch(error => errors.push(error.message));};
+  const isExtensionWorker = target => /^chrome-extension:\/\/[^/]+\//u.test(target.url());
+  const worker = context.serviceWorkers().find(isExtensionWorker) ||
+    await context.waitForEvent('serviceworker', {timeout, predicate: isExtensionWorker});
+  const extensionUrl = new URL(worker.url());
+  if (extensionUrl.protocol !== 'chrome-extension:') throw new Error('Controlled transport requires an extension service worker');
+  const extensionPrefix = `chrome-extension://${extensionUrl.host}/`;
+  // 实站可注册自己的 http(s) worker。测试供应商只接管本次扩展的传输，不触碰网站脚本。
+  const isOwnedWorker = target => target.url().startsWith(extensionPrefix);
+  const onWorker = target => {
+    if (!isOwnedWorker(target)) return;
+    workers.add(target);
+    void install(target).catch(error => errors.push(error.message));
+  };
   context.on('serviceworker', onWorker);
-  const worker = context.serviceWorkers()[0] || await context.waitForEvent('serviceworker', {timeout});
   workers.add(worker);
-  await install(worker);
-  const popup = await createPage(context, timeout);
   try {
-    await popup.goto(`chrome-extension://${new URL(worker.url()).host}/popup.html`, {waitUntil: 'domcontentloaded', timeout});
-    const response = await popup.evaluate(async () => {
-      const stored = await chrome.runtime.sendMessage({type: 'configStorageRead', key: 'local:config'});
-      if (!stored.success) throw new Error(stored.error);
-      const config = typeof stored.value === 'string' ? JSON.parse(stored.value) : stored.value;
-      const updates = {service: 'microsoft', from: 'en', to: 'zh-Hans', display: 1, autoTranslate: false,
-        hotkey: 'Control', floatingBallHotkey: 'Alt+T', fullPageTranslationMode: 'viewport',
-        useCache: false, enableAIContext: false, enableAIMultiSegment: false,
-        uiLanguage: 'zh-CN', uiLanguageSetupCompleted: true};
-      return chrome.runtime.sendMessage({type: 'persistConfig', mode: 'patch', config: updates,
-        expected: Object.fromEntries(Object.keys(updates).map(key => [key, config[key]])),
-        clientId: 'web-compatibility-suite', sequence: 1, baseRevision: config.__fluentConfigRevision});
-    });
-    if (!response?.success) throw new Error(`Controlled-provider configuration failed: ${JSON.stringify(response)}`);
-  } finally {await popup.close();}
+    await install(worker);
+    const popup = await createPage(context, timeout);
+    try {
+      await popup.goto(`${extensionPrefix}popup.html`, {waitUntil: 'domcontentloaded', timeout});
+      const response = await popup.evaluate(async () => {
+        const stored = await chrome.runtime.sendMessage({type: 'configStorageRead', key: 'local:config'});
+        if (!stored.success) throw new Error(stored.error);
+        const config = typeof stored.value === 'string' ? JSON.parse(stored.value) : stored.value;
+        const updates = {service: 'microsoft', from: 'en', to: 'zh-Hans', display: 1, autoTranslate: false,
+          hotkey: 'Control', floatingBallHotkey: 'Alt+T', fullPageTranslationMode: 'viewport',
+          useCache: false, enableAIContext: false, enableAIMultiSegment: false,
+          uiLanguage: 'zh-CN', uiLanguageSetupCompleted: true};
+        return chrome.runtime.sendMessage({type: 'persistConfig', mode: 'patch', config: updates,
+          expected: Object.fromEntries(Object.keys(updates).map(key => [key, config[key]])),
+          clientId: 'web-compatibility-suite', sequence: 1, baseRevision: config.__fluentConfigRevision});
+      });
+      if (!response?.success) throw new Error(`Controlled-provider configuration failed: ${JSON.stringify(response)}`);
+    } finally {await popup.close();}
+  } catch (error) {context.off('serviceworker', onWorker); throw error;}
   return {
     async assertPage(page, phase) {
       return assertControlledPageEvidence(await page.evaluate(readControlledPageEvidenceInPage), phase);
     },
     async snapshot() {
       if (errors.length) throw new Error(`Controlled transport worker failed: ${errors.join('; ')}`);
-      const current = context.serviceWorkers()[0];
-      if (!current || workers.size !== 1) throw new Error('Controlled transport worker changed or disappeared; response attribution is not proven');
+      const currentWorkers = context.serviceWorkers().filter(isOwnedWorker);
+      const current = currentWorkers[0];
+      if (current !== worker || currentWorkers.length !== 1 || workers.size !== 1) throw new Error('Controlled transport worker changed or disappeared; response attribution is not proven');
       const state = await current.evaluate(() => globalThis.__frCompatibilityTransport);
       if (!state || state.protocol !== 'utf8-han-v1' || !Number.isSafeInteger(state.requests) || state.requests < 1 || !Number.isSafeInteger(state.texts) || state.texts < 1 || state.active !== 0) {
         throw new Error('Controlled transport has no completed request evidence or remains active');
       }
       return {mode: 'controlled-microsoft-response', scope: 'real-site DOM compatibility only',
-        workerCount: workers.size, ...state, errors};
+        workerSelection: 'exact-extension-origin', workerCount: workers.size, ...state, errors};
     },
     dispose() {context.off('serviceworker', onWorker);},
   };

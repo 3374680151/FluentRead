@@ -8,6 +8,7 @@
 
 const {guardBrowserClose} = require('./testing/owned-browser-close.cjs');
 const {installControlledProvider} = require('./site-translation/controlled-provider.cjs');
+const {interactionHrefsEquivalent} = require('./site-translation/interaction-url.cjs');
 const {runStabilityProbes, runNativeCommentToggle} = require('./site-translation/stability-probes.cjs');
 const {reportErrorCodes, siteTestExitCode} = require('./testing/site-error-diagnostics.cjs');
 const fs = require('node:fs');
@@ -152,6 +153,7 @@ function parseArgs(argv) {
   if (!args.extensionDir) throw new Error('必须传入 --extension-dir');
   if (!args.playwrightRoot) throw new Error('必须传入 --playwright-root');
   if (!args.allowNetwork) throw new Error('真实网络站点测试必须显式传入 --allow-network');
+  if (!args.runtimeDiagnosticsHelper) throw new Error('必须传入 --runtime-diagnostics-helper；缺少运行时采集不能判定站点兼容性通过');
   if (args.background && !args.focusSafeHelper) {
     throw new Error('后台模式必须传入 --focus-safe-helper，禁止回退到会抢焦点的 Playwright 启动');
   }
@@ -170,6 +172,45 @@ function parseArgs(argv) {
     ...normalized,
     ...(args.controlledProvider ? {service: 'microsoft'} : {}),
   };
+}
+
+function loadRuntimeDiagnostics(helperPath, load = require) {
+  const {createRuntimeDiagnostics, redact} = load(path.resolve(helperPath));
+  if (typeof createRuntimeDiagnostics !== 'function' || typeof redact !== 'function') {
+    throw new Error('运行时诊断 helper 缺少 createRuntimeDiagnostics/redact 接口');
+  }
+  const diagnostics = createRuntimeDiagnostics();
+  for (const name of ['start', 'attachPage', 'setExtensionId', 'setPhase', 'flush', 'snapshot', 'assertClean', 'stop']) {
+    if (typeof diagnostics?.[name] !== 'function') throw new Error(`运行时诊断 helper 缺少接口：${name}`);
+  }
+  return {diagnostics, redact};
+}
+
+// 原始功能失败与诊断失败分别保留。即使 verdict/write/stop 失败，调用方仍须清理自有浏览器。
+async function finishRuntimeDiagnostics(diagnostics, output, artifactsDir) {
+  const failures = [];
+  let verdictPassed = false;
+  const attempt = async (stage, action) => {
+    try {await action();} catch (error) {failures.push({stage, error}); output.ok = false;}
+  };
+  await attempt('runtime-flush', () => diagnostics.flush());
+  await attempt('runtime-verdict', () => {diagnostics.assertClean(); verdictPassed = true;});
+  await attempt('runtime-snapshot', () => {
+    output.runtimeDiagnostics = diagnostics.snapshot();
+    if (verdictPassed && output.runtimeDiagnostics?.passed !== true) throw new Error('运行时诊断缺少通过证据');
+  });
+  if (artifactsDir && output.runtimeDiagnostics) await attempt('runtime-evidence', () =>
+    fs.writeFileSync(path.join(artifactsDir, 'runtime-diagnostics.json'), JSON.stringify(output.runtimeDiagnostics, null, 2)));
+  await attempt('runtime-stop', () => diagnostics.stop());
+  // primaryError 的异常身份由 main 保留；这里返回全部失败，不能覆盖它或让清理提前退出。
+  return failures;
+}
+
+async function unloadRuntimePage(page, diagnostics, phase) {
+  if (!page || page.isClosed()) return {status: 'unavailable', reason: 'page-already-closed-or-not-created'};
+  diagnostics.setPhase(phase);
+  await page.goto('about:blank', {waitUntil: 'domcontentloaded', timeout: 3000});
+  return {status: 'observed', action: 'about:blank-navigation', timeoutMs: 3000};
 }
 
 function assertCoverageReport(rules, report, phase) {
@@ -228,7 +269,7 @@ function assertCoverageRestoration(report, phase) {
   return report;
 }
 
-function withMandatoryHeadingCoverage(rules, protectPageHeading = false) {
+function withMandatoryHeadingCoverage(rules, protectPageHeading = false, fullPageScope = 'finite-page') {
   // 站点自身的列表页标题属于应用 UI，显式纳入 forbidden contract 时保留原文。
   if (protectPageHeading) return [...rules];
   return [
@@ -239,7 +280,7 @@ function withMandatoryHeadingCoverage(rules, protectPageHeading = false) {
       kind: 'heading',
       minInitial: 0,
       minSeen: 0,
-      trackDynamic: true,
+      trackDynamic: fullPageScope !== 'initial-corpus',
       sourceIncludes: [],
       requiresPhrase: true,
     },
@@ -1844,7 +1885,7 @@ async function assertPageContract(page, baseline, requiredSelectors, expectedUrl
   for (const current of state.interactionState) {
     const initial = baseline.interactionState.find(({selector}) => selector === current.selector);
     const stable = current.count >= initial.minimumCount && current.tagName === initial.tagName &&
-      current.href === initial.href && current.type === initial.type && current.disabled === initial.disabled &&
+      interactionHrefsEquivalent(initial.href, current.href, expectedUrl) && current.type === initial.type && current.disabled === initial.disabled &&
       current.ariaDisabled === initial.ariaDisabled && current.role === initial.role && current.connected &&
       (current.disabled || current.focusable);
     if (!stable) errors.push(`交互元素失效：${JSON.stringify({before: initial, after: current})}`);
@@ -2872,6 +2913,21 @@ function readFullPageFailureSnapshotInPage(targetSelector) {
   };
 }
 
+async function completeFullPageScope({page, timeout, scrollContainer, selector, verifyUnchanged, waitForTarget,
+  fullPageScope = 'finite-page'}, actions = {scrollAndWaitFullPage, settleCoverageByReveal,
+  revealFullPageTarget, waitForTranslationIdle, observeCoverage}) {
+  if (fullPageScope === 'finite-page') {
+    return actions.scrollAndWaitFullPage(page, timeout, scrollContainer, selector, verifyUnchanged, waitForTarget);
+  }
+  if (fullPageScope !== 'initial-corpus') throw new Error(`Unknown full-page scope: ${fullPageScope}`);
+  // 无限信息流没有终点。逐个暴露覆盖选择器中本轮已冻结的初始正文，每个 owner 仍须严格完成。
+  await actions.settleCoverageByReveal(page, timeout, '本轮已载入正文覆盖收敛', 0, verifyUnchanged);
+  await actions.revealFullPageTarget(page, selector);
+  await waitForTarget();
+  await actions.waitForTranslationIdle(page, timeout, '本轮已载入正文回到目标后', 0);
+  await actions.observeCoverage(page);
+}
+
 async function runFullTranslationPass(context, pass) {
   const {
     page,
@@ -2883,6 +2939,7 @@ async function runFullTranslationPass(context, pass) {
     interactionScenarios,
     controlSelector,
     scrollContainer,
+    fullPageScope = 'finite-page',
     timeout,
     artifactsDir,
     initialUrl,
@@ -2926,8 +2983,8 @@ async function runFullTranslationPass(context, pass) {
   }
 
   const target = targetReadiness.target;
-  if (first) reportProgress(`首次目标已完成 (${targetReadiness.completion})，开始滚动页面主滚动面`);
-  await scrollAndWaitFullPage(page, timeout, scrollContainer, selector, verifyUnchanged, waitForTarget);
+  if (first) reportProgress(`首次目标已完成 (${targetReadiness.completion})，验证 ${fullPageScope} 正文范围`);
+  await completeFullPageScope({page, timeout, scrollContainer, selector, verifyUnchanged, waitForTarget, fullPageScope});
   await verifyUnchanged();
   const pageState = await readFullPageState(
     page,
@@ -2985,6 +3042,7 @@ async function runFullCase(
   artifactsDir,
   readCompletion,
   controlledProvider,
+  fullPageScope = 'finite-page',
 ) {
   const initialUrl = page.url();
   const baselineInteractionScenarios = await runInteractionScenarios(
@@ -2995,7 +3053,7 @@ async function runFullCase(
   );
   const runtimeCoverageRules = withMandatoryHeadingCoverage(coverageRules,
     skipUnscopedH1Coverage ||
-    pageContract.forbiddenState.some(({selector}) => /(?:^|[\s>+~,(])h1\b/iu.test(selector)));
+    pageContract.forbiddenState.some(({selector}) => /(?:^|[\s>+~,(])h1\b/iu.test(selector)), fullPageScope);
   await installCoverageTracker(page, runtimeCoverageRules);
   const passContext = {
     page,
@@ -3007,6 +3065,7 @@ async function runFullCase(
     interactionScenarios,
     controlSelector,
     scrollContainer,
+    fullPageScope,
     timeout,
     artifactsDir,
     initialUrl,
@@ -3042,6 +3101,10 @@ async function runFullCase(
 
   const secondPass = await runFullTranslationPass(passContext, 'second');
   return {
+    fullPageScope,
+    fullPageBoundary: fullPageScope === 'initial-corpus'
+      ? 'all eligible nodes matching configured coverage selectors loaded at the start of each translation pass; does not claim the end of an infinite feed'
+      : 'finite page through its stable bottom',
     controlledAttribution: [firstPass.controlledAttribution, secondPass.controlledAttribution],
     translated: firstPass.target,
     translatedPage: firstPass.pageState,
@@ -3065,6 +3128,7 @@ async function runFullCase(
 
 async function main() {
   const args = parseArgs(process.argv.slice(2));
+  const {diagnostics: runtimeDiagnostics, redact} = loadRuntimeDiagnostics(args.runtimeDiagnosticsHelper);
   const extensionDir = path.resolve(args.extensionDir);
   if (!fs.existsSync(path.join(extensionDir, 'manifest.json'))) throw new Error('插件 manifest.json 不存在');
   const buildFreshness = assertFreshProductionExtension(extensionDir);
@@ -3076,8 +3140,9 @@ async function main() {
       [file, sha256(path.join(__dirname, '../src/features/full-page-translation/content', file))]))};
   if (!fs.existsSync(args.browserPath)) throw new Error(`浏览器不存在：${args.browserPath}`);
 
-  const artifactsDir = args.artifactsDir ? path.resolve(args.artifactsDir) : null;
-  if (artifactsDir) fs.mkdirSync(artifactsDir, {recursive: true});
+  const artifactsDir = args.artifactsDir ? path.resolve(args.artifactsDir)
+    : fs.mkdtempSync(path.join(os.tmpdir(), 'fluentread-site-evidence-'));
+  fs.mkdirSync(artifactsDir, {recursive: true});
   const {chromium} = loadPlaywright(args.playwrightRoot);
   const focusSafeHelper = loadFocusSafeHelper(args.focusSafeHelper);
   const viewport = {width: 1280, height: 900};
@@ -3087,9 +3152,14 @@ async function main() {
     '--no-first-run',
     '--no-default-browser-check',
   ];
-  const createPage = focusSafeHelper
+  const newPage = focusSafeHelper
     ? focusSafeHelper.newPageWithoutForeground
     : async (targetContext) => targetContext.newPage();
+  const createPage = async (...parameters) => {
+    const target = await newPage(...parameters);
+    await runtimeDiagnostics.attachPage(target, 'site-test-page');
+    return target;
+  };
   const activateTab = focusSafeHelper
     ? focusSafeHelper.activateExtensionTabWithoutForeground
     : async () => undefined;
@@ -3103,6 +3173,7 @@ async function main() {
   let extensionId;
   let diagnosticService = args.service;
   let controlledProvider;
+  let runtimeStarted = false;
   const attemptStartedAt = Date.now();
   try {
     assertDedicatedProfile(profileDir);
@@ -3141,8 +3212,16 @@ async function main() {
       };
     }
     context = launched.context;
+    runtimeDiagnostics.setPhase(`${args.case}/${args.mode}/initialization`);
+    await runtimeDiagnostics.start(context);
+    runtimeStarted = true;
+    const initialWorker = context.serviceWorkers()[0] || await context.waitForEvent('serviceworker', {timeout: args.timeout});
+    extensionId = new URL(initialWorker.url()).host;
+    runtimeDiagnostics.setExtensionId(extensionId);
     if (args.controlledProvider) controlledProvider = await installControlledProvider(context, createPage, args.timeout);
     page = await createPage(context, args.timeout);
+    await runtimeDiagnostics.attachPage(page, 'translation-page');
+    runtimeDiagnostics.setPhase(`${args.case}/${args.mode}/navigation`);
     const navigation = await page.goto(args.url, {waitUntil: 'domcontentloaded', timeout: args.timeout});
     if (navigation && navigation.status() >= 400) throw new Error(`External site returned HTTP ${navigation.status()}: ${args.url}`);
     await activateTab(context, page, args.timeout);
@@ -3191,6 +3270,7 @@ async function main() {
     );
     const configResult = await readConfig(context, args.timeout, createPage, activateTab);
     extensionId = configResult.extensionId;
+    runtimeDiagnostics.setExtensionId(extensionId);
     diagnosticService = configResult.config?.service || args.service;
     // 读取配置时会临时激活 popup 页；关闭它后显式还原目标页，确保真实快捷键发给站点标签页。
     await activateTab(context, page, args.timeout);
@@ -3201,6 +3281,7 @@ async function main() {
     if (args.mode === 'hover' && config.hotkey !== expectedHotkey) throw new Error(`悬浮快捷键不符：${config.hotkey}`);
     if (args.mode === 'full' && config.floatingBallHotkey !== expectedHotkey) throw new Error(`全文快捷键不符：${config.floatingBallHotkey}`);
     reportProgress(`${args.case}/${args.mode} 页面 contract 与扩展配置已就绪`);
+    runtimeDiagnostics.setPhase(`${args.case}/${args.mode}/translate-restore-retranslate`);
 
     const result = args.mode === 'hover'
       ? await runHoverCase(
@@ -3228,6 +3309,7 @@ async function main() {
         artifactsDir,
         await createUnchangedCompletionReader(context, page, args.timeout),
         controlledProvider,
+        args.fullPageScope,
       );
     const nativeComments = args.stabilityProbes && args.case === 'hacker-news-8863'
       ? await runNativeCommentToggle({page, timeout: args.timeout, artifactsDir}) : undefined;
@@ -3235,6 +3317,7 @@ async function main() {
       ? await runStabilityProbes({page, selector: args.selector, timeout: args.timeout, artifactsDir, toggleFull, observeMs: 5000}) : undefined;
     output = {
       ok: true,
+      artifactsDir,
       artifactBinding,
       buildFreshness,
       stability,
@@ -3268,6 +3351,7 @@ async function main() {
     };
   } catch (error) {
     primaryError = error;
+    runtimeDiagnostics.setPhase(`${args.case}/${args.mode}/failure-evidence`);
     // 只在失败后、既有清理前旁路取证；共用最多 2 秒，不修改测试/provider 预算或重试。
     const budgetMs = Math.min(args.timeout, 2000);
     const startedAt = Date.now();
@@ -3456,6 +3540,24 @@ async function main() {
   finally {
     controlledProvider?.dispose();
     const cleanupErrors = [];
+    output ||= {ok: false, artifactsDir, case: args.case, mode: args.mode, url: args.url,
+      launchMode: launched?.launchMode, focusPolicy: launched?.focusPolicy, windowPlacement: launched?.windowPlacement};
+    if (primaryError) {output.ok = false; output.error = redact(primaryError.message || primaryError);}
+    try {
+      output.unload = await unloadRuntimePage(page, runtimeDiagnostics, `${args.case}/${args.mode}/unload`);
+      if (output.ok && output.unload.status !== 'observed') throw new Error('未观察到目标文档卸载，不能判定本轮通过');
+    }
+    catch (error) {
+      output.unload = {status: 'failed', message: redact(error.message || error)};
+      cleanupErrors.push(error);
+    }
+    runtimeDiagnostics.setPhase(`${args.case}/${args.mode}/cleanup`);
+    const diagnosticFailures = await finishRuntimeDiagnostics(runtimeDiagnostics, output, artifactsDir);
+    cleanupErrors.push(...diagnosticFailures.map(({error}) => error));
+    if (!runtimeStarted) {
+      output.runtimeDiagnostics = {...output.runtimeDiagnostics, passed: false, status: 'not-started'};
+    }
+    if (diagnosticFailures.length) output.finalizationErrors = diagnosticFailures.map(({stage, error}) => ({stage, message: redact(error.message || error)}));
     let browserClosed = false;
     try {
       if (launched?.close) {await launched.close(); browserClosed = true;}
@@ -3469,15 +3571,23 @@ async function main() {
         }
       }
     } catch (error) {cleanupErrors.push(error);}
+    output.cleanupConfirmed = browserClosed;
+    output.profileRemoved = !fs.existsSync(profileDir);
+    if (cleanupErrors.length) {
+      output.ok = false;
+      output.cleanupErrors = cleanupErrors.map(error => ({message: redact(error.message || error)}));
+    }
+    try {
+      if (output.runtimeDiagnostics) fs.writeFileSync(path.join(artifactsDir, 'runtime-diagnostics.json'), JSON.stringify(output.runtimeDiagnostics, null, 2));
+      fs.writeFileSync(path.join(artifactsDir, 'result.json'), JSON.stringify(output, null, 2));
+      reportProgress(`证据目录：${artifactsDir}`);
+    } catch (error) {cleanupErrors.push(error); output.ok = false;}
     for (const error of cleanupErrors) {
       process.stderr.write(`Cleanup failed: ${error.stack || error}\n`);
       reportErrorCodes(error, 'cleanup');
     }
     if (cleanupErrors.length && !primaryError) throw cleanupErrors[0];
   }
-  output.cleanupConfirmed = true;
-  output.profileRemoved = !fs.existsSync(profileDir);
-  if (artifactsDir) fs.writeFileSync(path.join(artifactsDir, 'result.json'), JSON.stringify(output, null, 2));
   process.stdout.write(`${JSON.stringify(output, null, 2)}\n`);
 }
 
@@ -3491,6 +3601,10 @@ if (require.main === module) {
 
 module.exports = {
   parseArgs,
+  loadRuntimeDiagnostics,
+  finishRuntimeDiagnostics,
+  unloadRuntimePage,
+  completeFullPageScope,
   COVERAGE_EXCLUDED_ANCESTORS,
   COVERAGE_PROTECTED_DESCENDANTS,
   COVERAGE_TRACKER_KEY,

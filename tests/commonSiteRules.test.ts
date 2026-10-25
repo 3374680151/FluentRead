@@ -6,6 +6,7 @@ import {parseHTML} from 'linkedom';
 import {describe, expect, it} from 'vitest';
 import {builtinSiteRulePack} from '@/src/core/site-adaptation/catalog';
 import catalogFixtures from '@/scripts/site-translation/site-adaptation-fixtures.json';
+import establishedFixtures from '@/scripts/site-translation/site-adaptation-established-fixtures.json';
 import {compileSiteRulePack, composeSiteAdapters} from '@/src/core/site-adaptation/compiler';
 import {createDeclarativeAdapter} from '@/src/core/translation/adapters/declarative';
 import {TranslationCandidateCore} from '@/src/core/translation/engine';
@@ -113,6 +114,67 @@ interface CatalogShape {
     };
     variants?: Omit<CatalogShape, 'id' | 'variants'>[];
 }
+
+const youtubeSearch = establishedFixtures.find(fixture => fixture.id === 'youtube')!.variants![0]!;
+
+describe('YouTube 实站搜索结构的正文与元数据边界', () => {
+    const url = new URL(youtubeSearch.url);
+    const createCore = (generic = false) => new TranslationCandidateCore({url,
+        adapters: generic ? [] : compileSiteRulePack(builtinSiteRulePack)});
+
+    it('通用路径能翻译标题，但会把频道名与播放信息送译；站点规则只收紧已观察的元数据', () => {
+        const document = documentFor(youtubeSearch.html);
+        const baseline = sources(createCore(true), document).join('\n');
+        for (const text of ['Example Machine Learning Channel', 'Two million views', 'Example University Course Author']) {
+            expect(baseline).toContain(text);
+        }
+        const core = createCore();
+        const source = sources(core, document).join('\n');
+        for (const text of youtubeSearch.sourceAssertions.required) expect(source).toContain(text);
+        for (const text of youtubeSearch.sourceAssertions.forbidden) expect(source).not.toContain(text);
+        for (const selector of youtubeSearch.forbidden) {
+            const owner = one(document, selector);
+            expect(core.discover(owner), selector).toEqual([]);
+            expect(core.resolve(owner.firstChild ?? owner), selector).toBeNull();
+        }
+        // 课程元数据容器还包含可读课时标题，不能整块裁剪。
+        expect(core.shouldStayOriginal(one(document, '#lesson-title'))).toBe(false);
+    });
+
+    it('标题和简介在全文与悬浮中保持同一拥有者，动态内容与原文快照仍可重建', () => {
+        const document = documentFor(youtubeSearch.html);
+        const core = createCore();
+        const original = document.body.outerHTML;
+        const verify = () => {
+            const candidates = core.discover(document);
+            for (const selector of youtubeSearch.required) {
+                const owner = one(document, selector);
+                const owned = candidates.filter(candidate => candidate.element === owner);
+                expect(owned, selector).toHaveLength(1);
+                expect(core.resolve(readableText(document, owner, core))?.element, selector).toBe(owner);
+                const snapshot = createTranslationSourceSnapshot(owner, core.shouldStayOriginal,
+                    undefined, undefined, core.shouldOmitFromTranslation);
+                expect(snapshot.slots.length, selector).toBeGreaterThan(0);
+                expect(applyTranslationsToSnapshot(snapshot, snapshot.slots.map(() => '翻译后的正文'))).toContain('翻译后的正文');
+            }
+        };
+        verify();
+        expect(document.body.outerHTML).toBe(original);
+        node(document, 'search-inline').textContent = 'how newly updated translation models work';
+        expect(sources(core, node(document, 'search-inline')).join('\n')).toContain('newly updated translation models');
+        const replacement = documentFor(youtubeSearch.html);
+        const card = node(replacement, 'video-card');
+        card.querySelector('#channel-link')!.textContent = 'A dynamically replaced channel display name';
+        node(document, 'video-card').replaceWith(card);
+        verify();
+        expect(sources(core, document).join('\n')).not.toContain('A dynamically replaced channel display name');
+        const adapter = compileSiteRulePack(builtinSiteRulePack).find(item => item.id === 'youtube')!;
+        expect(adapter.shouldIgnoreMutation?.(one(document, '#metadata-line span:first-child'), {url})).toBe(true);
+        expect(adapter.shouldIgnoreMutation?.(one(document, '#channel-link'), {url})).toBe(true);
+        expect(adapter.shouldIgnoreMutation?.(one(document, '#lesson-title'), {url})).toBe(false);
+        expect(adapter.matches(new URL('https://www.youtube.com.evil.test/results'))).toBe(false);
+    });
+});
 
 const expansionIds = ['bing-search', 'steam-community-discussions', 'google-news-home-headlines', 'github-gist', 'firefox-addons'];
 const expansionShapes = (catalogFixtures as CatalogShape[])

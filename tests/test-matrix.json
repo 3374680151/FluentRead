@@ -325,6 +325,7 @@
       "tests/siteAdaptationSession.test.ts",
       "tests/siteAdaptationSettings.test.ts",
       "tests/siteAdaptationCatalog.test.ts",
+      "tests/siteCoverageAudit.test.ts",
       "tests/commonSiteRules.test.ts",
       "tests/harnessMemoryRecall.test.ts",
       "tests/harnessMemorySearch.test.ts",
