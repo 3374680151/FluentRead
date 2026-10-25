@@ -1,7 +1,7 @@
 /**
  * @file src/features/image-translation/services/mangaOcr.ts
  * 文件职责：在扩展独立 Worker 中按需运行 PaddleOCR 漫画识别，并隔离排队、取消、失败和空闲释放。
- * 主要内容：延迟导入浏览器 OCR 和本地 ONNX WASM，用频繁读取的画布完成 OCR 预处理，透明像素仅在识别画布上按前景亮度合成对比底色，读取已校验模型并融合 ONNX 执行图，硬件可用时加速识别，GPU 故障有界切换 CPU；SVG 复用已解码原图异步转为无损 PNG 后进入 Worker，取消或失败释放自有画布且保留借用原图；气泡外旁白与放大的独立气泡识别后按漫画策略分组，普通图片保留物理行供严格段落策略使用；滚动取消保留轻量模型端口，Worker owner 有界收尾，GPU 挂起重建一次 CPU 后端，空闲三分钟释放会话，统一清理 OCR 与修补会话。
+ * 主要内容：延迟导入浏览器 OCR 和本地 ONNX WASM，用频繁读取的画布完成 OCR 预处理，透明像素仅在识别画布上按前景亮度合成对比底色，读取已校验模型并融合 ONNX 执行图，硬件可用时加速识别，GPU 故障有界切换 CPU；SVG 复用已解码原图异步转为无损 PNG 后进入 Worker，取消或失败释放自有画布且保留借用原图；大图以有重叠的原像素瓦片识别并按物理行去重，整页原文与放大的独立气泡共同参与可靠性回退，普通图片保留物理行供严格段落策略使用；滚动取消保留轻量模型端口，Worker owner 有界收尾，GPU 挂起重建一次 CPU 后端，空闲三分钟释放会话，统一清理 OCR 与修补会话。
  * 模块边界：不访问宿主 DOM、不翻译文本、不处理译图；仅漫画及显式选择 PaddleOCR 的单张图片使用本模型；通用识别与圈选继续由 Tesseract 负责。
  */
 import {localWasmThreads, paceLocalInference} from '@/src/shared/onnx/resources';
@@ -15,6 +15,7 @@ import {findMangaBubbles,collectMangaRegions,type MangaOcrPage} from './mangaBub
 import {mangaInpaintingRuntime} from './mangaInpainting';
 import {encodeImageCanvas} from './imageEncoding';
 import {flattenOcrAlpha} from './ocrPixels';
+import {mergeMangaOcrTiles, planMangaOcrTiles, type MangaOcrTileResult} from './mangaOcrTiles';
 
 interface MangaOcrPort {
     recognize(image: string, options: {flatten: true; noCache: true; strategy: 'per-box';signal?:AbortSignal; decodedImage?: HTMLImageElement; progress?: MangaInferenceProgress}): Promise<MangaOcrPage>;
@@ -91,9 +92,18 @@ export async function createBrowserMangaOcr(signal?: AbortSignal, progress?: Pro
     let activeSignal=signal;
     class MangaService extends PaddleOcrService {
         private checks:Array<()=>void>=[];
+        private inferenceFailure: {error: unknown} | undefined;
+        private checkInferenceFailure(): void {
+            if(this.inferenceFailure)throw this.inferenceFailure.error;
+        }
         async recognizeManga(canvas:HTMLCanvasElement | OffscreenCanvas,options:{flatten:true;noCache:true;strategy:'per-box'}) {
+            this.inferenceFailure=undefined;
             try {return await this.recognize(canvas,options);}
-            finally {this.checks.forEach(check=>check());}
+            finally {
+                this.checks.forEach(check=>check());
+                // SDK 的识别阶段可能记录错误后返回空数组；CPU 也必须向调用方报告首因，允许正常重试。
+                this.checkInferenceFailure();
+            }
         }
         async initialize() {
             await super.initialize();
@@ -106,12 +116,18 @@ export async function createBrowserMangaOcr(signal?: AbortSignal, progress?: Pro
                     try {assertMangaOcrActive(activeSignal);}catch(error){await Promise.resolve().then(()=>cpu.release()).catch(()=>undefined);throw error;}
                     return cpu;
                 },()=>activeSignal));
-                if(session){const run=session.run.bind(session);const invoke=run as (...args:Parameters<typeof run>)=>ReturnType<typeof run>;session.run=((...args:Parameters<typeof run>)=>paceLocalInference(()=>invoke(...args))) as typeof session.run;}
+                if(session){
+                    const run=session.run.bind(session),invoke=run as (...args:Parameters<typeof run>)=>ReturnType<typeof run>;
+                    session.run=(async(...args:Parameters<typeof run>)=>{
+                        try{return await paceLocalInference(()=>invoke(...args));}
+                        catch(error){this.inferenceFailure??={error};throw error;}
+                    }) as typeof session.run;
+                }
             }
         }
     }
     const service = new MangaService({model, detection: {maxSideLength:1536,paddingVertical:0.1,paddingHorizontal:0.2},
-        recognition: {charactersDictionary: [], minimumConfidence:0.65,strategy:'per-box',spaceRecovery:true,mainThreadYieldMs:1},
+        recognition: {charactersDictionary: [], minimumConfidence:0.65,strategy:'per-box',spaceRecovery:true,mainThreadYieldMs:1,maxCropSourceSideLength:8192},
         session: {executionProviders: gpu.available?['webgpu','wasm']:['wasm'], graphOptimizationLevel: 'all'}});
     try {
         await service.initialize(); assertMangaOcrActive(signal);
@@ -120,9 +136,12 @@ export async function createBrowserMangaOcr(signal?: AbortSignal, progress?: Pro
                 activeSignal=options.signal;
                 assertMangaOcrActive(options.signal);
                 const bitmap=options.decodedImage ?? await createImageBitmap(new Blob([await (await fetch(image)).arrayBuffer()]));
-                const canvas=createOcrCanvas();canvas.width='naturalWidth' in bitmap ? bitmap.naturalWidth : bitmap.width;canvas.height='naturalHeight' in bitmap ? bitmap.naturalHeight : bitmap.height;
+                const canvas=createOcrCanvas();
                 try {
                     assertMangaOcrActive(options.signal);
+                    const width='naturalWidth' in bitmap ? bitmap.naturalWidth : bitmap.width,height='naturalHeight' in bitmap ? bitmap.naturalHeight : bitmap.height;
+                    const tiles=planMangaOcrTiles(width,height);
+                    canvas.width=width;canvas.height=height;
                     const context=canvas.getContext('2d', {willReadFrequently: true});if(!context)throw new Error('浏览器不支持图片处理');
                     context.drawImage(bitmap,0,0);
                     const pixels=context.getImageData(0,0,canvas.width,canvas.height);
@@ -131,18 +150,26 @@ export async function createBrowserMangaOcr(signal?: AbortSignal, progress?: Pro
                     if(flattenOcrAlpha(pixels.data))context.putImageData(pixels,0,0);
                     const boxes=findMangaBubbles(pixels.data,canvas.width,canvas.height);
                     const sdkOptions={flatten:true as const,noCache:true as const,strategy:'per-box' as const};
-                    // 气泡会以原分辨率单独识别。整页只识别气泡外文字，避免每行对白推理两次。
-                    let pageCanvas = canvas;
-                    if (boxes.length) {
-                        pageCanvas = createOcrCanvas();pageCanvas.width = canvas.width;pageCanvas.height = canvas.height;
-                        const pageContext = pageCanvas.getContext('2d', {willReadFrequently: true});
-                        if (!pageContext) {pageCanvas.width = 0;pageCanvas.height = 0;throw new Error('浏览器不支持图片处理');}
-                        pageContext.drawImage(canvas, 0, 0);pageContext.fillStyle = '#fff';
-                        for (const box of boxes) pageContext.fillRect(box.x0,box.y0,box.x1-box.x0,box.y1-box.y0);
-                    }
+                    // 整页保留气泡原文，局部识别为空、低置信或漏行时仍有回退证据。
+                    // 超出检测边长的图按原像素切片，不能为长图把所有小字缩到不可辨认。
                     let page: MangaOcrPage;
-                    try {page = await service.recognizeManga(pageCanvas,sdkOptions);}
-                    finally {if (pageCanvas !== canvas) {pageCanvas.width = 0;pageCanvas.height = 0;}}
+                    if(tiles.length===1) page=await service.recognizeManga(canvas,sdkOptions);
+                    else {
+                        const tileCanvas=createOcrCanvas(),pages:MangaOcrTileResult[]=[];
+                        try {
+                            const tileContext=tileCanvas.getContext('2d',{willReadFrequently:true});
+                            if(!tileContext)throw new Error('浏览器不支持图片处理');
+                            for(const tile of tiles){
+                                assertMangaOcrActive(options.signal);
+                                tileCanvas.width=tile.width;tileCanvas.height=tile.height;
+                                tileContext.drawImage(canvas,tile.x,tile.y,tile.width,tile.height,0,0,tile.width,tile.height);
+                                const result=await service.recognizeManga(tileCanvas,sdkOptions);
+                                assertMangaOcrActive(options.signal);
+                                pages.push({tile,results:result.results});
+                            }
+                            page={results:mergeMangaOcrTiles(pages,width,height)};
+                        }finally{tileCanvas.width=0;tileCanvas.height=0;}
+                    }
                     const bubbles:NonNullable<MangaOcrPage['bubbles']>=[];
                     for(const bbox of boxes){
                         assertMangaOcrActive(options.signal);

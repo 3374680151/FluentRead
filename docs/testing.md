@@ -1254,6 +1254,27 @@ CI 或本地报告必须分别说明：确定性回归、隔离浏览器回归�
 
 ## 图片翻译完整流程
 
+### 漫画质量场景与模型复用
+
+漫画专项和图片专项的 `--x-lightbox` 模式默认复用主仓库旁 `workspace-data/model-cache/` 中的公开 PaddleOCR／LaMa 文件。可用 `--model-cache-dir <目录>` 或 `FLUENTREAD_TEST_MODEL_CACHE_DIR` 指定位置。每次使用都按生产清单检查长度与 SHA-256，缺失或损坏才下载；并发测试共享逐文件锁。文件通过原有导入入口放入全新的临时浏览器，不复用日常 profile。报告记录每个文件的命中来源、下载数及导入状态。普通图片只准备 OCR，漫画按需包含修补模型；模型下载、来源故障和离线导入专项保留各自原有路径，不用缓存掩盖这些行为。Tesseract 语言包不在这份共享权重缓存内。
+
+默认目录从测试 helper 所属仓库的 `git common-dir` 定位，因此从其他工作目录启动也复用同一缓存；源码快照无法定位 Git 时才回退到调用目录的 `.cache/image-translation-models/`。环境变量指定的相对路径以调用目录为准。
+
+运行 `python3 scripts/testing/generate-manga-quality-fixtures.py --output-dir <证据目录>/corpus` 生成六类原创确定性场景：多气泡与单行旁白、日文竖排、横排日文混排、跨瓦片边界的长条漫、反白对白及纹理背景。需要 Pillow 和脚本参数指定的英文字体、日文字体；manifest 记录版本、字体及图片散列、27 个原文锚点和保护像素。相同字体与 Pillow 版本可逐字节重建图片。
+
+为下面的漫画浏览器专项传入 `--quality-manifest <证据目录>/corpus/manifest.json`，逐图运行真实 OCR，以明确的原文锚点及出现次数核验识别，检查保护像素、恢复原图和缓存重显；每张图片的原语言来自 manifest。缺失或重复锚点会保留到逐景报告，全部场景完成后统一失败；像素、阅读顺序和缓存等结构错误立即失败。翻译 transport 受控，因此这些结果不代表在线翻译模型的语言质量。原有 `--pipeline-inputs <图片列表> --pipeline-rounds 2` 仍用于区分冷启动与热运行，不把首次下载耗时混成推理性能。
+
+```bash
+node scripts/testing/run-manga-translation-test.cjs \
+  --extension-dir .output/chrome-mv3 \
+  --playwright-root <path> \
+  --focus-safe-helper "$(pwd)/scripts/testing/focus-safe-browser.cjs" \
+  --quality-manifest <证据目录>/corpus/manifest.json \
+  --artifacts-dir <证据目录>/manga-quality
+```
+
+下列单图专项仍保留其独立入口与原有范围。
+
 ```bash
 node scripts/testing/run-image-translation-flow-test.cjs \
   --extension-dir .output/chrome-mv3 \

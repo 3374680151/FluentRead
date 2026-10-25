@@ -1,10 +1,19 @@
 'use strict';
-/** 漫画生产扩展专项：临时 profile、关闭 Shadow DOM 可信点击、真实 OCR；区分在线站点、提前页和滚动返页稳定性；仅夹具可控地挂起文字服务；性能模式复用同一原图和真实模型，记录冷启动、逐次推理和编码。 */
+/**
+ * @file scripts/testing/run-manga-translation-test.cjs
+ * 文件职责：在临时 profile 中用可信点击和真实模型验证生产漫画翻译、滚动及缓存行为。
+ * 主要内容：固定模型文件经校验后由既有 UI 导入；性能模式测量冷/热推理，质量 manifest 检查真实 OCR 锚点、画面保护与原/译切换。
+ * 模块边界：仅替换夹具的文字服务传输；不修改生产 OCR/修补结果，不访问日常浏览器 profile，浏览器启动与页面创建均走不抢焦点 helper。
+ */
 const fs = require('node:fs');
 const path = require('node:path');
 const assert = require('node:assert/strict');
+const {createHash} = require('node:crypto');
 const {execFileSync} = require('node:child_process');
+const {ensureImageTranslationModelFiles, defaultImageTranslationModelCacheDirectory, readImageTranslationModelManifest} = require('./image-model-cache.cjs');
 function arg(name, fallback) {const index = process.argv.indexOf(`--${name}`); return index < 0 ? fallback : process.argv[index + 1];}
+function normalizeOcrAnchor(value) {return value.normalize('NFKC').toLocaleUpperCase('en-US').replace(/[^\p{L}\p{N}]/gu,'');}
+function countAnchorOccurrences(text, anchor) {if(!anchor)return 0;let count=0;for(let index=text.indexOf(anchor);index>=0;index=text.indexOf(anchor,index+1))count++;return count;}
 let extensionDir = path.resolve(arg('extension-dir', '.output/chrome-mv3'));
 let diagnosticFixture;
 const artifacts = path.resolve(arg('artifacts-dir', '/private/tmp/fluentread-manga-browser'));
@@ -29,6 +38,7 @@ const blockedOfficial = process.argv.includes('--blocked-official');
 const blockedAll = process.argv.includes('--blocked-all-model-sources');
 const offlineModels = arg('offline-models-dir',null);
 const preloadModels = arg('preload-models-dir',null);
+const modelCacheDir = path.resolve(arg('model-cache-dir',defaultImageTranslationModelCacheDirectory()));
 const baseline = process.argv.includes('--baseline');
 const readingPauseMs=Number(arg('reading-pause-ms','0'));
 const skipFirstCancel=process.argv.includes('--skip-first-cancel');
@@ -39,8 +49,40 @@ const cacheNavigationTest=process.argv.includes('--cache-navigation');
 const tieredCacheTest=process.argv.includes('--tiered-cache');
 const pageFeedbackTest=process.argv.includes('--page-feedback');
 const prefetchPages=Number(arg('prefetch-pages','0'));
-const pipelineInputs=arg('pipeline-inputs',null)?.split(',').map(file=>path.resolve(file));
-const pipelineRounds=Number(arg('pipeline-rounds','3'));
+const explicitPipelineInputs=arg('pipeline-inputs',null)?.split(',').map(file=>path.resolve(file));
+const qualityManifestPath=arg('quality-manifest',null);
+assert.ok(!qualityManifestPath||!explicitPipelineInputs,'Choose either --quality-manifest or --pipeline-inputs');
+const qualityManifest=qualityManifestPath?JSON.parse(fs.readFileSync(path.resolve(qualityManifestPath),'utf8')):null;
+const qualityFixtures=qualityManifest?.fixtures;
+if(qualityManifest){
+    assert.equal(qualityManifest.version,1,'Use a supported quality manifest version');
+    assert.ok(Array.isArray(qualityFixtures)&&qualityFixtures.length>=1&&qualityFixtures.length<=20,'Quality corpus contains 1–20 bounded scenes');
+    const names=new Set();
+    for(const fixture of qualityFixtures){
+        assert.ok(typeof fixture.name==='string'&&/^[a-z0-9][a-z0-9-]*$/.test(fixture.name)&&!names.has(fixture.name),'Quality scene names are unique safe artifact stems');names.add(fixture.name);
+        assert.ok(typeof fixture.file==='string'&&fixture.mime==='image/png','Quality corpus uses named PNG files');
+        fixture.input=path.resolve(path.dirname(path.resolve(qualityManifestPath)),fixture.file);
+        const bytes=fs.readFileSync(fixture.input);
+        assert.equal(bytes.length,fixture.bytes,`Fixture byte length: ${fixture.name}`);
+        assert.equal(createHash('sha256').update(bytes).digest('hex'),fixture.sha256,`Fixture SHA-256: ${fixture.name}`);
+        assert.ok(['en','ja','ko','ru','auto'].includes(fixture.sourceLanguage),'Quality scenes specify a supported OCR language');
+        assert.ok([fixture.width,fixture.height].every(value=>Number.isInteger(value)&&value>0&&value<=8192)&&fixture.width*fixture.height<=16_777_216,'Quality scene dimensions match the runtime 8192-side / 16MP limits');
+        assert.ok(Array.isArray(fixture.expectedAnchors)&&fixture.expectedAnchors.length&&fixture.expectedAnchors.every(anchor=>typeof anchor==='string'&&anchor.trim()),'Quality scenes declare actual OCR anchor checks');
+        assert.ok(fixture.expectedAnchors.every(anchor=>normalizeOcrAnchor(anchor)),'Normalized OCR anchors are nonempty');
+        if(fixture.anchorOccurrences){
+            assert.ok(typeof fixture.anchorOccurrences==='object'&&!Array.isArray(fixture.anchorOccurrences)&&Object.keys(fixture.anchorOccurrences).length===fixture.expectedAnchors.length,'Each declared OCR anchor has an explicit occurrence count');
+            for(const anchor of fixture.expectedAnchors){
+                const count=fixture.anchorOccurrences[anchor];
+                assert.ok(Number.isInteger(count)&&count>=1&&count<=50,'Declared anchor occurrence counts are bounded positive integers');
+                assert.equal(countAnchorOccurrences(normalizeOcrAnchor(fixture.expectedSource.join(' ')),normalizeOcrAnchor(anchor)),count,'Occurrence metadata agrees with source text, including overlapping matches');
+            }
+        }
+        assert.ok(Array.isArray(fixture.protectedProbes)&&fixture.protectedProbes.length&&fixture.protectedProbes.every(probe=>Number.isInteger(probe.x)&&probe.x>=0&&probe.x<fixture.width&&Number.isInteger(probe.y)&&probe.y>=0&&probe.y<fixture.height&&Array.isArray(probe.rgb)&&probe.rgb.length===3&&probe.rgb.every(value=>Number.isInteger(value)&&value>=0&&value<=255)),'Quality scenes declare protected source pixels');
+    }
+}
+const pipelineInputs=qualityFixtures?.map(fixture=>fixture.input)||explicitPipelineInputs;
+const pipelineRounds=Number(arg('pipeline-rounds',qualityManifest?'1':'3'));
+if(pipelineInputs)assert.ok(Number.isInteger(pipelineRounds)&&pipelineRounds>=(qualityManifest?1:2)&&pipelineRounds<=5,qualityManifest?'Quality scenes allow 1–5 bounded rounds':'Measure first use separately from bounded warm runs (2–5 rounds)');
 const graphOverride=arg('pipeline-graph',null);
 const gpuDiagnosis=process.argv.includes('--gpu-diagnosis');
 const forceCpu=process.argv.includes('--pipeline-cpu');
@@ -114,11 +156,12 @@ if(explicitReaderSelector){report.site=`live image chapter: ${targetUrl}`;report
 report.prefetchPages=prefetchPages;
 report.sourceLanguage=sourceLanguage;report.readerOpenSelector=readerOpenSelector;report.readerScrollSelector=readerScrollSelector;
 report.targetLanguage=targetLanguage;
+if(qualityManifest)report.qualityManifest={path:path.resolve(qualityManifestPath),version:qualityManifest.version,scenes:qualityFixtures.map(({name,sourceLanguage,scene,expectedAnchors,protectedProbes})=>({name,sourceLanguage,scene,expectedAnchors,protectedProbes}))};
 if(canvasContentPixels)report.canvasPixelWorld='own production extension content world; ordinary API, no prototype substitution';
 report.readerStartIndex=readerStartIndex;
 report.readerNextSelector=readerNextSelector;
 if(imageTurnKey)report.pagedImages={turnKey:imageTurnKey,initialTurns:imageInitialTurns,urlPolicy:imageStableUrl?'stable':'changes'};
-let launched, page, worker, cdp, popup, modelObserver, browserPid,loadedExtensionId,contentPixelContext;
+let launched, page, worker, cdp, popup, modelObserver, browserPid,loadedExtensionId,contentPixelContext,preparedModels;
 loadedExtensionId=startupExtensionId;
 function focusGuard() {
     const current=JSON.parse(execFileSync('/usr/bin/osascript',['-l','JavaScript','-e',"ObjC.import('AppKit');const app=$.NSWorkspace.sharedWorkspace.frontmostApplication;JSON.stringify({pid:Number(app.processIdentifier),name:ObjC.unwrap(app.localizedName)});"],{encoding:'utf8'}));
@@ -666,7 +709,7 @@ function auditPageErrors() {
 }
 
 async function verifyPipelinePerformance(extensionId) {
-    assert.ok(pipelineRounds>=2 && pipelineRounds<=5,'Measure first use separately from bounded warm runs');
+    assert.ok(Number.isInteger(pipelineRounds)&&pipelineRounds>=(qualityManifest?1:2)&&pipelineRounds<=5,qualityManifest?'Quality scenes allow 1–5 bounded rounds':'Measure first use separately from bounded warm runs');
     await patch({animations:false});
     const chunks=fs.readdirSync(path.join(extensionDir,'chunks'));
     const ortFiles=chunks.filter(name=>/^ort\.(?:webgpu\.)?(?:bundle\.)?min-/.test(name));
@@ -723,13 +766,19 @@ async function verifyPipelinePerformance(extensionId) {
     })()`,awaitPromise:true,returnByValue:true});
     report.pipeline=[];report.graphOverride=graphOverride;
     for(const input of pipelineInputs) for(let round=0;round<pipelineRounds;round++) {
-        report.currentCase=`pipeline ${path.basename(input)} round ${round+1}`;
+        const fixture=qualityFixtures?.find(fixture=>fixture.input===input);
+        const caseName=fixture?.name||path.basename(input,'.png');
+        report.currentCase=`${qualityManifest?'quality':'pipeline'} ${caseName} round ${round+1}`;
+        if(fixture)await patch({from:fixture.sourceLanguage});
         await gotoVisible(page,targetUrl,{waitUntil:'domcontentloaded'});
         const data='data:image/png;base64,'+fs.readFileSync(input).toString('base64');
         await page.evaluate(async data=>{
             const images=[...document.querySelectorAll('.zao-image')];images.slice(1).forEach(image=>image.parentElement.remove());
             const image=images[0];image.src=data;await image.decode();window.scrollTo(0,0);
         },data);
+        if(fixture)await page.locator('.zao-image').first().evaluate(image=>image.style.height='auto');
+        const sourceState=await page.locator('.zao-image').first().evaluate(image=>({src:image.src,srcset:image.getAttribute('srcset'),sizes:image.getAttribute('sizes'),style:image.getAttribute('style')}));
+        const batchStart=await worker.evaluate(()=>globalThis.__mangaTest.textBatches.length);
         await page.evaluate(()=>{
             globalThis.__pipelineDisplay={changes:[]};
             const image=document.querySelector('.zao-image');
@@ -747,7 +796,7 @@ async function verifyPipelinePerformance(extensionId) {
             assert.ok(animation.height<40 && animation.width<280,'Status remains compact');
             if(!animation.reducedMotion)assert.ok(new Set(animation.frames.map(frame=>frame.transform)).size>1,'Spinner keeps rotating when decorative animations are disabled');
             assert.ok(animation.frames.every((frame,i,frames)=>!i || frame.at-frames[i-1].at<500),'Page heartbeat stays responsive during real inference');
-            await screenshot(`pipeline-loading-${round+1}`);
+            await screenshot(`${caseName}-loading-${round+1}`);
             await wait(async()=>await page.locator('.zao-image').first().evaluate(i=>i.style.opacity==='0'),180000);
         });
         assert.equal(measured.error,undefined,'Measured pipeline completes');
@@ -756,20 +805,79 @@ async function verifyPipelinePerformance(extensionId) {
         await page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(resolve)));
         const requestId=await worker.evaluate(index=>globalThis.__mangaTest.operations[index],before);
         const progress=await worker.evaluate(id=>globalThis.__mangaTest.progress.filter(p=>p.requestId===id),requestId);
-        const texts=await worker.evaluate(()=>globalThis.__mangaTest.textBatches.at(-1));
+        const textBatches=await worker.evaluate(index=>globalThis.__mangaTest.textBatches.slice(index),batchStart);
+        const texts=textBatches.flat();
         const sampled=await modelObserver.command('Runtime.evaluate',{expression:'globalThis.__pipelineSamples',returnByValue:true});
         const translated=await imageUi(`const surface=this.querySelector('.fluent-read-image-translation-bitmap');return surface?.tagName==='CANVAS'?surface.toDataURL('image/png'):surface?.src`);
         assert.ok(translated?.startsWith('data:image/png;base64,'),'Lossless translated output exists');
-        const output=path.join(artifacts,`${path.basename(input,'.png')}-round-${round+1}-translated.png`);
+        const output=path.join(artifacts,`${caseName}-round-${round+1}-translated.png`);
         fs.writeFileSync(output,Buffer.from(translated.split(',')[1],'base64'));
         const display=await page.evaluate(()=>globalThis.__pipelineDisplay);
-        report.pipeline.push({input,round,cold:report.pipeline.length===0,totalMs:end-start,start,display,requestId,progress,texts,...sampled.result.value,output,resources:measured});
-        assert.ok(texts.length>0,'Actual text recognition ran');await assertQuietReading();
+        const result={input,scene:caseName,sourceLanguage:fixture?.sourceLanguage||sourceLanguage,round,cold:report.pipeline.length===0,totalMs:end-start,start,display,requestId,progress,texts,...sampled.result.value,output,resources:measured};
+        report.pipeline.push(result);
+        assert.ok(texts.length>0,'Actual text recognition ran');
+        if(fixture){
+            const normalize=normalizeOcrAnchor;
+            const recognized=normalize(texts.join(' '));
+            result.expectedSource=fixture.expectedSource;
+            result.anchors=fixture.expectedAnchors.map(anchor=>{
+                const occurrences=countAnchorOccurrences(recognized,normalize(anchor));
+                // 旧 manifest 仅对源文本中确证唯一的锚点检查去重；重复源句必须显式声明期望次数，不能全局假设唯一。
+                const sourceOccurrences=Array.isArray(fixture.expectedSource)?countAnchorOccurrences(normalize(fixture.expectedSource.join(' ')),normalize(anchor)):undefined;
+                const expectedOccurrences=fixture.anchorOccurrences?.[anchor]??(sourceOccurrences===1?1:undefined);
+                return {anchor,occurrences,expectedOccurrences,found:occurrences>0&&(expectedOccurrences===undefined||occurrences===expectedOccurrences)};
+            });
+            // 精确 OCR 锚点是独立的质量门禁：保留失败并完成其余结构/像素/缓存检查和后续场景，最终统一严格失败。
+            result.qualityFailures=result.anchors.filter(anchor=>!anchor.found).map(({anchor,occurrences,expectedOccurrences})=>({type:expectedOccurrences!==undefined&&occurrences>expectedOccurrences?'duplicate-anchor':'ocr-anchor',anchor,occurrences,expectedOccurrences,
+                reason:occurrences===0?'Actual production OCR does not contain the normalized expected anchor':'Actual production OCR anchor count differs from the source-declared count'}));
+            const verticalColumns=(fixture.regions||[]).filter(region=>region.vertical).sort((a,b)=>b.bbox.x0-a.bbox.x0);
+            if(verticalColumns.length>=2){
+                const anchors=verticalColumns.map(region=>region.anchor);
+                const paragraphIndex=texts.findIndex(text=>{
+                    const paragraph=normalize(text);let cursor=0;
+                    for(const anchor of anchors){const needle=normalize(anchor),index=paragraph.indexOf(needle,cursor);if(index<0)return false;cursor=index+needle.length;}
+                    return true;
+                });
+                result.verticalParagraphOrder={anchors,paragraphIndex,found:paragraphIndex>=0};
+                assert.ok(paragraphIndex>=0,`Vertical columns share one actual OCR paragraph in right-to-left order: ${JSON.stringify(result.verticalParagraphOrder)}`);
+            }
+            result.protectedPixels=await page.evaluate(async({source,translated,probes})=>{
+                const sample=async src=>{const image=new Image();image.src=src;await image.decode();const canvas=document.createElement('canvas');canvas.width=image.naturalWidth;canvas.height=image.naturalHeight;const ctx=canvas.getContext('2d',{willReadFrequently:true});ctx.drawImage(image,0,0);return {width:canvas.width,height:canvas.height,pixels:probes.map(({x,y})=>Array.from(ctx.getImageData(x,y,1,1).data))};};
+                return {source:await sample(source),translated:await sample(translated)};
+            },{source:data,translated,probes:fixture.protectedProbes});
+            assert.equal(result.protectedPixels.source.width,fixture.width);assert.equal(result.protectedPixels.source.height,fixture.height);
+            assert.equal(result.protectedPixels.translated.width,fixture.width);assert.equal(result.protectedPixels.translated.height,fixture.height);
+            for(let index=0;index<fixture.protectedProbes.length;index++){
+                assert.deepEqual(result.protectedPixels.source.pixels[index].slice(0,3),fixture.protectedProbes[index].rgb,'Source probe agrees with reproducible fixture');
+                assert.deepEqual(result.protectedPixels.translated.pixels[index],result.protectedPixels.source.pixels[index],`Protected artwork survives source mask repair: ${caseName} probe ${index}`);
+            }
+        }
+        await assertQuietReading();
         await toggle();await wait(async()=>await page.locator('.zao-image').first().evaluate(i=>i.style.opacity!=='0'));
-        focusGuard();console.log(JSON.stringify({input:path.basename(input),round,totalMs:end-start,runs:sampled.result.value.runs.length}));
+        if(fixture){
+            assert.deepEqual(await page.locator('.zao-image').first().evaluate(image=>({src:image.src,srcset:image.getAttribute('srcset'),sizes:image.getAttribute('sizes'),style:image.getAttribute('style')})),sourceState,'Restoring original preserves source content and styles');
+            const operations=await ops(),requests=await worker.evaluate(()=>globalThis.__mangaTest.requests.length);
+            await toggle();await wait(async()=>await page.locator('.zao-image').first().evaluate(i=>i.style.opacity==='0'));
+            const restored=await imageUi(`const surface=this.querySelector('.fluent-read-image-translation-bitmap');return surface?.tagName==='CANVAS'?surface.toDataURL('image/png'):surface?.src`);
+            assert.equal(restored,translated,'Cached redisplay preserves exact translated bitmap');
+            assert.equal(await ops(),operations,'Cached redisplay issues no OCR operation');
+            assert.equal(await worker.evaluate(()=>globalThis.__mangaTest.requests.length),requests,'Cached redisplay issues no text transport');
+            result.restoreAndRedisplay={sourcePreserved:true,bitmapPreserved:true,additionalOcrOperations:0,additionalTextRequests:0};
+            await toggle();await wait(async()=>await page.locator('.zao-image').first().evaluate(i=>i.style.opacity!=='0'));
+        }
+        if(report.modelsPreloaded)assert.equal(report.modelRequests.length,report.modelRequestsAfterPreload,'Prepared models issue no new HTTP downloads during real inference');
+        focusGuard();console.log(JSON.stringify({input:path.basename(input),scene:caseName,sourceLanguage:result.sourceLanguage,round,totalMs:end-start,runs:sampled.result.value.runs.length}));
     }
-    report.cases.push('same-source uncached pipeline runs with real production OCR and inpainting');
+    report.cases.push(qualityManifest?'quality corpus with real production OCR, protected artwork pixels, original restore and cached redisplay':'same-source uncached pipeline runs with real production OCR and inpainting');
+    if(qualityManifest){
+        const anchors=report.pipeline.flatMap(result=>result.anchors||[]);
+        const failures=report.pipeline.flatMap(result=>(result.qualityFailures||[]).map(failure=>({scene:result.scene,round:result.round,...failure})));
+        report.qualitySummary={completedScenes:report.pipeline.length,expectedScenes:qualityFixtures.length*pipelineRounds,anchors:{total:anchors.length,matched:anchors.filter(anchor=>anchor.found).length,failed:anchors.filter(anchor=>!anchor.found).length},failures,
+            normalization:'NFKC, uppercase, retain Unicode letters/numbers; count overlapping substring anchors in actual OCR text; exact occurrence counts follow manifest metadata or source-proven unique anchors',
+            scope:'Exact OCR anchors are aggregated. Reading order, protected pixels, source restoration, cached bitmap and request counts remain immediate structural assertions. No CER or translation-provider quality claim.'};
+    }
     auditPageErrors();assert.deepEqual(report.errors,[]);assert.deepEqual(report.consoleErrors,[]);
+    if(qualityManifest)assert.deepEqual(report.qualitySummary.failures,[],'All exact OCR quality anchors pass after completing every scene');
 }
 
 /** 仅此模式验证停留调度与初始化取消复用；真实模型推理，文字传输受控，不把返显时间当作 OCR 性能。 */
@@ -1275,18 +1383,6 @@ await import('./mangaInferenceWorker.real.js');self.removeEventListener('message
             }
         };
     })()`});
-    if(preloadModels){
-        await gotoVisible(modelSettings,`chrome-extension://${extensionId}/options.html#settings-image-translation`);
-
-        await modelSettings.locator('.manga-model-settings').waitFor();
-        if(!baseline)await modelSettings.locator('.manga-download-settings > summary').click();
-        await modelSettings.locator('.manga-model-settings input[type=file]').setInputFiles(['PP-OCRv6_small_det.onnx','PP-OCRv6_small_rec.onnx','ppocrv6_dict.txt','lama-manga-dynamic.onnx'].map(name=>path.join(preloadModels,name)));
-        const until=Date.now()+60000;let prepared=false;while(Date.now()<until){const s=await modelSettings.evaluate(()=>chrome.runtime.sendMessage({type:'fluentReadMangaModelStatus'}));if(s.ready&&s.inpaintingReady){prepared=true;break;}await modelSettings.waitForTimeout(150);}assert.ok(prepared,'All four imported resources are ready before leaving settings');
-        const audit=async()=>{const cache=await caches.open('fluent-read-manga-ocr-v1');return Promise.all((await cache.keys()).map(async key=>{const response=await cache.match(key);const bytes=await response.arrayBuffer();return {url:key.url,status:response.status,bytes:bytes.byteLength,sha:Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256',bytes)),n=>n.toString(16).padStart(2,'0')).join('')}}));};
-        report.preloadedCacheOptions=await modelSettings.evaluate(audit);assert.equal(report.preloadedCacheOptions.length,4,'All four validated files exist before navigation');
-        const audited=await modelObserver.command('Runtime.evaluate',{expression:`(${audit.toString()})()`,returnByValue:true,awaitPromise:true});report.preloadedCacheOffscreen=audited.result.value;
-        report.modelsPreloaded=true;await gotoVisible(popup,`chrome-extension://${extensionId}/popup.html`);
-    }
     if(traceLayout)await modelObserver.command('Runtime.evaluate',{expression:`(()=>{
         const samples=globalThis.__mangaLayoutTrace=[];
         const boxes=new WeakMap(),rect=CanvasRenderingContext2D.prototype.rect,draw=CanvasRenderingContext2D.prototype.fillText;
@@ -1304,6 +1400,47 @@ await import('./mangaInferenceWorker.real.js');self.removeEventListener('message
         else report.errors.push(error.message);
     });
     await gotoVisible(page,targetUrl,{waitUntil:'domcontentloaded',timeout:60000});
+    // 先建立浏览器/CDP 所有权并完成正文导航；只有实际可用的导入 UI 才准备模型，失败生命周期不触发文件或网络活动。
+    // 下载来源回退/离线导入保持原有负向语义，不能让自动缓存掩盖它们。
+    const useModelCache=!preloadModels&&!offlineModels&&!blockedOfficial&&!blockedAll&&!baseline;
+    if(preloadModels||useModelCache){
+        await gotoVisible(modelSettings,`chrome-extension://${extensionId}/options.html#settings-image-translation`);
+        const manager=modelSettings.locator('.manga-model-settings');
+        await manager.waitFor();
+        if(!baseline)await manager.locator('.manga-download-settings').evaluate(details=>details.open=true);
+        const importInput=manager.locator('input[type=file]');
+        await importInput.waitFor({state:'attached'});
+        if(useModelCache){
+            const needsPaddle=(qualityFixtures?.map(fixture=>fixture.sourceLanguage)||[sourceLanguage]).some(language=>!['ru','ko'].includes(language));
+            const kinds=needsPaddle?['ocr','inpaint']:['inpaint'];
+            preparedModels=await ensureImageTranslationModelFiles({directory:modelCacheDir,kinds,sourceDirectories:[modelCacheDir]});
+            report.modelCache=preparedModels;
+        }
+        const files=preparedModels?.files||readImageTranslationModelManifest().map(asset=>({...asset,path:path.join(preloadModels,asset.filename)}));
+        await importInput.setInputFiles(files.map(file=>file.path));
+        const requiredOcr=files.some(file=>file.kind==='ocr'),requiredInpaint=files.some(file=>file.kind==='inpaint');
+        const until=Date.now()+60000;let status;
+        while(Date.now()<until){
+            status=await modelSettings.evaluate(()=>chrome.runtime.sendMessage({type:'fluentReadMangaModelStatus'}));
+            if(status.success&&(!requiredOcr||status.ready)&&(!requiredInpaint||status.inpaintingReady))break;
+            const failure=await manager.locator('[role=alert]').allTextContents();
+            assert.ok(!failure.some(text=>text.trim()),`Model import failed: ${failure.join('; ')}`);
+            await modelSettings.waitForTimeout(150);
+        }
+        assert.ok(status?.success&&(!requiredOcr||status.ready)&&(!requiredInpaint||status.inpaintingReady),'Required imported resources are ready before leaving settings');
+        report.preloadedModelStatus=status;
+        const audit=async()=>{const cache=await caches.open('fluent-read-manga-ocr-v1');return Promise.all((await cache.keys()).map(async key=>{const response=await cache.match(key);const bytes=await response.arrayBuffer();return {url:key.url,status:response.status,bytes:bytes.byteLength,sha:Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256',bytes)),n=>n.toString(16).padStart(2,'0')).join('')}}));};
+        report.preloadedCacheOptions=await modelSettings.evaluate(audit);
+        const audited=await modelObserver.command('Runtime.evaluate',{expression:`(${audit.toString()})()`,returnByValue:true,awaitPromise:true});
+        assert.equal(audited.exceptionDetails,undefined,'Offscreen model cache audit executes');
+        report.preloadedCacheOffscreen=audited.result.value;
+        for(const entries of [report.preloadedCacheOptions,report.preloadedCacheOffscreen])for(const file of files){
+            const entry=entries.find(entry=>entry.url===file.url);
+            assert.ok(entry,`Imported model is visible before navigation: ${file.filename}`);
+            assert.equal(entry.status,200);assert.equal(entry.bytes,file.bytes);assert.equal(entry.sha,file.sha256);
+        }
+        report.modelsPreloaded=true;report.modelRequestsAfterPreload=report.modelRequests.length;await gotoVisible(popup,`chrome-extension://${extensionId}/popup.html`);
+    }else report.modelCache={directory:modelCacheDir,skipped:'explicit model-source, offline-import or baseline case'};
     if(readerOpenSelector)await page.locator(readerOpenSelector).click({timeout:15000});
     cdp=await context.newCDPSession(page);
     if(canvasContentPixels)cdp.on('Runtime.executionContextCreated',event=>{if(event.context.origin===`chrome-extension://${extensionId}`&&event.context.auxData?.type==='isolated')contentPixelContext=event.context.id;});

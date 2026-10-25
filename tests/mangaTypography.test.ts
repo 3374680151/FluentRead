@@ -50,6 +50,14 @@ describe('漫画专用完整排版',()=>{
 describe('原图背景与字体层次',()=>{
     const width=1000,height=400,pixels=new Uint8ClampedArray(width*height*4).fill(255);
     const region={text:'你好世界',fontSize:70,bbox:{x0:100,y0:100,x1:400,y1:250}};
+    it('均匀气泡按源行和描边余量清字，段落空隙保留原图而不整块铺白', () => {
+        const c=context(), boxes=[{x0:100,y0:100,x1:220,y1:120},{x0:100,y0:160,x1:220,y1:180}];
+        drawMangaTranslations(c as any,pixels,width,height,[{text:'完整译文',fontSize:20,bbox:{x0:100,y0:100,x1:220,y1:180},sourceBoxes:boxes}],true,[{color:'rgb(255,255,255)',uniform:true}]);
+        expect(c.fillRect.mock.calls).toEqual([[96,96,128,28],[96,156,128,28]]);
+        expect(c.fillRect).not.toHaveBeenCalledWith(100,100,120,80);
+        expect(c.rect).toHaveBeenCalledWith(100,100,120,80);
+        expect(c.fillText.mock.calls.map(call=>call[0]).join('')).toBe('完整译文');
+    });
     it('七八像素高的短行不会被固定内边距挤成三像素，仍裁剪在原始识别范围',()=>{
         for(const height of [7,8]){
             const c=context(),bbox={x0:40,y0:40,x1:132,y1:40+height};

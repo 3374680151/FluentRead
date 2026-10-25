@@ -50,6 +50,8 @@ Manga uses local PaddleOCR. Closed light speech bubbles are enlarged and recogni
 
 Manga dialogue uses a moderately bold font; large lettering on complex backgrounds keeps a stronger title style with a white outline. Wrapping keeps punctuation with adjacent characters and balances very short last lines within the original text area. System fonts are used without an additional font download. These changes improve presentation; they do not guarantee accurate recognition or translation of every page.
 
+PaddleOCR uses overlapping tiles for large images to reduce small-text loss from shrinking a whole page. Page recognition is retained when a bubble crop misses lines, including reliable single-line captions outside bubbles. Single-image translation also groups adjacent vertical columns from right to left. Erasing uses the original line boxes separately from typesetting, preserving artwork between lines. Tiling can increase recognition time on large images; check the recognized text against the original.
+
 ### Download manga models
 
 Expand **Recognition resources and downloads** under **Image/manga translation** to view resources grouped by purpose. Expand **Download and manage** to import downloaded files or clear resources. Tesseract language packs are managed separately in the same area. PaddleOCR needs about 30 MB. Manga's first complex background also needs an inpainting model of about 197 MB. The repair resource is hidden when only single-image PaddleOCR is enabled. Settings show download progress and received bytes; the manga button shows preparation status without covering the artwork.

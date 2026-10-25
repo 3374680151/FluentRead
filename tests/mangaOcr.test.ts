@@ -12,6 +12,7 @@ vi.mock('@/src/features/image-translation/services/mangaInpainting',()=>({mangaI
 vi.mock('@/src/features/image-translation/services/mangaInferenceClient',async original=>({...await original<any>(),mangaInferenceClient:{prepare:mocks.workerPrepare,request:mocks.workerRequest,release:mocks.workerRelease,dispose:mocks.workerDispose}}));
 vi.mock('@/src/features/image-translation/services/imageEncoding',()=>({encodeImageCanvas:mocks.encode}));
 import {createBrowserMangaOcr, createMangaOcrRuntime, mangaOcrRuntime, removeMangaModels, disposeMangaModels} from '@/src/features/image-translation/services/mangaOcr';
+import {planMangaOcrTiles, mergeMangaOcrTiles} from '@/src/features/image-translation/services/mangaOcrTiles';
 const opaquePixels=()=>{const pixels=new Uint8ClampedArray(200*200*4);for(let index=3;index<pixels.length;index+=4)pixels[index]=255;return pixels;};
 const response = {results:[{text:'Hello world',confidence:0.99,box:{x:10,y:10,width:100,height:20}}]};
 const deferred = <T,>() => {let resolve!:(v:T)=>void,reject!:(e:unknown)=>void;const promise=new Promise<T>((a,b)=>{resolve=a;reject=b});return {promise,resolve,reject}};
@@ -23,7 +24,174 @@ beforeEach(()=>{vi.useFakeTimers();vi.clearAllMocks();mocks.contexts=[];mocks.ca
 });
 afterEach(async()=>{await mangaOcrRuntime.dispose().catch(()=>undefined);vi.clearAllTimers();vi.useRealTimers();vi.unstubAllGlobals();vi.restoreAllMocks()});
 
+describe('漫画原像素瓦片几何',()=>{
+    it.each([[0,20],[-1,20],[NaN,20],[1.5,20],[8193,20],[4096,4097]])('拒绝无效或超像素预算的尺寸 %s × %s', (width,height)=>{
+        expect(()=>planMangaOcrTiles(width,height)).toThrow('尺寸超出');
+    });
+
+    it('小图复用整图，双轴大图均匀覆盖原图且保持至少512像素重叠',()=>{
+        expect(planMangaOcrTiles(1200,900)).toEqual([{x:0,y:0,width:1200,height:900}]);
+        const tiles=planMangaOcrTiles(4096,4096);
+        expect(tiles).toHaveLength(16);expect(tiles.at(-1)).toEqual({x:2560,y:2560,width:1536,height:1536});
+        for(const axis of ['x','y'] as const){
+            const starts=[...new Set(tiles.map(tile=>tile[axis]))];
+            expect(starts[0]).toBe(0);
+            for(let index=1;index<starts.length;index++)expect(starts[index]-starts[index-1]).toBeLessThanOrEqual(1024);
+        }
+        expect(planMangaOcrTiles(8192,2048)).toHaveLength(16);
+        expect(planMangaOcrTiles(6000,2700)).toHaveLength(18);
+        expect(planMangaOcrTiles(3585,4679)).toHaveLength(20);
+    });
+
+    it('只去重不同瓦片中的同一物理行，保留相邻行与同一瓦片的检测结果',()=>{
+        const tile={x:0,y:0,width:100,height:100};
+        const item=(text:string,x:number,y:number,confidence=.9)=>({text,confidence,box:{x,y,width:30,height:10}});
+        expect(mergeMangaOcrTiles([
+            {tile,results:[item('original',10,20),item('same tile',10,20),item('lower line',10,35)]},
+            {tile:{...tile,x:5},results:[item('duplicate',5,20,.8),item('side line',55,20,.8)]},
+        ],100,100).map(line=>line.text)).toEqual(['original','same tile','side line','lower line']);
+        expect(mergeMangaOcrTiles([
+            {tile,results:[item('small line',10,20)]},
+            {tile,results:[{text:'large detector region',confidence:.99,box:{x:5,y:5,width:80,height:80}}]},
+        ],100,100).map(line=>line.text)).toEqual(['large detector region','small line']);
+    });
+
+    it('边界完整行优先于高置信裁切片段，重复完整行按置信度及面积选择且不改变输入',()=>{
+        const whole={text:'whole',confidence:.8,box:{x:10,y:10,width:80,height:15}};
+        const source=[
+            {tile:{x:0,y:0,width:60,height:100},results:[{text:'cut',confidence:.99,box:{x:10,y:10,width:50,height:15}}]},
+            {tile:{x:0,y:0,width:100,height:100},results:[whole]},
+            {tile:{x:0,y:0,width:100,height:100},results:[{...whole,text:'narrow',box:{...whole.box,width:70}}]},
+        ];
+        const snapshot=JSON.stringify(source);
+        expect(mergeMangaOcrTiles(source,100,100)).toEqual([whole]);expect(JSON.stringify(source)).toBe(snapshot);
+    });
+
+    it('完整长框不能吞掉另一瓦片中的独立短标签，双边裁切也不以单向覆盖推断同一行',()=>{
+        const title={text:'LEFT TITLE',confidence:.99,box:{x:100,y:100,width:500,height:20}};
+        const label={text:'RIGHT',confidence:.98,box:{x:270,y:100,width:60,height:20}};
+        expect(mergeMangaOcrTiles([
+            {tile:{x:0,y:0,width:800,height:400},results:[title]},
+            {tile:{x:80,y:0,width:800,height:400},results:[label]},
+        ],1000,400)).toEqual([title,{...label,box:{...label.box,x:350}}]);
+        expect(mergeMangaOcrTiles([
+            {tile:{x:0,y:0,width:600,height:400},results:[{text:'left fragment',confidence:.9,box:{x:200,y:100,width:400,height:20}}]},
+            {tile:{x:500,y:0,width:500,height:400},results:[{text:'right fragment',confidence:.8,box:{x:0,y:100,width:100,height:20}}]},
+        ],1000,400).map(item=>item.text)).toEqual(['left fragment','right fragment']);
+    });
+
+    it('真实3600px长图检测框退边3px，仍以完整框投影的可见切片识别裁切行并只保留一份',()=>{
+        // browser-long-raw/tile-raw-evidence.json：原模型无参数替换，第二瓦片底2224截断了这行。
+        const tiles=planMangaOcrTiles(960,3600);
+        expect(tiles.map(tile=>tile.y)).toEqual([0,688,1376,2064]);
+        const complete={text:'Read beyond the next panel.',confidence:0.9920982276951825,box:{x:130,y:138,width:517,height:34}};
+        const result=mergeMangaOcrTiles([
+            {tile:tiles[1],results:[{text:'Read bevond the next panel',confidence:0.9901552888063284,box:{x:130,y:1512,width:518,height:21}}]},
+            {tile:tiles[2],results:[{text:'Read beyond the next panel.',confidence:0.991522541752568,box:{x:130,y:826,width:516,height:34}}]},
+            {tile:tiles[3],results:[complete]},
+        ],960,3600);
+        expect(result).toEqual([{...complete,box:{...complete.box,y:2202}}]);
+    });
+
+    it('完整行投影只能消除吻合的裁边切片，不能吞同窗口旁边的独立短标签或厚框',()=>{
+        const full={text:'whole horizontal row',confidence:.9,box:{x:100,y:90,width:500,height:40}};
+        const tile={x:0,y:0,width:800,height:115};
+        const fragment={text:'partial row',confidence:.99,box:{x:100,y:90,width:500,height:20}};
+        const label={text:'RIGHT',confidence:.99,box:{x:350,y:90,width:60,height:20}};
+        const unrelated={text:'separate',confidence:.99,box:{x:650,y:90,width:60,height:20}};
+        expect(mergeMangaOcrTiles([
+            {tile,results:[fragment,label,unrelated]},
+            {tile:{x:0,y:0,width:800,height:200},results:[full]},
+        ],800,200).map(item=>item.text)).toEqual(['whole horizontal row','RIGHT','separate']);
+    });
+
+    it('另一候选完全不在本瓦片的水平或垂直可见范围时，保留各自独立文字',()=>{
+        const item={text:'independent',confidence:.9,box:{x:10,y:10,width:30,height:10}};
+        expect(mergeMangaOcrTiles([
+            {tile:{x:0,y:0,width:100,height:100},results:[item]},
+            {tile:{x:200,y:0,width:100,height:100},results:[item]},
+            {tile:{x:0,y:200,width:100,height:100},results:[item]},
+        ],300,300).map(line=>line.box)).toEqual([
+            {x:10,y:10,width:30,height:10},{x:210,y:10,width:30,height:10},{x:10,y:210,width:30,height:10},
+        ]);
+    });
+
+    it('上下左右内部裁边均可被完整结果替代，原图边缘不被误判为裁切',()=>{
+        const item={text:'full',confidence:.8,box:{x:45,y:45,width:10,height:10}};
+        expect(mergeMangaOcrTiles([
+            {tile:{x:0,y:0,width:100,height:100},results:[item]},
+            {tile:{x:45,y:0,width:55,height:100},results:[{text:'left',confidence:.99,box:{x:0,y:45,width:10,height:10}}]},
+            {tile:{x:0,y:45,width:100,height:55},results:[{text:'top',confidence:.99,box:{x:45,y:0,width:10,height:10}}]},
+            {tile:{x:0,y:0,width:55,height:100},results:[{text:'right',confidence:.99,box:{x:45,y:45,width:10,height:10}}]},
+            {tile:{x:0,y:0,width:100,height:55},results:[{text:'bottom',confidence:.99,box:{x:45,y:45,width:10,height:10}}]},
+        ],100,100)).toEqual([item]);
+        const edge={text:'edge',confidence:.99,box:{x:0,y:0,width:100,height:100}};
+        expect(mergeMangaOcrTiles([{tile:{x:0,y:0,width:100,height:100},results:[edge]}],100,100)).toEqual([edge]);
+    });
+
+    it('忽略非法或图外结果，夹紧映回坐标并按 y/x 排序',()=>{
+        const item=(x:number,y:number,width=10,height=10,confidence=.9)=>({text:'ok',confidence,box:{x,y,width,height}});
+        const lines=mergeMangaOcrTiles([{tile:{x:0,y:0,width:100,height:100},results:[
+            item(NaN,0),item(0,0,0),item(0,0,10,-1),item(0,0,10,10,NaN),item(101,20),item(20,101),
+            item(50,50),item(-2,-3),item(90,90,15,15),item(20,50),
+        ]}],100,100);
+        expect(lines.map(line=>line.box)).toEqual([
+            {x:0,y:0,width:8,height:7},{x:20,y:50,width:10,height:10},{x:50,y:50,width:10,height:10},{x:90,y:90,width:10,height:10},
+        ]);
+        expect(mergeMangaOcrTiles([],100,100)).toEqual([]);
+    });
+});
+
 describe('漫画本地神经 OCR 会话',()=>{
+    it('长图使用原像素瓦片识别，跨边界完整行取代裁切片段并保留整图坐标',async()=>{
+        const source={naturalWidth:2400,naturalHeight:200,src:'long-image'} as HTMLImageElement;
+        mocks.recognize.mockResolvedValueOnce({results:[{text:'truncated',confidence:.99,box:{x:1450,y:40,width:86,height:24}}]})
+            .mockResolvedValueOnce({results:[{text:'The complete sentence',confidence:.9,box:{x:576,y:40,width:200,height:24}},
+                {text:'Separate line',confidence:.95,box:{x:100,y:90,width:150,height:24}}]});
+        const port=await createBrowserMangaOcr();
+        const result=await port.recognize('long-image',{flatten:true,noCache:true,strategy:'per-box',decodedImage:source});
+        expect(result.results).toEqual([
+            {text:'The complete sentence',confidence:.9,box:{x:1440,y:40,width:200,height:24}},
+            {text:'Separate line',confidence:.95,box:{x:964,y:90,width:150,height:24}},
+        ]);
+        expect(mocks.options.mock.calls[0][0].recognition.maxCropSourceSideLength).toBe(8192);
+        expect(mocks.contexts[1].drawImage.mock.calls).toEqual([
+            [mocks.canvases[0],0,0,1536,200,0,0,1536,200],
+            [mocks.canvases[0],864,0,1536,200,0,0,1536,200],
+        ]);
+        expect(mocks.recognize).toHaveBeenCalledTimes(2);
+        expect(mocks.canvases.every(canvas=>canvas.width===0&&canvas.height===0)).toBe(true);
+        expect(source.src).toBe('long-image');expect(mocks.bitmapClose).not.toHaveBeenCalled();await port.destroy();
+    });
+
+    it.each(['abort','inference','canvas'])('瓦片识别中断后不继续处理并释放全部自有画布与位图：%s',async failureStage=>{
+        vi.mocked(createImageBitmap).mockResolvedValueOnce({width:200,height:3000,close:mocks.bitmapClose} as any);
+        const controller=new AbortController(),failure=new Error('tile failed');
+        if(failureStage==='abort')mocks.recognize.mockImplementationOnce(async()=>{controller.abort();return response;});
+        if(failureStage==='inference')mocks.recognize.mockRejectedValueOnce(failure);
+        if(failureStage==='canvas'){
+            const original=vi.mocked(document.createElement).getMockImplementation()!;
+            vi.mocked(document.createElement).mockImplementationOnce(()=>original('canvas'))
+                .mockReturnValueOnce({width:0,height:0,getContext:()=>null} as any);
+        }
+        const port=await createBrowserMangaOcr();
+        const pending=port.recognize('long-image',{flatten:true,noCache:true,strategy:'per-box',signal:controller.signal});
+        if(failureStage==='abort')await expect(pending).rejects.toMatchObject({name:'AbortError'});
+        else if(failureStage==='inference')await expect(pending).rejects.toBe(failure);
+        else await expect(pending).rejects.toThrow('浏览器不支持');
+        expect(mocks.recognize).toHaveBeenCalledTimes(failureStage==='canvas'?0:1);
+        expect(mocks.canvases.every(canvas=>canvas.width===0&&canvas.height===0)).toBe(true);
+        expect(mocks.bitmapClose).toHaveBeenCalledOnce();await port.destroy();
+    });
+
+    it('Worker 在像素分配前拒绝超预算图并释放解码位图',async()=>{
+        vi.mocked(createImageBitmap).mockResolvedValueOnce({width:8193,height:200,close:mocks.bitmapClose} as any);
+        const port=await createBrowserMangaOcr();
+        await expect(port.recognize('oversized',{flatten:true,noCache:true,strategy:'per-box'})).rejects.toThrow('尺寸超出');
+        expect(mocks.contexts[0].drawImage).not.toHaveBeenCalled();expect(mocks.recognize).not.toHaveBeenCalled();
+        expect(mocks.canvases[0]).toMatchObject({width:0,height:0});expect(mocks.bitmapClose).toHaveBeenCalledOnce();await port.destroy();
+    });
+
     it.each([
         'data:image/svg+xml;base64,PHN2Zy8+',
         'data:IMAGE/SVG+XML;base64,PHN2Zy8+',
@@ -178,10 +346,10 @@ describe('漫画本地神经 OCR 会话',()=>{
         const result=await port.recognize('worker-image',{flatten:true,noCache:true,strategy:'per-box'});
         expect(result.results).toEqual(response.results);
         expect(result.bubbles?.[0].results[0].box).toEqual({x:35,y:50,width:30,height:10});
-        expect(offscreen.mock.calls).toEqual([[0,0],[0,0],[0,0]]);
+        expect(offscreen.mock.calls).toEqual([[0,0],[0,0]]);
         for(const canvas of mocks.canvases) expect(canvas.getContext).toHaveBeenCalledWith('2d',{willReadFrequently:true});
-        expect(mocks.contexts[1].fillRect).toHaveBeenCalledWith(30,40,50,50);
-        expect(mocks.contexts[2].drawImage).toHaveBeenCalledWith(mocks.canvases[0],30,40,50,50,0,0,150,150);
+        expect(mocks.contexts.every(context=>context.fillRect.mock.calls.length===0)).toBe(true);
+        expect(mocks.contexts[1].drawImage).toHaveBeenCalledWith(mocks.canvases[0],30,40,50,50,0,0,150,150);
         expect(mocks.canvases.every(canvas=>canvas.width===0&&canvas.height===0)).toBe(true);
         expect(mocks.bitmapClose).toHaveBeenCalledOnce();await port.destroy();
     });
@@ -240,6 +408,21 @@ describe('漫画本地神经 OCR 会话',()=>{
         const port=await createBrowserMangaOcr();mocks.recognize.mockImplementationOnce(async()=>{try{await session.run();}catch{}return {results:[]};});
         await expect(port.recognize('image',{flatten:true,noCache:true,strategy:'per-box'})).rejects.toThrow('CPU failed');
         expect(mocks.canvases.every(c=>c.width===0&&c.height===0)).toBe(true);
+    });
+    it('SDK 吞掉纯 CPU 推理失败时重抛首因，下一次识别不携带旧错误',async()=>{
+        const first=new Error('CPU recognition failed'),second=new Error('subsequent CPU error');
+        const session={run:vi.fn().mockRejectedValueOnce(first).mockRejectedValueOnce(second).mockResolvedValue(response),release:vi.fn()};
+        mocks.sessions=[session,undefined];
+        const port=await createBrowserMangaOcr();
+        mocks.recognize.mockImplementationOnce(async()=>{
+            try{await session.run();}catch{}
+            try{await session.run();}catch{}
+            return {results:[]};
+        });
+        await expect(port.recognize('first',{flatten:true,noCache:true,strategy:'per-box'})).rejects.toBe(first);
+        mocks.recognize.mockImplementationOnce(async()=>session.run());
+        expect((await port.recognize('retry',{flatten:true,noCache:true,strategy:'per-box'})).results).toEqual(response.results);
+        await port.destroy();
     });
     it('不可用会话在失败后释放，立即重试创建新会话，清理失败不覆盖原错误',async()=>{
         const port={recognize:vi.fn().mockRejectedValueOnce(new Error('CPU inference')).mockResolvedValue(response),destroy:vi.fn().mockRejectedValueOnce(new Error('cleanup')).mockResolvedValue(undefined)};
@@ -318,7 +501,7 @@ describe('漫画本地神经 OCR 会话',()=>{
         mocks.recognize.mockResolvedValueOnce(response).mockResolvedValueOnce({results:[{text:'Clear dialogue',confidence:.99,box:{x:15,y:30,width:90,height:30}}]});
         const port=await createBrowserMangaOcr();const result=await port.recognize('image',{flatten:true,noCache:true,strategy:'per-box'});
         expect(result.results).toEqual(response.results);expect(mocks.contexts[0].fillRect).not.toHaveBeenCalled();expect(mocks.contexts[0].putImageData).not.toHaveBeenCalled();
-        expect(result.bubbles?.[0].results[0].box).toEqual({x:35,y:50,width:30,height:10});expect(mocks.contexts[1].fillRect).toHaveBeenCalledWith(30,40,50,50);expect(mocks.contexts[2].drawImage).toHaveBeenCalledWith(mocks.canvases[0],30,40,50,50,0,0,150,150);
+        expect(result.bubbles?.[0].results[0].box).toEqual({x:35,y:50,width:30,height:10});expect(mocks.contexts.every(context=>context.fillRect.mock.calls.length===0)).toBe(true);expect(mocks.contexts[1].drawImage).toHaveBeenCalledWith(mocks.canvases[0],30,40,50,50,0,0,150,150);
         expect(mocks.canvases.every(c=>c.width===0&&c.height===0)).toBe(true);
         // 相同输入在推理之后取消，不能返回迟到的气泡结果。
         main=true;const abort=new AbortController();mocks.recognize.mockImplementationOnce(async()=>{abort.abort();return response;});
@@ -337,10 +520,6 @@ describe('漫画本地神经 OCR 会话',()=>{
         const pixels=opaquePixels();for(let y=40;y<90;y++)for(let x=30;x<80;x++)pixels.fill(255,(y*200+x)*4,(y*200+x)*4+4);
         vi.mocked(document.createElement).mockReturnValueOnce({width:200,height:200,getContext:()=>({fillRect:vi.fn(),drawImage:vi.fn(),putImageData:vi.fn(),getImageData:()=>({data:pixels})})} as any).mockReturnValueOnce({width:0,height:0,getContext:()=>null} as any);
         await expect(port.recognize('image',{flatten:true,noCache:true,strategy:'per-box'})).rejects.toThrow('浏览器不支持');expect(mocks.bitmapClose).toHaveBeenCalledTimes(3);
-        const canvasFactory=vi.mocked(document.createElement).getMockImplementation()!;
-        vi.mocked(document.createElement).mockReturnValueOnce({width:200,height:200,getContext:()=>({fillRect:vi.fn(),drawImage:vi.fn(),putImageData:vi.fn(),getImageData:()=>({data:pixels})})} as any)
-            .mockImplementationOnce(()=>canvasFactory('canvas')).mockReturnValueOnce({width:0,height:0,getContext:()=>null} as any);
-        await expect(port.recognize('image',{flatten:true,noCache:true,strategy:'per-box'})).rejects.toThrow('浏览器不支持');
         const stopped=new AbortController();stopped.abort();await expect(port.recognize('image',{flatten:true,noCache:true,strategy:'per-box',signal:stopped.signal})).rejects.toMatchObject({name:'AbortError'});
     });
     it('设置清理先释放背景修补和 OCR 会话，卸载期间销毁失败不会变成未处理异常',async()=>{

@@ -32,7 +32,7 @@ describe('漫画局部气泡识别边界',()=>{
         expect(findMangaBubbles(edge,100,100)).toEqual([]);
     });
     it('局部识别替换整页重复结果，不跨气泡拼句',()=>{
-        const page={results:[text('small incorrect',25,30),text('Outside caption',160,180)],bubbles:[{bbox:box(10,10),results:[text('Hello',20,20),text('world',20,36)]}]};
+        const page={results:[text('small incorrect',25,32),text('Outside caption',160,180)],bubbles:[{bbox:box(10,10),results:[text('Hello',20,20),text('world',20,36)]}]};
         expect(collectMangaRegions(page,'en',400,400).map(r=>r.text)).toEqual(['Hello world','Outside caption']);
         expect(collectMangaRegions({results:page.results},'en',400,400)).toHaveLength(2);
     });
@@ -45,11 +45,44 @@ describe('漫画局部气泡识别边界',()=>{
         expect(collectMangaRegions({results:lines},'en',400,400)).toHaveLength(3);
         expect(collectMangaRegions({results:[],bubbles:[{bbox:box(20,20,130,200),results:[text('First',40,40,60,8),text('Distant',40,80,60,8)]}]},'en',400,400)).toHaveLength(2);
     });
-    it('对白较多时只保留外部完整旁白，空气泡和拟声碎片不进入翻译',()=>{
+    it('气泡内加宽行距仍不跨两个紧邻且同宽的独立气泡连接台词', () => {
+        const first=text('First speaker',40,40,110,20),second=text('Next speaker',40,85,110,20);
+        const page={results:[],bubbles:[{bbox:box(20,20,150,50),results:[first]},{bbox:box(20,75,150,50),results:[second]}]};
+        expect(collectMangaRegions(page,'en',400,400).map(region=>region.text)).toEqual(['First speaker','Next speaker']);
+    });
+    it('其他对白和空气泡不会删除可靠的单行旁白或气泡内全页回退',()=>{
         const page={results:[text('Noise',150,200),text('short',150,240),text('row',150,254),text('Reliable caption',200,290),text('second line',200,306),text('Below',25,90),text('Left',0,30),text('Right',90,30)],
             bubbles:[{bbox:box(10,10),results:[text('Hello',20,20)]},{bbox:box(200,10),results:[text('Again',210,20)]},{bbox:box(10,110),results:[]}]};
         const regions=collectMangaRegions(page,'en',400,400);
-        expect(regions.map(r=>r.text)).toEqual(['Again','Hello','Reliable caption second line']);
+        expect(regions.map(r=>r.text)).toEqual(['Again','Hello Left','Right','Below','Noise','short row','Reliable caption second line']);
         expect(collectMangaRegions({results:[],bubbles:[{bbox:box(10,10),results:[]}]},'en',400,400)).toEqual([]);
+    });
+    it('局部 OCR 为空或低置信度时保留全页原文，局部漏行与可靠局部行合成同一句', () => {
+        const first = text('Small original', 30, 25, 60, 12), last = text('last line', 30, 42, 60, 12);
+        const bbox = box(10, 10, 120, 90);
+        for (const profile of ['manga', 'image'] as const) {
+            expect(collectMangaRegions({results: [first, last], bubbles: [{bbox, results: []}]}, 'en', 400, 400, profile).map(r=>r.text))
+                .toEqual(profile === 'manga' ? ['Small original last line'] : ['Small original', 'last line']);
+            expect(collectMangaRegions({results: [first], bubbles: [{bbox, results: [{...first, text:'unreliable', confidence:.4}]}]}, 'en', 400, 400, profile).map(r=>r.text))
+                .toEqual(['Small original']);
+        }
+        const result = collectMangaRegions({results: [first, last], bubbles: [{bbox, results: [{...first, text:'Correct first'}]}]}, 'en', 400, 400);
+        expect(result.map(r=>r.text)).toEqual(['Correct first last line']);
+        expect(result[0].sourceBoxes).toEqual([{x0:30,y0:25,x1:90,y1:37},{x0:30,y0:42,x1:90,y1:54}]);
+    });
+    it('很小的局部碎片不能删除全页整行，也不会按合并后中心丢掉气泡外行', () => {
+        const page = {results:[text('Complete source sentence', 20, 20, 160, 12)], bubbles:[{bbox:box(10,10,200,100),results:[text('word',20,20,30,12)]}]};
+        const imageLines = collectMangaRegions(page,'en',400,400,'image');
+        expect(imageLines.map(r=>r.text)).toContain('Complete source sentence');
+        const separated = collectMangaRegions({results:[text('Inside',20,20),text('Outside',20,37)],bubbles:[{bbox:box(10,10,70,22),results:[]}]},'en',400,400);
+        expect(separated.map(r=>r.text)).toEqual(['Inside','Outside']);
+    });
+    it('气泡中的高置信度大单字无论来自局部还是全页回退均保留，外部仍过滤', () => {
+        const single=text('え',40,40,70,70), bbox=box(20,20,120,120);
+        for (const profile of ['manga','image'] as const) {
+            expect(collectMangaRegions({results:[],bubbles:[{bbox,results:[single]}]},'ja',400,400,profile).map(r=>r.text)).toEqual(['え']);
+            expect(collectMangaRegions({results:[single],bubbles:[{bbox,results:[]}]},'ja',400,400,profile).map(r=>r.text)).toEqual(['え']);
+            expect(collectMangaRegions({results:[single]},'ja',400,400,profile)).toEqual([]);
+        }
     });
 });

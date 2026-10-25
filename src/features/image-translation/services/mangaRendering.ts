@@ -1,12 +1,13 @@
 /**
  * @file src/features/image-translation/services/mangaRendering.ts
  * 文件职责：在整段漫画区域中绘制适合阅读的译文，避免整行逐框放大和复杂背景扩散条纹。
- * 主要内容：保留整段内容和裁剪边界，对白使用随字号缩小的内边距，避免短行损失半数高度；原始大标题使用有界大字与高对比描边；复用页内准确度量和原图背景分类，避免修补后被误判成均匀底色而二次铺板。
+ * 主要内容：保留整段内容和裁剪边界，对白使用随字号缩小的内边距，避免短行损失半数高度；原始大标题使用有界大字与高对比描边；均匀背景按原始行及描边蒙版清字，保留行间画面；复用页内准确度量和原图背景分类，避免修补后被误判成均匀底色而二次铺板。
  * 模块边界：只操作调用方提供的画布和像素，不运行 OCR/翻译、不修改宿主页面；绘制区域局限于识别框，完整原图仍可通过现有按钮对照。
  */
 import type {MangaRegion} from './mangaRegions';
 import {getImageTextColor, getImageTextBackgroundColor} from './rendering';
 import {layoutMangaTranslationText, MANGA_TEXT_FONT} from './mangaTypography';
+import {mangaMaskBoxes} from '../mangaPatchResult';
 
 export interface MangaBackground {color: string; uniform: boolean}
 
@@ -50,7 +51,12 @@ export function drawMangaTranslations(context: CanvasRenderingContext2D, pixels:
         try {
             if (sampled.uniform || !repaired) {
                 context.fillStyle = background;
-                context.fillRect(left, top, right - left, bottom - top);
+                // 已有物理行时，清字边界与修补/传输图块完全一致：清掉框外描边，不铺白整段行间画面。
+                if (sampled.uniform && region.sourceBoxes?.length) {
+                    for (const source of mangaMaskBoxes(region, width, height)) {
+                        context.fillRect(source.x0, source.y0, source.x1 - source.x0, source.y1 - source.y0);
+                    }
+                } else context.fillRect(left, top, right - left, bottom - top);
             }
             const display = !sampled.uniform && !region.vertical && region.fontSize >= width * .045;
             const weight = display ? 800 : 600;

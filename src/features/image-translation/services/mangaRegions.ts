@@ -1,7 +1,7 @@
 /**
  * @file src/features/image-translation/services/mangaRegions.ts
  * 文件职责：把漫画专用 OCR 和通用 OCR 行转换成可整段翻译与修补的气泡或旁白区域。
- * 主要内容：校验并夹紧坐标，过滤纯符号和源语言不符的短片段；神经 OCR 保留置信度策略，通用 OCR 从行框补足字号与原始修补框；按方向、字号、重叠与间距合并相邻行，仅已定位的独立气泡容许略宽行距，保持不同气泡分离。
+ * 主要内容：校验并夹紧坐标，过滤纯符号和源语言不符的短片段；神经 OCR 保留置信度策略，仅独立气泡容许高置信度大单字，通用 OCR 从行框补足字号与原始修补框；按方向、字号、重叠与间距合并相邻行，东亚相邻文字不插入空格，保留硬连字符且只移除行末软连字符，仅已定位的独立气泡容许略宽行距，保持不同气泡分离。
  * 模块边界：纯数据算法，不运行模型、不读取 DOM 或配置，也不修补图片；只输出可核对的识别原文和区域，不推测缺失文字。
  */
 import type {OcrLine} from '@/src/shared/image/types';
@@ -55,11 +55,12 @@ export function groupMangaText(items: MangaOcrItem[], sourceLanguage: string, wi
         const fontSize = vertical ? box.width : box.height;
         // 巨大拟声字和纹理中的孤字不作为对白；保留 I/A 等合法英语短句。
         if (Array.from(text.replace(/[^\p{L}\p{N}]/gu, '')).length < 2
-            && (english ? !/^[IA][.!?]?$/u.test(text) : item.confidence < 0.9 || Math.max(box.width, box.height) > width * 0.12)) return [];
+            && (english ? !/^[IA][.!?]?$/u.test(text) : item.confidence < 0.9 || (context !== 'bubble' && Math.max(box.width, box.height) > width * 0.12))) return [];
         return [{text, bbox, fontSize, ...(vertical ? {vertical: true as const} : {})}];
     });
-    // 小写/大写字形框较矮时，同一气泡的正常行距可略大于字形高度；整页与通用 OCR 保持原有边界。
-    return mergeMangaLines(lines, context === 'bubble' ? 1.1 : 0.8);
+    // 大写字形框常小于字体行高；已定位气泡中允许最多 1.5 倍字形高度的空隙，
+    // 让同一对白保持整句。整页、通用 OCR 和不同气泡仍沿用原有严格边界。
+    return mergeMangaLines(lines, context === 'bubble' ? 1.5 : 0.8);
 }
 
 /** 已规范化的 Tesseract 行不带漫画字号；从原图行框补足修补契约，再合并跨行对白，保留所有原始框。 */
@@ -103,8 +104,14 @@ function mergeMangaLines(lines: MangaRegion[], lineGap = 0.8): MangaRegion[] {
                 : Math.abs(a.bbox.y0 - b.bbox.y0) < near ? a.bbox.x0 - b.bbox.x0 : a.bbox.y0 - b.bbox.y0;
         });
         const sizes = members.map(member => member.fontSize).sort((a, b) => a - b);
-        const text=members.map(member => member.text).join(members[0].vertical ? '' : ' ')
-            .replace(/(\p{L}{2,})-\s+(\p{L})/gu,'$1$2');
+        const text=members.reduce((text, member) => {
+            if (text.endsWith('\u00ad')) return text.slice(0,-1) + member.text;
+            const cjk = /[\u2e80-\u9fff\u3040-\u30ff\uac00-\ud7af]/u;
+            const last = text.slice(-1), next = member.text.slice(0,1);
+            const hyphen = /\p{L}-$/u.test(text) && /^\p{L}/u.test(member.text);
+            const separator = !text || members[0].vertical || hyphen || ((cjk.test(last) || /[。！？、」』】）]/u.test(last)) && cjk.test(next)) ? '' : ' ';
+            return text + separator + member.text;
+        }, '');
         return {text,
             bbox: members.map(member => member.bbox).reduce(union), fontSize: sizes[Math.floor(sizes.length / 2)],
             sourceBoxes: members.map(member => ({...member.bbox})),
