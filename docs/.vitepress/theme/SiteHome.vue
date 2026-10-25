@@ -4,6 +4,7 @@ import FeatureDemo from './FeatureDemo.vue'
 import HeroOrbit from './HeroOrbit.vue'
 import BrowserInstall from './BrowserInstall.vue'
 import PromoVideo from './PromoVideo.vue'
+import SponsorSlot from './SponsorSlot.vue'
 import brandTaglines from '../../../src/core/i18n/messages/brand-taglines.json'
 const props = defineProps<{ en?: boolean }>()
 const t = (zh: string, english: string) => (props.en ? english : zh)
@@ -199,6 +200,23 @@ const faqs = [
       </div>
       <FeatureDemo :kind="feature.kind" :en="en" />
     </section>
+    <section id="sponsors" class="bv-section bv-sponsors" aria-labelledby="bv-sponsors-title">
+      <div>
+        <span class="bv-section-number">{{ t('企业与项目赞助', 'SPONSOR FLUENTREAD') }}</span>
+        <h2 id="bv-sponsors-title">{{ t('支持开源，让世界更大', 'Support open source. A bigger world.') }}</h2>
+        <p>{{
+          t(
+            '项目目前主要由个人支持，每月为开源开发投入数万美元的 API Token 费用。我们相信，流畅阅读能为世界带来更多美好。',
+            'The project is currently funded mainly out of pocket, with tens of thousands of US dollars spent each month on API tokens for open-source development. We believe FluentRead can make the world a little better.'
+          )
+        }}</p>
+        <div class="bv-sponsor-contact">
+          <a class="bv-text-link" href="mailto:a1914493943@gmail.com?subject=FluentRead%20sponsorship">{{ t('邮件联系', 'Email us') }} →</a>
+          <a class="bv-text-link" :href="withBase('/support/wechat-contact.jpg')" target="_blank" rel="noopener noreferrer">{{ t('添加微信', 'Add on WeChat') }} ↗</a>
+        </div>
+      </div>
+      <SponsorSlot :en="en" />
+    </section>
     <section class="bv-section bv-faq">
       <div>
         <span class="bv-section-number">{{ t('使用须知', 'GETTING STARTED') }}</span>
@@ -228,7 +246,7 @@ const faqs = [
         <a :href="link('/docs/')">{{ t('使用指南', 'User guide') }}</a
         ><a :href="link('/guide/privacy')">{{ t('隐私政策', 'Privacy policy') }}</a
         ><a href="https://github.com/FluentRead/FluentRead">GitHub</a
-        ><a href="https://github.com/FluentRead/FluentRead#support">{{
+        ><a :href="link('/guide/support')">{{
           t('支持项目', 'Support the project')
         }}</a>
       </div>
