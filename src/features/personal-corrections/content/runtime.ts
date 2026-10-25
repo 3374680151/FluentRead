@@ -1,7 +1,7 @@
 /**
  * @file src/features/personal-corrections/content/runtime.ts
  * 文件职责：把网页译文上的主动校订入口接入既有内容脚本生命周期。
- * 主要内容：根据指针或焦点选中已翻译原译文对，用快捷键或独立浮层入口打开编辑器；封闭 Shadow UI 懒挂载，失效代次与 AbortSignal 清理监听和迟到挂载。
+ * 主要内容：根据指针或焦点选中已翻译原译文对，用快捷键或独立浮层入口打开编辑器；封闭 Shadow UI 懒挂载，失效时归还节点与观察器所有权，保证同节点重译后可再次观察，失效代次与 AbortSignal 清理监听和迟到挂载。
  * 模块边界：只读宿主译文发现，不把按钮插入翻译容器；原译文读取和刷新通过全文翻译公开端口注入，存储由 services 公共接口负责。
  */
 import type {ContentScriptContext} from 'wxt/utils/content-script-context';
@@ -43,10 +43,16 @@ export function mountPersonalCorrections(ctx: ContentScriptContext, signal: Abor
     controller.state.candidate = pair;
     if (selectedElement !== element) {
       selectedElement = element; pairObserver?.disconnect();
-      pairObserver = new MutationObserver(() => {
-        if (current() && !pair.isCurrent()) {controller.state.candidate = null; controller.close(); pairObserver?.disconnect();}
+      const observer = new MutationObserver(() => {
+        // 切换节点会同步替换观察器，清理会同时释放两者；观察器身份已能唯一确定节点归属。
+        if (pairObserver !== observer) return;
+        if (current() && !pair.isCurrent()) {
+          controller.state.candidate = null; controller.close(); observer.disconnect();
+          pairObserver = undefined; selectedElement = undefined;
+        }
       });
-      pairObserver.observe(element.parentElement ?? element, {childList: true, characterData: true, subtree: true});
+      pairObserver = observer;
+      observer.observe(element.parentElement ?? element, {childList: true, characterData: true, subtree: true});
     }
     ensureUi();
   }

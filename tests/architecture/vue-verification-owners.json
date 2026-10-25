@@ -46,10 +46,12 @@
       "scenario": "模型选择、上下文切换和迟到选项"
     },
     "src/features/area-translation/ui/AreaTranslator.vue": {
-      "kind": "frozen-debt",
-      "sourceSha256": "cfdb00648c3b0548bb17b8d6cae5174fab48db98c50ebbee175180d6a66afdf0",
-      "reason": "提供独立圈选阅读工具，按配置的快捷键（默认 Shift+Z）进入选区模式，松开鼠标后展示可拖动、可核对、可复制的原文与译文卡片。 当前尚未登记可确认的自动组件行为消费者；不把父组件mock或源码契约算作该组件行为证明。",
-      "exitCriteria": "修改此文件前，以真实SFC执行对应事件/异步/取消场景并登记消费者，或纳入正式逐文件严格覆盖；不得刷新冻结hash延续豁免。"
+      "kind": "behavior",
+      "tests": [
+        "tests/areaTranslationTrigger.test.ts",
+        "tests/areaTranslationRecovery.test.ts"
+      ],
+      "scenario": "真实SFC在隔离DOM中执行快捷键、指针选择互斥、OCR缺包恢复、截图重试、迟到结果和卸载清理"
     },
     "src/features/document-translation/ui/PdfReader.vue": {
       "kind": "behavior",
@@ -213,13 +215,6 @@
         "tests/informationHighlightUiLifecycle.test.ts"
       ],
       "scenario": "实际模型选择、资源准备与页面归属"
-    },
-    "src/features/settings/ui/InformationHighlightPreferences.vue": {
-      "kind": "behavior",
-      "tests": [
-        "tests/informationHighlightUiLifecycle.test.ts"
-      ],
-      "scenario": "实际偏好组件更新与订阅生命周期"
     },
     "src/features/settings/ui/InformationHighlightPreview.vue": {
       "kind": "frozen-debt",

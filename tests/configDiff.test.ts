@@ -9,6 +9,16 @@ function group(result: ReturnType<typeof buildConfigDiff>, id: string) {
 }
 
 describe('配置差异预览', () => {
+    it('浏览器默认译文字体以可读设置名称展示启停，独立于原有译文外观', () => {
+        expect(configDiffFieldLabel('browserDefaultTranslationFont')).toBe('浏览器默认译文字体');
+        for (const enabled of [true, false]) {
+            const result = buildConfigDiff({browserDefaultTranslationFont: !enabled, translationAppearance: {fontFamily: 'mono'}},
+                {browserDefaultTranslationFont: enabled, translationAppearance: {fontFamily: 'mono'}});
+            expect(result.changeCount).toBe(1);
+            expect(group(result, 'general')?.changes).toEqual([{key: 'browserDefaultTranslationFont', label: '浏览器默认译文字体',
+                before: enabled ? '关闭' : '开启', after: enabled ? '开启' : '关闭'}]);
+        }
+    });
     it('组合配置以策略、成员和单成员超时展示，空及旧损坏条目仍可预览', () => {
         expect(configDiffFieldLabel('compositeTranslationProviders')).toBe('组合翻译服务');
         const preview = buildConfigDiff({compositeTranslationProviders: []}, {compositeTranslationProviders: [
@@ -69,11 +79,25 @@ describe('配置差异预览', () => {
         ]);
     });
     it('双向划词开关使用对用户可见的启停状态', () => {
-        const changes = group(buildConfigDiff(
-            {selectionTranslatorBidirectional: false},
-            {selectionTranslatorBidirectional: true},
-        ), 'translation')?.changes;
-        expect(changes).toEqual([{key: 'selectionTranslatorBidirectional', label: '中英双向划词', before: '开启', after: '关闭'}]);
+        for (const enabled of [true, false]) {
+            const changes = group(buildConfigDiff(
+                {selectionTranslatorBidirectional: !enabled, disableSelectionTranslator: enabled},
+                {selectionTranslatorBidirectional: enabled, disableSelectionTranslator: !enabled},
+            ), 'translation')?.changes;
+            expect(changes).toEqual([
+                {key: 'disableSelectionTranslator', label: '划词翻译', before: enabled ? '关闭' : '开启', after: enabled ? '开启' : '关闭'},
+                {key: 'selectionTranslatorBidirectional', label: '中英双向划词', before: enabled ? '关闭' : '开启', after: enabled ? '开启' : '关闭'},
+            ]);
+        }
+    });
+    it('快捷方案区分局部、悬停与全文动作，局部不借用全文范围', () => {
+        for (const [action, label] of [['section', '局部'], ['hover', '悬停'], ['full-page', '全文']] as const) {
+            const result = buildConfigDiff({quickTranslationProfiles: []}, {quickTranslationProfiles: [
+                {id: 'quick-one', enabled: true, action, hotkey: 'Ctrl+J', fullPageMode: 'all'},
+            ]});
+            const preview = group(result, 'translation')?.changes[0].after;
+            expect(preview).toBe(`${label} Ctrl+J：默认服务，默认语言，默认显示${action === 'full-page' ? '，立即翻译到网页底部' : ''}`);
+        }
     });
     it('悬浮球拖动后的高度在配置历史中以比例显示', () => {
         expect(group(buildConfigDiff(

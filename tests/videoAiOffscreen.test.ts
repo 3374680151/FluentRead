@@ -62,7 +62,7 @@ function completeWorker(worker: FakeWorker, model: 'tiny' | 'base' | 'small' = '
 }
 
 describe('video AI offscreen queue', () => {
-    it.each([0, 16])('rejects a cancelled legacy decode with %i samples before it can settle a restarted stream', async sampleCount => {
+    it.each([[0, 'cancel-before-resolve'], [16, 'cancel-before-resolve'], [0, 'resolve-then-cancel'], [16, 'resolve-then-cancel']] as const)('rejects a cancelled legacy decode with %i samples / %s without reading channels or settling a restarted stream', async (sampleCount, order) => {
         vi.useFakeTimers(); installWorker();
         let finishDecode!: (value: {numberOfChannels: number; sampleRate: number; getChannelData(): Float32Array}) => void;
         const decoded = new Promise<{numberOfChannels: number; sampleRate: number; getChannelData(): Float32Array}>(resolve => {finishDecode = resolve;});
@@ -73,9 +73,12 @@ describe('video AI offscreen queue', () => {
         const first = transcribeLocalVideoAudio({streamId, audioBase64: audio, model: 'tiny'});
         const rejected = expect(first).rejects.toThrow('本地视频 AI 字幕已取消');
         await drain(); expect(decodeAudioData).toHaveBeenCalledOnce();
+        const getChannelData = vi.fn(() => new Float32Array(sampleCount));
+        const result = {numberOfChannels: 1, sampleRate: 16_000, getChannelData};
+        if (order === 'resolve-then-cancel') finishDecode(result);
         await cancelLocalVideoTranscription(streamId); expect(close).toHaveBeenCalledOnce();
         const next = transcribeLocalVideoAudio({streamId, audioPcm16Base64: audio, model: 'tiny'});
-        finishDecode({numberOfChannels: 1, sampleRate: 16_000, getChannelData: () => new Float32Array(sampleCount)});
+        if (order === 'cancel-before-resolve') finishDecode(result);
         await rejected; await drain();
         expect(FakeWorker.instances).toHaveLength(1);
         const worker = FakeWorker.instances[0];
@@ -84,7 +87,29 @@ describe('video AI offscreen queue', () => {
         worker.reply({requestId: worker.messages[0].requestId, success: true, text: 'new stream'});
         await expect(next).resolves.toMatchObject({text: 'new stream', segments: [], model: 'tiny'});
         await cancelLocalVideoTranscription(streamId); expect(vi.getTimerCount()).toBe(0);
+        expect(getChannelData).not.toHaveBeenCalled();
     });
+    it.each([0, 16])('keeps the caller cancellation guard when legacy %i-sample decode completes just before cancellation', async sampleCount => {
+        vi.useFakeTimers(); installWorker();
+        const streamId = 'cancel-between-decode-and-caller';
+        let cancellation!: Promise<void>;
+        const getChannelData = vi.fn(() => {
+            // 解码本身仍归当前流；在它返回之后、调用方的 await continuation 之前取消。
+            queueMicrotask(() => {cancellation = cancelLocalVideoTranscription(streamId);});
+            return new Float32Array(sampleCount);
+        });
+        const close = vi.fn(async () => undefined);
+        vi.stubGlobal('window', {location: {href: 'chrome-extension://test/offscreen.html'}, setTimeout, clearTimeout,
+            AudioContext: class {state = 'running'; close = close;
+                decodeAudioData = async () => ({numberOfChannels: 1, sampleRate: 16_000, getChannelData});}});
+        await expect(transcribeLocalVideoAudio({streamId, audioBase64: audio, model: 'tiny'}))
+            .rejects.toThrow('本地视频 AI 字幕已取消');
+        await cancellation; await drain();
+        expect(getChannelData).toHaveBeenCalledOnce();
+        expect(FakeWorker.instances).toHaveLength(0); expect(close).toHaveBeenCalledOnce();
+        expect(vi.getTimerCount()).toBe(0);
+    });
+
     it('rejects a malformed correlated result without CPU retry and keeps unrelated or late replies from settling the next request', async () => {
         vi.useFakeTimers(); installWorker();
         const streamId = 'typed-worker-reply';

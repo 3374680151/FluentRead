@@ -1,92 +1,86 @@
 # Learning center
 
-The learning center starts with words, phrases, and sentences you save while reading. Understand them in their original context, use them in your own words, and revisit them later.
+Save words, phrases, and sentences from your reading. Understand them in context, try your own sentences, and review them later.
 
 <GuideVisual kind="learning" en />
 
-## What each tab saves
-
-**Reading materials** groups passages, question references, notes and reading positions by article, document or video. Saving one word remains lightweight and does not require a project.
-
-Use **Continue reading** to return to the original passage, document page/chapter or video time. Changed or ambiguous passages show recovery guidance. Documents use a content fingerprint: select the original file again if its local history has been removed. Same-name files with different content do not replace the original material.
-
-Topics and personal material notes are local. Reading questions and learning notes reference their original records; deleting those records does not leave answer copies in materials. Removing a material is reversible; clearing all materials permanently deletes its organization, positions and personal material notes, while preserving the original vocabulary and question records. Incognito windows cannot read or save materials.
-
-Material management provides a separate private JSON backup containing sources, excerpts, topics and material notes. These are excluded from default configuration sync and the older vocabulary backup. Import reports inserted, updated and skipped counts. Opening materials does not call an AI provider.
-
-| Tab | Source | Retention |
-| --- | --- | --- |
-| Reading materials | Source-linked passages, reading positions, topics and personal material notes | Until explicitly cleared; removed materials can be restored |
-| Words & sentences | Save icon in a translation card, **Save original** below an explanation, or **Save sentence** beside a highlighted sentence | Until you delete it |
-| Reading history | Questions and answers from reading, grammar, usage and practice; continue a conversation | 30 days |
-| Study notes | **Save study note** below an answer, or notes and learning preferences you add yourself | Until you delete it |
-
-After saving, **View words & sentences** or **View study notes** opens the matching tab. Saving the original and saving an explanation as a note are separate actions.
-
-You can save and manage study notes at any time. **Use study notes in answers** is off by default. Enabling it in the selection translation AI settings sends relevant notes and preferences with your question to the selected AI service. Turning it off keeps existing notes and still allows saving new ones.
-
-
 ## Save something from a page
 
-1. Open **Learning center → Words & sentences** and enable saving in **Manage collection**. You can also enable it directly from the empty list.
-2. Save an expression from a selection or reading card. Words, phrases, and sentences in multiple languages are supported.
-3. The expression keeps available reading context. Saving it again can add context to the existing entry.
+1. Open **Tools & learning → Learning center → Words & sentences** and enable saving in **Manage collection**.
+2. Select text on a page, open its translation card, and use the save icon. **Save original** below an AI answer also saves the expression.
+3. Return to **Words & sentences** and choose **Listen & understand** for a sentence or **Learn usage** for a word or phrase.
 
-## Meet saved expressions on a new page
+Saving keeps the selected text, available translation, context, and source. Saving it again can add context without creating a duplicate entry. Search original text, translations, explanations, or context. Use type and mastery filters to find items, or **Clear filters** to show everything.
 
-Enable **Meet saved expressions again** in **Manage collection** under Words & sentences. This independent option is off by default. Saved expressions in nearby reading text receive a subtle dotted underline. Click an expression or the bottom-right **Saved expressions** button to compare its current sentence with the sentence you saved. The card can browse nearby matches, and its controls support keyboard access.
+Bilingual sentence highlighting helps compare original and translated text. Hovering does not show actions or start speech. To listen, copy, or save, select text and use its translation card. It saves your selection without expanding it to a whole paragraph. Private windows do not save collections.
 
-Words match at word boundaries; phrases can span inline emphasis. Case, whitespace, curly apostrophes, and common hyphen differences are handled. Marks update with scrolling and changing text. Links, controls, editors, code, formulas, hidden content, and FluentRead translations are excluded. Original text, selections, and page interactions remain intact.
+## What each tab saves
 
-Opening a card reads only that saved entry and does not call AI. **Explain this usage** uses the reading card’s service, model, context scope, and permitted study-note reference settings. It sends the expression and current sentence, without the old saved reference or source URL. Enable sentence context before requesting an explanation. A saved definition is never presented as the meaning of the new sentence. Retry failures or stop while retaining generated text.
+| Tab | Content | Retention |
+| --- | --- | --- |
+| Words & sentences | Expressions you save, translations, and explanations | Until you delete them |
+| Reading materials | Passages, question references, notes, and positions grouped by article, document, or video | Until cleared; removed materials can be restored |
+| Reading history | Questions and answers from reading, grammar, usage, and practice, with follow-up questions | 30 days |
+| Study notes | Notes saved from answers, or points and learning preferences you add | Until you delete them |
 
-Use **Marking options** to pause this page visit or turn off marks on all pages. Re-enable them in the learning center. A visit pause lasts until reload or the feature is enabled again. Seeing an expression or reading its explanation does not change saving counts, mastery, or review schedules.
-
-This browser-extension feature supports ordinary pages and open Shadow DOM. It is unavailable in private windows and userscripts. Older browsers without text-range painting can still use the nearby-expression button. Pausing FluentRead or disabling it on the current site removes both marks and cards.
-
-## Listen to and save a highlighted sentence
-
-Enable **Bilingual sentence highlighting** in the desktop extension. Hover over either the original or its translation. Highlighting appears immediately; after the pointer rests for about **0.8 seconds**, a small **⋯ Sentence actions** button appears. Click it to expand playback, saving, copying, and the collection link. Brief passes do not display the controls.
-
-Playback and copying follow the hovered side: original text uses its source language, and translated text uses the target language. Saving always keeps both texts and available context. Moving into the controls retains the current side. Leaving, scrolling, restoring the original, disabling highlighting, or pressing **Esc** dismisses them. Saved status is only queried when you open the controls. No speech or AI request starts automatically. Private windows do not save sentences; this entry is unavailable in userscripts and embedded pages.
+**Save original** and **Save study note** are separate actions. **Use study notes in answers** is off by default. Enable it in selection translation’s AI settings to send relevant notes and preferences with questions to your selected AI. Turning it off keeps existing notes and still allows saving new ones.
 
 ## Learn its usage
 
-Each entry has a visible learning button: **Listen & understand** for sentences and **Learn usage** for words and phrases. Opening the study page does not call AI or change mastery.
+Opening a study page does not call AI or change mastery. Listen to the source sentence and expand saved reference content first. The page says when no useful source sentence is available.
 
-Use the search box and entry type selector to find saved items. **Filters** contains mastery and sorting options. **Clear filters** restores the full collection. Saving switches and file actions live in **Manage collection**. Browser storage details and **Backup & restore** share one footer across all three tabs.
+1. Choose to understand the expression for its meaning, combinations, and an example. Without a source sentence, it explains general usage only.
+2. Write your own sentence and ask whether it sounds natural. Feedback checks meaning and combinations without automatically marking mastery.
+3. Add a short explanation manually, or save a generated explanation after it finishes. Stopped or failed output is not saved automatically.
 
-The original sentence helps you remember where the expression came from. Matching supports expressions in continuous Chinese and Japanese text, plus differences in case, combining accents and whitespace, while preserving the original sentence. Earlier definitions or AI responses remain available to expand. If no useful source sentence was saved, the page says so.
+AI explanations use the service, model, and context settings under **Selection translation → AI explanations**. Only deliberate actions send the current expression, your sentence, and permitted context or notes. They do not send the whole collection or source URL. Closing, switching entries, or changing models cancels the old request; failures can be retried.
 
-Choose to understand the expression for an AI explanation of meaning, usage, and an example. Then write your own sentence and ask whether it sounds natural. Feedback focuses on meaning and combinations; it does not automatically mark the expression as mastered.
-
-Learning uses the reading card’s service, model, and allowed source scope. The reading card must be enabled. Only a deliberate action sends the current expression, your sentence, and allowed context; it does not send the entire collection or source URL.
-
-<details class="guide-details">
-<summary>Revisit it later</summary>
+Translations and explanations are saved separately. You can edit or clear an explanation. Each entry’s menu also offers copying, mastery, and deletion; entries with translations support bilingual copying. Retry speech if it fails.
 
 ## Revisit it later
 
-The primary **Review** button starts a recall session, with up to 20 due entries, regardless of list filters. It brings back due expressions before adding a few new ones. With a useful source sentence, it asks you to recall the missing expression. Otherwise, it shows the expression so you can recall its meaning.
+Choose **Review** to recall an expression, reveal the answer, then rate whether you remembered it. Only this rating updates the review plan; reading an explanation does not increase mastery.
 
-Check your answer against the saved reference, then choose whether you remembered it. Reading an explanation alone does not increase mastery.
+A round has up to 20 entries, with due items first and up to 10 new items. List filters do not change the round. A useful source sentence becomes a missing-expression prompt. Otherwise, recall the expression’s meaning and usage.
 
-</details>
+## Meet saved expressions on a new page
 
-<details class="guide-details">
-<summary>Keep your collection safe</summary>
+Enable **Meet saved expressions again** in **Manage collection**. It is off by default. Saved expressions in nearby text receive a dotted underline. Choose one or the bottom-right **Saved expressions** button to compare its current and saved sentences.
+
+Opening the card reads local data only. **Explain this usage** uses selection AI settings to send the expression and permitted current sentence, without the old saved reference or source URL. Allow sentence context first if needed. Retry failures or stop while retaining generated text.
+
+**Marking options** pauses this page visit or disables marks on all pages; re-enable them in the learning center. Seeing expressions, opening cards, or reading explanations does not change save counts, mastery, or review schedules.
+
+This extension feature works on ordinary webpages, not private windows or userscripts. Links, editors, code, and similar content are excluded. Older browsers without text marking can still show nearby expressions from the bottom-right button.
+
+## Continue with reading materials
+
+Saved expressions, reading questions, and study notes appear in **Reading materials** by source. Same-name articles at different addresses remain separate. **Continue reading** returns to a passage, document page, or video time. If the passage cannot be located reliably, follow the guidance to search for it. Update changed addresses in material organization settings.
+
+Choose **Add to learning materials** on a document page to save its file fingerprint and position. Select the original file again if its local record is missing. A same-name file with different content cannot replace it.
+
+Add topics and personal notes to organize materials. Questions and study notes reference their original records; deleting the originals leaves no answer copy in materials. Questions still expire after 30 days.
+
+Removing a material is reversible and keeps original saved expressions and questions. Clearing all materials permanently deletes organization, positions, and personal material notes. Materials stay local, are excluded from default settings sync, do not call AI when opened, and are unavailable in private windows.
+
+Use the material manager’s separate export and restore actions. Its private JSON includes sources, passages, topics, and personal notes. Keep it safe; it is separate from collection and configuration backups.
+
+<span id="data-and-migration"></span>
 
 ## Keep your collection safe
 
-Collections and review records stay in this browser. Turning off saving or clearing the translation cache does not delete them. Private windows do not offer persistent collections.
+Collections and review records stay in this browser. Disabling saving or clearing the translation cache does not delete them.
 
-Use **Backup & restore** to move your data. The learning center also offers Anki export, with a choice about including source sentences and source information.
+| What you need | Where to export |
+| --- | --- |
+| Filtered entries, translations, short explanations, and review records | **Manage collection → Export current list**; excludes context and source URLs |
+| Full collection with context and sources | **Backup & restore** |
+| Entries for Anki | Anki export in **Manage collection**, with optional source sentences and sources, plus a separate explanation column |
+| Material organization, positions, and personal notes | The material manager’s separate backup |
 
-Collection management actions stay busy while awaiting confirmation and become available again after cancellation. If a confirmation or export response arrives after you switch from Saved to another learning-center tab, the closed collection view does not continue the action or start a download. Operations already submitted to the background still finish normally.
-
-</details>
+Importing collection JSON merges with existing entries and reports added, updated, and skipped counts. Explanations merge by modification time, so an old file cannot replace newer explanations or restore cleared ones.
 
 ## Related guides
 
-- [All guides](/en/docs/)
-- [Troubleshooting](/en/guide/faq)
+- [Selection and AI explanations](/en/guide/deepseek-harness)
+- [Backup and sync](/en/config/backup-sync)

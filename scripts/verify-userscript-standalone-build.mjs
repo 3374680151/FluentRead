@@ -30,5 +30,10 @@ for (const [passed, message] of assertions) {
 const bytes = Buffer.byteLength(source);
 // Full Options adds its navigation, settings forms, and CSS to the direct-install build.
 // This build is hosted outside Greasy Fork, whose separate rules cap scripts at 2 MB.
-if (bytes > 3_600_000) throw new Error(`Standalone userscript grew past 3,600,000 bytes: ${bytes}`);
+// Current main eec7c7517 measures 3,611,259 bytes locally; the three completed
+// selection prompts add 430 bytes. Release tooling adds no runtime bytes.
+// Allow the previously measured 1,825-byte Ubuntu/Node 22 build difference,
+// then round 3,613,514 up to the next 1 KB; the PR packaging run verifies it.
+const maxBytes = 3_614_000;
+if (bytes > maxBytes) throw new Error(`Standalone userscript grew past ${maxBytes.toLocaleString('en-US')} bytes: ${bytes}`);
 console.log(`Verified ${artifact} (${bytes.toLocaleString()} bytes; no @require)`);

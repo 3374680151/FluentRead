@@ -36,6 +36,39 @@ function harness(stored: unknown = []) {
 }
 
 describe('Zotero persistent document queue', () => {
+    it('counts replacement, blank and out-of-order progress without losing completed slots', async () => {
+        const {queue, engine} = harness();
+        const counts: number[] = [];
+        vi.mocked(engine.parse).mockResolvedValue({...parsed(), segments: [0, 1, 2].map(id => ({id, source: `Paragraph ${id}`}))});
+        vi.mocked(engine.translate).mockImplementationOnce(async (_document, _settings, _signal, _initial, commit) => {
+            for (const [id, text] of [[2, 'two'], [0, '  '], [2, 'replacement'], [1, 'one'], [2, ''], [0, 'zero'], [2, 'two']] as const) {
+                commit(id, text); counts.push(queue.tasks[0].completed);
+            }
+            return ['zero', 'one', 'two'];
+        });
+        await queue.initialize(); await queue.enqueue(); await done(queue);
+        expect(counts).toEqual([1, 1, 1, 2, 1, 2, 3]);
+        expect(queue.tasks[0]).toMatchObject({state: 'completed', completed: 3, total: 3, translations: ['zero', 'one', 'two']});
+        await queue.dispose();
+    });
+    it('keeps progress slot reads linear for a large document', async () => {
+        const {queue, engine} = harness();
+        const size = 1000;
+        let slotReads = 0;
+        vi.mocked(engine.parse).mockResolvedValue({...parsed(), segments: Array.from({length: size}, (_, id) => ({id, source: `Paragraph ${id}`}))});
+        vi.mocked(engine.translate).mockImplementationOnce(async (_document, _settings, _signal, _initial, commit) => {
+            queue.tasks[0].translations = new Proxy(queue.tasks[0].translations, {get(target, property, receiver) {
+                if (typeof property === 'string' && /^\d+$/u.test(property)) slotReads++;
+                return Reflect.get(target, property, receiver);
+            }});
+            for (let id = 0; id < size; id++) commit(id, 'translated');
+            return Array.from({length: size}, () => 'translated');
+        });
+        await queue.initialize(); await queue.enqueue(); await done(queue);
+        expect(queue.tasks[0]).toMatchObject({state: 'completed', completed: size, total: size});
+        await queue.dispose();
+        expect(slotReads).toBeLessThanOrEqual(size * 3);
+    });
     it('saves a full result and its history without capturing credentials', async () => {
         const {queue, host, engine, saved, current} = harness();
         current.apiKey = 'secret-for-current-endpoint';

@@ -52,7 +52,7 @@ function configureSectionPorts(data: Record<string, any>, {template = false, req
     development?: boolean; browserName?: string; failureDisplay?: boolean; serviceEvents?: boolean; uiEvents?: boolean} = {}) {
     vi.resetModules();
     const empty = {render: () => null};
-    const slots = {setup(_: unknown, {slots}: any) {return () => runtime.h('div', null, slots.default?.());}};
+    const slots = {setup(_: unknown, {slots}: any) {return () => runtime.h('div', null, [slots.copy?.(), slots.default?.()]);}};
     const componentPort = (path: string, component: import('vue').Component = empty) => vi.doMock(path, () => ({__esModule: true, default: component}));
     vi.doMock('@/src/services/config/store', () => data);
     vi.doMock('webextension-polyfill', () => ({default: data.browser}));
@@ -120,7 +120,7 @@ function configureSectionPorts(data: Record<string, any>, {template = false, req
             };
         }} : empty);
     if (uiEvents) {
-        componentPort('@/src/features/settings/ui/components/SettingsItem.vue', {setup(_, {slots}) {return () => runtime.h('div', null, [slots.description?.(),slots.default?.()]);}});
+        componentPort('@/src/features/settings/ui/components/SettingsItem.vue', {setup(_, {slots}) {return () => runtime.h('div', null, [slots.copy?.(),slots.description?.(),slots.default?.()]);}});
         // 仅替换已单独测试的子组件边界，保留真实父模板及其 v-model/事件处理器。
         for (const [name, path] of Object.entries({
             feature: '@/src/ui/components/FeatureEnableCard.vue',
@@ -647,7 +647,14 @@ describe('新服务对话框实际模板首次挂载与后续实例归属', () =
         await settle();
         expect(document.querySelectorAll('[data-composite-strategy-help]')).toHaveLength(1);
         expect(document.querySelector('[data-composite-strategy-help]')?.textContent).toBe('settings.services.composite.randomHelp');
-        expect(document.querySelector('details[data-composite-advanced]')?.hasAttribute('open')).toBe(false);
+        const timeout = document.querySelector('[data-testid="composite-member-timeout"]')! as unknown as HTMLInputElement;
+        expect(timeout).not.toBeNull();
+        expect(timeout.closest('details')).toBeNull();
+        const timeoutDescriptionId = timeout.getAttribute('aria-describedby');
+        expect(timeoutDescriptionId).toBeTruthy();
+        const timeoutDescription = document.getElementById(timeoutDescriptionId!);
+        expect(timeoutDescription?.textContent).toBe('settings.services.composite.timeoutBehavior');
+        expect(timeoutDescription?.closest('details, [hidden], [aria-hidden="true"]')).toBeNull();
         const select = document.querySelector('[data-testid="composite-member-select"]')!;
         function addMember(service: string) {
             const option = select.querySelector(`option[value="${service}"]`)!;
@@ -658,17 +665,13 @@ describe('新服务对话框实际模板首次挂载与后续实例归属', () =
         expect(fixture.providerState!.compositeDraft.services).toEqual(['google', 'microsoft']);
         expect(document.querySelectorAll('[data-composite-member]')).toHaveLength(2);
         oldInterfaceSubmit();expect(fixture.state.config.customOpenAIProviders).toEqual([]);expect(fixture.state.config.compositeTranslationProviders).toEqual([]);
-        const advanced = document.querySelector('details[data-composite-advanced]')!;
-        advanced.setAttribute('open', '');advanced.dispatchEvent(new fixture.domWindow!.Event('toggle'));await settle();
-        const timeout = document.querySelector('[data-testid="composite-member-timeout"]')! as unknown as HTMLInputElement;
         timeout.value = '0';timeout.dispatchEvent(new fixture.domWindow!.Event('input', {bubbles: true}));await settle();
-        advanced.removeAttribute('open');advanced.dispatchEvent(new fixture.domWindow!.Event('toggle'));await settle();
         submitProviderFromTemplate(fixture);await settle();
         expect(fixture.state.config.compositeTranslationProviders).toEqual([]);expect(fixture.patch).not.toHaveBeenCalled();
-        expect(advanced.hasAttribute('open')).toBe(true);
-        expect(advanced.querySelector('[role="alert"]')?.textContent).toBe('settings.services.composite.timeoutInvalid');
+        expect(timeout.getAttribute('aria-invalid')).toBe('true');
+        expect(timeout.closest('.setting-control')?.querySelector('[role="alert"]')?.textContent).toBe('settings.services.composite.timeoutInvalid');
         timeout.value = '5';timeout.dispatchEvent(new fixture.domWindow!.Event('input', {bubbles: true}));await settle();
-        expect(advanced.hasAttribute('open')).toBe(true);
+        expect(timeout.getAttribute('aria-invalid')).not.toBe('true');
         submitProviderFromTemplate(fixture);await settle();
         expect(fixture.state.config.compositeTranslationProviders).toEqual([expect.objectContaining({name: 'Daily combination', services: ['google', 'microsoft'], strategy: 'random', timeoutMs: 5000})]);
         expect(fixture.state.config.customOpenAIProviders).toEqual([]);
@@ -1290,9 +1293,22 @@ describe('设置父模板实际功能事件', () => {
         f.patch.mockClear();await f.emit('profiles:hover','update:profiles',[hover]);expect(f.patch).toHaveBeenCalledOnce();expect(f.state.config.quickTranslationProfiles).toEqual([hover]);
         const full={...hover,id:'full-one',action:'full-page',hotkey:'Alt+K'};
         f.patch.mockClear();await f.emit('profiles:full-page','update:profiles',[hover,full]);expect(f.patch).toHaveBeenCalledOnce();expect(f.state.config.quickTranslationProfiles).toEqual([hover,full]);
-        await f.emit('el-switch:AI 多段翻译','update:modelValue',false);expect(f.state.config.enableAIMultiSegment).toBe(false);
+        await f.emit('el-switch:settings.fullPage.multiSegmentTitle','update:modelValue',false);expect(f.state.config.enableAIMultiSegment).toBe(false);
         await f.choose('全文翻译范围','翻译到页底');expect(f.state.config.fullPageTranslationMode).toBe('all');
         await f.emit('excluded:','update:modelValue',['en','ja']);expect(f.state.config.excludedLanguages).toEqual(['en','ja']);
+    });
+    it('AI 多段预算实际子组件编辑及恢复默认各原子保存一次，关闭保留两项预算',async()=>{
+        const f=await settingsUiFixture('settings-translation',{enableAIMultiSegment:true,aiMultiSegmentMaxSegments:12,aiMultiSegmentMaxCharacters:3500});
+        const fragments='settings.fullPage.multiSegmentFragmentsAria';
+        await vi.waitFor(()=>expect(f.numericPorts.has(fragments)).toBe(true));f.patch.mockClear();
+        f.numericPorts.get(fragments)!.change(24);await settle();
+        expect(f.patch).toHaveBeenCalledOnce();expect(f.state.config).toMatchObject({aiMultiSegmentMaxSegments:24,aiMultiSegmentMaxCharacters:3500});
+        f.patch.mockClear();f.document.querySelector('[data-testid="ai-multi-segment-reset"]')!.dispatchEvent(new f.domWindow.Event('click'));await settle();
+        expect(f.patch).toHaveBeenCalledOnce();expect(f.patch.mock.calls[0][0]).toMatchObject({aiMultiSegmentMaxSegments:8,aiMultiSegmentMaxCharacters:2000});
+        expect(f.state.config.enableAIMultiSegment).toBe(true);
+        await f.emit('el-switch:settings.fullPage.multiSegmentTitle','update:modelValue',false);
+        expect(f.document.querySelector('[data-testid="ai-multi-segment-limits"]')).toBeNull();
+        expect(f.state.config).toMatchObject({enableAIMultiSegment:false,aiMultiSegmentMaxSegments:8,aiMultiSegmentMaxCharacters:2000});
     });
     it('网站适配显式保存仅交接适配补丁，并把保存失败留给实际子界面处理',async()=>{
         const f=await settingsUiFixture('settings-sites',{service:'microsoft'}),port=await f.port('adaptation:');
@@ -1352,6 +1368,16 @@ describe('设置父模板分区字段与编辑确认',()=>{
         await f.emit('manga:','update:imageEnabled',false);expect(f.state.config.disableImageTranslator).toBe(true);expect(f.send).toHaveBeenLastCalledWith(8,{type:'toggleImageTranslator',isEnabled:false});
         await f.emit('area:','update:enabled',true);expect(f.state.config.selectionAreaEnabled).toBe(true);expect(f.send).toHaveBeenLastCalledWith(8,{type:'toggleSelectionAreaTranslator',isEnabled:true});
         await f.emit('ocr:','update:sourceLanguage','ja');expect(f.state.config.from).toBe('ja');expect(f.state.config.to).toBe('en');
+    });
+    it('圈选真实父模板拒绝占用已启用点选的组合，解除后才保存并广播',async()=>{
+        const f=await settingsUiFixture('settings-image-translation',{on:true,selectionTranslatorMode:'bilingual',disableSelectionTranslator:false,
+            selectionClickSelectEnabled:true,selectionClickSelectHotkey:'Alt+Shift+S',selectionAreaEnabled:false,
+            selectionAreaHotkey:'custom',customSelectionAreaHotkey:'Alt+Shift+S'});f.query.mockResolvedValue([{id:8}]);f.patch.mockClear();
+        await f.emit('area:','update:enabled',true);expect(f.state.config.selectionAreaEnabled).toBe(false);
+        expect(f.patch).not.toHaveBeenCalled();expect(f.send).not.toHaveBeenCalled();
+        f.state.config.selectionClickSelectEnabled=false;await settle();f.patch.mockClear();
+        await f.emit('area:','update:enabled',true);expect(f.state.config.selectionAreaEnabled).toBe(true);expect(f.patch).toHaveBeenCalledOnce();
+        expect(f.send).toHaveBeenLastCalledWith(8,{type:'toggleSelectionAreaTranslator',isEnabled:true});
     });
     it('高级识别开关只保存范围、标题和侧栏策略，不立即重新翻译',async()=>{
         const f=await settingsUiFixture('settings-advanced',{translationScope:'content',pageTitleTranslationEnabled:false,sidebarTranslationEnabled:false});

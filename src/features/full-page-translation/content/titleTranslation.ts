@@ -99,10 +99,6 @@ function handleTitleMutation(active: TitleTranslationState): void {
     scheduleTranslate(active);
 }
 
-export function isFullPageTitleTranslationActive(): boolean {
-    return state !== null;
-}
-
 /** 随全文翻译会话启动；重复调用会先归还上一轮标题，再以当前标题为源重新开始。 */
 export function startFullPageTitleTranslation(snapshot: FullPageTranslationConfigSnapshot): void {
     stopFullPageTitleTranslation();

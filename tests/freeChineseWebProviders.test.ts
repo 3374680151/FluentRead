@@ -17,6 +17,9 @@ import {detectChineseScript} from '@/src/core/language/detect';
 import {createFreeFallbackRunner} from '@/src/services/translation/freeFallback';
 import youdaoMarkerFixtures from './fixtures/translation-quality/youdao-marker-separators.json';
 import {protectGlossaryText} from '@/src/core/glossary/protection';
+import {prepareGlossaryRequest} from '@/src/services/translation/glossaryProtection';
+import {createTranslationProviderConfigSnapshot} from '@/src/services/translation/requestSnapshot';
+import {providerConfigFixture} from './helpers/providerSnapshot';
 import {findEmojiLiteralRanges} from '@/src/core/translation/emojiLiterals';
 import * as sha256 from '@/src/shared/function/sha256';
 import observedResidue from './fixtures/translation-quality/observed-ar-fr-residue.json';
@@ -90,6 +93,18 @@ describe('free Chinese web providers', () => {
         it('normalizes through the actual adapter before returning to the free pool', async () => {
             fetchMock.mockResolvedValueOnce(Response.json({fanyi: {type: 'en2zh-chs', tran: 'FRTERM ba0a31bfeba60符号'}}));
             await expect(translateFreeChineseWebText('youdaoFree', `The ${token} symbol`, 'en', 'zh-Hans')).resolves.toBe(`${token}符号`);
+            expect(fetchMock).toHaveBeenCalledOnce();
+        });
+        it('真实准备、adapter 和恢复链允许 emoji 标记后直接出现英文译文', async () => {
+            const current = createTranslationProviderConfigSnapshot(providerConfigFixture({from: 'zh-Hans', to: 'en'}));
+            const packet = prepareGlossaryRequest({origin: '🙂猫'}, current);
+            const prepared = String(packet.message.origin);
+            const translated = prepared.replace('猫', 'cat');
+            expect(prepared).toMatch(/^__FRTERM_[a-f0-9]{12}_0__猫$/u);
+            fetchMock.mockResolvedValueOnce(Response.json({fanyi: {type: 'zh-chs2en', tran: translated}}));
+            const result = await translateFreeChineseWebText('youdaoFree', prepared, 'zh-Hans', 'en');
+            expect(result).toBe(translated);
+            expect(packet.restore(result)).toBe('🙂cat');
             expect(fetchMock).toHaveBeenCalledOnce();
         });
         it('still rejects an explicitly opposite direction even with recoverable markers', async () => {

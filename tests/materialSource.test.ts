@@ -150,6 +150,20 @@ describe('材料来源与继续阅读', () => {
         ports.resolve.mockResolvedValue(null); const other = dom(''); dispose.push(mountMaterialContent(other.document, new AbortController().signal, () => true)); await tick();
         expect(other.document.querySelector('[role="status"]')?.textContent).toContain('材料已移除');
     });
+    it('显式收藏新材料时清理旧恢复失败提示，异步确认成功后不再显示过期错误', async () => {
+        const {document, window} = dom('<p>Reading continues.</p>'); ports.resolve.mockResolvedValueOnce(null);
+        dispose.push(mountMaterialContent(document, new AbortController().signal, () => true)); await tick();
+        const oldNotice = document.querySelector('[data-fluent-read-ui="material-resume"]')!;
+        expect(oldNotice.textContent).toContain('材料已移除');
+        let resolved!: (value: MaterialRecord) => void;
+        ports.resolve.mockReturnValueOnce(new Promise<MaterialRecord>(done => {resolved = done;}));
+        document.dispatchEvent(new window.CustomEvent('fluentread-material-captured', {detail: 'new-material'}));
+        expect(oldNotice.isConnected).toBe(false);
+        expect(document.querySelector('[data-fluent-read-ui="material-resume"]')).toBeNull();
+        resolved(record({id: 'new-material', locator: undefined})); await tick();
+        expect(ports.resolve).toHaveBeenLastCalledWith('new-material');
+        expect(document.querySelector('[data-fluent-read-ui="material-resume"]')).toBeNull();
+    });
     it.each([
         ['article', 'We couldn’t confirm the original text’s location. Your material and saved quote are still available. Search for the quote on this page, or reopen the material later.'],
         ['video', 'Could not restore the video position. Check that the original video still plays, then reopen it from your learning materials.'],

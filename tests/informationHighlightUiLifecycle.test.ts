@@ -12,12 +12,21 @@ import {createServer, type ViteDevServer} from 'vite'
 import {afterEach, beforeEach, describe, expect, it, vi} from 'vitest'
 import type {InformationHighlightModelStatus} from '@/src/features/information-highlight/protocol'
 import {compileScript, compileTemplate, parse} from 'vue/compiler-sfc'
+import Preferences from '@/src/features/settings/ui/InformationHighlightPreferences.vue'
+
+const preferencePorts = vi.hoisted(() => ({warnings: vi.fn()}))
+vi.mock('element-plus', () => ({ElOption: {render: () => null}, ElSwitch: {render: () => null}, ElMessage: {warning: preferencePorts.warnings}}))
+vi.mock('@/src/ui/i18n', () => ({useUiI18n: () => ({t: (key: string) => key})}))
+vi.mock('@/src/ui/components/UiSelect.vue', async () => {
+  const {h} = await import('vue'); return {default: {setup(_: unknown, {slots}: any) {return () => h('div', null, slots.default?.())}}}
+})
+vi.mock('@/src/ui/components/CustomHotkeyInput.vue', () => ({default: {render: () => null}}))
 
 const runtime = createRequire(import.meta.url)('vue') as typeof import('vue')
 const key = '__informationHighlightUiFixture'
 let server: ViteDevServer, app: import('vue').App, state: Record<string, any>, props: Record<string, any>
 const send = vi.fn()
-const ready = vi.fn(), preparing = vi.fn()
+const ready = vi.fn(), preparing = vi.fn(), warnings = preferencePorts.warnings
 const model = (overrides: Partial<InformationHighlightModelStatus> = {}): InformationHighlightModelStatus => ({modelId: 'qwen2.5-0.5b', phase: 'absent', downloaded: false, initialized: false, downloadedBytes: 0, totalBytes: 490043908, supported: true, modelName: 'Qwen2.5 0.5B Base', downloadSizeBytes: 490043908, ...overrides})
 function deferred<T = unknown>() {let resolve!: (value: T) => void, reject!: (error: unknown) => void; const promise = new Promise<T>((yes, no) => {resolve = yes; reject = no}); return {promise, resolve, reject}}
 async function settle() {for (let i = 0; i < 8; i++) {await Promise.resolve(); await runtime.nextTick()}}
@@ -31,8 +40,8 @@ function openConfirmation(action: 'prepare' | 'remove') {
 function confirmAction(action: 'prepare' | 'remove') {return openConfirmation(action).confirm()}
 async function mount(name: 'InformationHighlightPreferences' | 'InformationHighlightModelCard') {
   const path = `/src/features/settings/ui/${name}.vue`
-  const component = (await server.ssrLoadModule(path)).default
-  component.ssrRender = undefined; component.render = () => null
+  const component = name === 'InformationHighlightPreferences' ? Preferences : (await server.ssrLoadModule(path)).default
+  if (name === 'InformationHighlightModelCard') {component.ssrRender = undefined; component.render = () => null}
   const renderer = runtime.createRenderer<Record<string, never>, Record<string, unknown>>({patchProp: () => {}, insert: () => {}, remove: () => {}, createElement: () => ({}), createText: () => ({}), createComment: () => ({}), setText: () => {}, setElementText: () => {}, parentNode: () => null, nextSibling: () => null, querySelector: () => null, setScopeId: () => {}, cloneNode: () => ({}), insertStaticContent: () => [{}, {}]})
   props = runtime.reactive({active: true, selected: true, selectable: true, contextIdentity: {}, modelId: 'qwen2.5-0.5b', config: {on: true, informationHighlight: {enabled: false, hotkey: 'Alt+H', hotkeyEnabled: true, model: 'qwen2.5-0.5b', mode: 'keywords', density: 'medium', color: 'amber', style: 'background', intensity: 'standard'}}, onReady: ready, onPreparing: preparing})
   app = renderer.createApp({setup: () => () => runtime.h(component, {...props, ref: (vm: any) => {if (vm) state = vm.$.setupState}})})
@@ -40,7 +49,7 @@ async function mount(name: 'InformationHighlightPreferences' | 'InformationHighl
 }
 beforeEach(async () => {
   vi.useFakeTimers({toFake: ['setInterval', 'clearInterval']}); ready.mockReset(); preparing.mockReset(); send.mockReset(); send.mockResolvedValue({success: true, status: model()})
-  Object.assign(globalThis, {[key]: {send}})
+  warnings.mockClear(); Object.assign(globalThis, {[key]: {send, warnings}})
   // 模块加载与轮询测试不观察文件变化；观察器不应参与组件的虚拟时钟。
   server = await createServer({appType: 'custom', configFile: false, logLevel: 'silent', root: process.cwd(), resolve: {alias: {'@': resolve(process.cwd(), '.')}}, ssr: {noExternal: ['webextension-polyfill', 'element-plus']}, server: {hmr: false, middlewareMode: true, watch: null}, plugins: [{name: 'information-highlight-ui-mocks', enforce: 'pre', resolveId(id) {
     if (id === 'webextension-polyfill') return '\0information-browser'
@@ -49,7 +58,7 @@ beforeEach(async () => {
     if (id.endsWith('.vue') && !/InformationHighlight(?:Preferences|ModelCard)\.vue$/u.test(id)) return '\0information-child'
     return null
   }, load(id) {
-    if (id === '\0information-elements') return 'export const ElOption = {}, ElSwitch = {}, ElDialog = {};'
+    if (id === '\0information-elements') return `export const ElMessage = {warning: globalThis.${key}.warnings}; export const ElOption = {}, ElSwitch = {}, ElDialog = {};`
     if (id === '\0information-browser') return `export default {runtime: {sendMessage: globalThis.${key}.send}}`
     if (id === '\0information-i18n') return 'export const useUiI18n = () => ({t: key => key});'
     if (id === '\0information-child') return 'export default {}'
@@ -97,6 +106,30 @@ describe('信息高亮真实偏好组件', () => {
     expect(state.hotkeyConflict('Alt+J')).toBe('')
     props.config.selectionAreaEnabled = true
     expect(state.hotkeyConflict('Alt+J')).toBe('informationHighlight.hotkey.conflict')
+  })
+  it('停用草稿可改被点选保留的组合；重新启用明确拒绝，隐藏后的旧回调不借用恢复视图', async () => {
+    await mount('InformationHighlightPreferences')
+    Object.assign(props.config, {on: false, selectionTranslatorMode: 'bilingual', disableSelectionTranslator: false, selectionClickSelectEnabled: true, selectionClickSelectHotkey: 'Alt+Shift+S'})
+    state.actions.hotkeyEnabled(false); await settle(); state.actions.editHotkey(); state.actions.hotkey('shift+alt+s'); await settle()
+    expect(props.config.informationHighlight).toMatchObject({hotkey: 'Alt+Shift+S', hotkeyEnabled: false})
+    state.actions.hotkeyEnabled(true); expect(warnings).toHaveBeenCalledWith('informationHighlight.hotkey.conflict'); expect(props.config.informationHighlight.hotkeyEnabled).toBe(false)
+    const enable = state.actions.hotkeyEnabled, intensity = state.intensityChoices.find((item: any) => item.value === 'strong').choose
+    props.active = false; await settle(); props.active = true; await settle(); enable(true); intensity()
+    expect(warnings).toHaveBeenCalledOnce(); expect(props.config.informationHighlight).toMatchObject({hotkeyEnabled: false, intensity: 'standard'})
+    props.config.selectionClickSelectEnabled = false; state.actions.hotkeyEnabled(true); await settle()
+    state.intensityChoices.find((item: any) => item.value === 'strong').choose(); await settle()
+    expect(props.config.informationHighlight).toMatchObject({hotkeyEnabled: true, hotkey: 'Alt+Shift+S', intensity: 'strong'})
+  })
+  it('划词兼容停用状态释放高亮占用检查，已启用局部与段落复制保留其组合', async () => {
+    await mount('InformationHighlightPreferences')
+    Object.assign(props.config, {selectionTranslatorMode: 'disabled', selectionTranslatorTrigger: 'custom', customSelectionTranslatorHotkey: 'Alt+J'})
+    expect(state.hotkeyConflict('Alt+J')).toBe('')
+    props.config.selectionTranslatorMode = 'bilingual'; props.config.disableSelectionTranslator = true; expect(state.hotkeyConflict('Alt+J')).toBe('')
+    props.config.disableSelectionTranslator = false; expect(state.hotkeyConflict('Alt+J')).toBe('informationHighlight.hotkey.conflict')
+    props.config.selectionTranslatorTrigger = 'none'; props.config.sectionTranslationHotkeyEnabled = true; props.config.sectionTranslationHotkey = 'custom'; props.config.customSectionTranslationHotkey = 'Alt+K'
+    expect(state.hotkeyConflict('Alt+K')).toBe('informationHighlight.hotkey.conflict')
+    props.config.paragraphCopyEnabled = true; props.config.paragraphCopyHotkey = 'custom'; props.config.customParagraphCopyHotkey = 'Alt+P'
+    expect(state.hotkeyConflict('Alt+P')).toBe('informationHighlight.hotkey.conflict')
   })
   it('偏好更换、视图关闭又重开和卸载时，缓存控件不能借用新配置', async () => {
     await mount('InformationHighlightPreferences'); const oldMode = state.actions.mode, oldDensity = state.densityChoices[0].choose

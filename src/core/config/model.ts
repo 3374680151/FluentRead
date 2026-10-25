@@ -3,11 +3,15 @@
  *
  * 文件职责：定义 FluentRead 完整配置模型、默认值及各项设置的合法范围，包括默认开启并按服务独立保存的原生翻译合批偏好，是配置读取、保存、迁移和 UI 绑定共同依赖的领域契约。
  * 主要内容：支持单图选择本地识别引擎，包含正文/全部节点识别范围，保留各功能独立服务，并将所有功能服务的空值解释为继承网页默认；统一中文简繁标识及历史配置别名，并保存常用服务顺序，保存默认空的 Origin/Referer 域名移除名单和组合翻译配置；组合成员只引用普通服务，删除自定义成员与组合时精确清理无效选择，包含 Config 接口、字幕和翻译模式类型、延迟与字号范围、默认 API 地址及多项功能开关，使新增配置项在一个位置获得类型和初始语义；归一化时以迭代克隆保留深层数据和共享引用，安全迁移任意自有凭据键，升级历史默认提示词，只迁移已登记模型编号，并在线性目录遍历中保护自定义服务的当前模型和 Thinking 偏好。 可核对的公开符号包括 DeepSeekApiType、DeepSeekThinkingMode、VideoSubtitleDisplayMode、FullPageTranslationMode、DEFAULT_VIDEO_SUBTITLE_FONT_SIZE、DEFAULT_NEW_API_URL、DEFAULT_MOUSE_HOVER_TRANSLATION_DELAY。
+ * 两点选取：默认关闭，独立保存单次启动快捷键，非法组合回到带修饰键的默认值。
  * 局部区域记忆：默认空列表，按专用 schema 保留网站/路径、有限 CSS 定位、自动/提醒模式和可选快捷方案引用，不保存网页文字或请求凭据。
+ * AI 多段预算：默认每批最多 8 个可翻译片段、2000 原文字符，关闭功能保留预算，读取与导入时共享有界数字规范化。
  * AI 翻译超时：默认等待 120 秒，读取、导入及同步配置时共用 10 至 600 秒的有限数字毫秒规范化规则。ChatGPT 套餐模型来自账户发现，始终保存直接 slug；兼容已保存的自定义模型哨兵，不把动态模型再次变为通用自定义模型。
  * 模块边界：本文件属于 core 领域层，只定义规则、类型与纯转换；个人校订默认关闭且仅接受显式布尔开启，userscript 不保留该不可用设置；不直接读写浏览器存储、不发起网络请求、不挂载 Vue/WXT 入口，持久化、协议调用和界面编排分别由 services、providers 与 features 承担。
  */
 
+import {DEFAULT_AI_MULTI_SEGMENT_MAX_SEGMENTS, DEFAULT_AI_MULTI_SEGMENT_MAX_CHARACTERS, normalizeAiMultiSegmentMaxSegments, normalizeAiMultiSegmentMaxCharacters} from './aiMultiSegment';
+import {DEFAULT_CLICK_SELECTION_HOTKEY, normalizeClickSelectionHotkey} from './clickSelection';
 import {DEFAULT_SENTENCE_HIGHLIGHT_STYLE, DEFAULT_SENTENCE_HIGHLIGHT_APPEARANCE, normalizeSentenceHighlightStyle, normalizeSentenceHighlightAppearance, normalizeSentenceHighlightProfiles, type SentenceHighlightStyle, type SentenceHighlightAppearance, type SentenceHighlightProfile} from './sentenceHighlight';
 import {DEFAULT_INFORMATION_HIGHLIGHT_PREFERENCES, normalizeInformationHighlightPreferences, type InformationHighlightPreferences} from './informationHighlight';
 import {normalizeMangaSiteRules, normalizeMangaPrefetchPages, normalizeMangaCachePages, type MangaSiteRule} from './mangaNormalization';
@@ -367,6 +371,7 @@ export class Config {
     hoverShortcutBeforeDisable: string; // 关闭默认悬停开关前的选择，重开恢复；不参与运行时触发
     style: number;
     translationAppearance: TranslationAppearance; // 双语译文的颜色、线条、底色、字号、字重、字体与不透明度微调
+    browserDefaultTranslationFont: boolean; // 所有网页的双语和仅译文统一使用浏览器默认字体，不改写原有外观配置
     translationStyleProfiles: TranslationStyleProfile[]; // 用户保存的可命名译文样式快照
     activeTranslationStyleProfileId: string; // 当前选中的样式快照；外观可继续编辑，保存时再更新快照
     display: number = 1;
@@ -438,6 +443,8 @@ export class Config {
     documentGlossaryIds: string[] | null; // 文档术语选择；null 跟随全局，空数组停用
     videoGlossaryIds: string[] | null; // 字幕术语选择；null 跟随全局，空数组停用
     enableAIMultiSegment: boolean; // 是否把相邻全文段落合并为一次 AI 翻译请求
+    aiMultiSegmentMaxSegments: number; // 一批 AI 多段请求最多包含的可翻译文本片段数
+    aiMultiSegmentMaxCharacters: number; // 一批 AI 多段请求的原文字符预算，超长单候选仍保持完整
     nativeBatchTranslationEnabled: Record<string, boolean>; // 原生多文本服务的合批开关，按服务独立保存且默认开启
     informationHighlight: InformationHighlightPreferences; // 信息高亮偏好；当前页面开启状态不持久化
     bilingualSentenceHighlightEnabled: boolean; // 是否在双语翻译中同步高亮原文与译文
@@ -512,6 +519,8 @@ export class Config {
     selectionTranslatorTrigger: string; // 划词翻译互斥触发方式: 'direct' | 'icon' | 'dot' | 'hover' | 'contextMenu' | 'Control' | 'Alt' | 'Shift' | 'custom'
     selectionTranslatorHotkey: string; // 旧版快捷键字段；与 selectionTranslatorTrigger 中的快捷键选项保持镜像
     customSelectionTranslatorHotkey: string; // 自定义划词翻译快捷键
+    selectionClickSelectEnabled: boolean; // 主动开启后才允许用快捷键启动单次两点选取
+    selectionClickSelectHotkey: string; // 两点选取启动键，包含普通主键与修饰键
     selectionTranslatorDelay: number; // 选区稳定后显示划词翻译入口的延迟（毫秒）
     selectionTranslatorAutoDismiss: boolean; // 继续阅读或复制原文时收起，避免浮层长时间遮挡页面
     selectionTranslatorBidirectional: boolean; // 中英目标下为同语言选区提供反向划词入口
@@ -570,6 +579,7 @@ export class Config {
         this.excludedLanguages = [];
         this.style = defaultOption.style;
         this.translationAppearance = normalizeTranslationAppearance(DEFAULT_TRANSLATION_APPEARANCE); // 默认沿用各样式自带配色
+        this.browserDefaultTranslationFont = false;
         this.translationStyleProfiles = [];
         this.activeTranslationStyleProfileId = '';
         this.display = defaultOption.display;
@@ -647,6 +657,8 @@ export class Config {
         this.documentGlossaryIds = null;
         this.videoGlossaryIds = null;
         this.enableAIMultiSegment = false; // 默认逐段请求，由用户按需开启 AI 多段翻译
+        this.aiMultiSegmentMaxSegments = DEFAULT_AI_MULTI_SEGMENT_MAX_SEGMENTS;
+        this.aiMultiSegmentMaxCharacters = DEFAULT_AI_MULTI_SEGMENT_MAX_CHARACTERS;
         this.nativeBatchTranslationEnabled = {...DEFAULT_NATIVE_BATCH_TRANSLATION_ENABLED};
         this.informationHighlight = {...DEFAULT_INFORMATION_HIGHLIGHT_PREFERENCES};
         this.bilingualSentenceHighlightEnabled = false; // 默认关闭双语逐句高亮，避免改变现有网页视觉
@@ -721,6 +733,8 @@ export class Config {
         this.selectionTranslatorTrigger = 'icon'; // 默认显示可发现的操作图标
         this.selectionTranslatorHotkey = 'none'; // 默认不增加额外快捷键，保持原有划词行为
         this.customSelectionTranslatorHotkey = ''; // 自定义划词翻译快捷键为空
+        this.selectionClickSelectEnabled = false;
+        this.selectionClickSelectHotkey = DEFAULT_CLICK_SELECTION_HOTKEY;
         this.selectionTranslatorDelay = DEFAULT_SELECTION_TRANSLATOR_DELAY;
         this.selectionTranslatorAutoDismiss = true;
         this.selectionTranslatorBidirectional = false; // 保留默认的同语言跳过，用户可按需开启双向入口
@@ -1102,6 +1116,7 @@ export function normalizeConfig(value: unknown): Config {
         && normalized.bilingualSentenceHighlightProfiles.some(profile => profile.id === source.activeSentenceHighlightProfileId)
         ? source.activeSentenceHighlightProfileId : '';
     normalized.translationAppearance = normalizeTranslationAppearance(source.translationAppearance);
+    normalized.browserDefaultTranslationFont = source.browserDefaultTranslationFont === true;
     normalized.translationStyleProfiles = normalizeTranslationStyleProfiles(source.translationStyleProfiles);
     normalized.activeTranslationStyleProfileId = typeof source.activeTranslationStyleProfileId === 'string'
         && normalized.translationStyleProfiles.some((profile) => profile.id === source.activeTranslationStyleProfileId)
@@ -1417,6 +1432,8 @@ export function normalizeConfig(value: unknown): Config {
     if (typeof normalized.customSelectionTranslatorHotkey !== 'string') {
         normalized.customSelectionTranslatorHotkey = '';
     }
+    normalized.selectionClickSelectEnabled = source.selectionClickSelectEnabled === true;
+    normalized.selectionClickSelectHotkey = normalizeClickSelectionHotkey(source.selectionClickSelectHotkey);
     normalized.selectionTranslatorDelay = normalizeSelectionTranslatorDelay(
         source.selectionTranslatorDelay,
     );
@@ -1544,6 +1561,8 @@ export function normalizeConfig(value: unknown): Config {
         },
     );
     normalized.enableAIMultiSegment = source.enableAIMultiSegment === true;
+    normalized.aiMultiSegmentMaxSegments = normalizeAiMultiSegmentMaxSegments(source.aiMultiSegmentMaxSegments);
+    normalized.aiMultiSegmentMaxCharacters = normalizeAiMultiSegmentMaxCharacters(source.aiMultiSegmentMaxCharacters);
     return normalized;
 }
 

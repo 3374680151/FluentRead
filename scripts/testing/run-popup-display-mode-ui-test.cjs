@@ -208,9 +208,9 @@ const server = http.createServer(async (request, response) => {
     }
     await patch({theme:'light',uiLanguage:'zh-CN'});popup = await openPopup();
     currentCase = 'mode-toggle';const toggle = () => popup.locator('[data-testid="popup-display-mode"]');
-    assert.equal(await toggle().getAttribute('data-display-mode'),'bilingual');assert.match(await toggle().getAttribute('title'),/双语.*仅译文/u);
+    assert.equal(await toggle().getAttribute('data-display-mode'),'bilingual');assert.equal(await toggle().getAttribute('aria-label'),'显示原文和译文');assert.equal(await toggle().getAttribute('title'),null);
     await toggle().focus();await popup.keyboard.press('Space');await saved('display',0);await until(async () => await toggle().getAttribute('data-display-mode') === 'translation-only','single icon');
-    assert.match(await toggle().getAttribute('title'),/仅译文.*双语/u);await shot(popup,'popup-translation-only-2x');
+    assert.equal(await toggle().getAttribute('aria-label'),'显示原文和译文');await shot(popup,'popup-translation-only-2x');
     const firstProbe = await popup.evaluate(() => globalThis.__displayModeProbe);assert(firstProbe.requests.length && firstProbe.responses.some(response => response.success));
     report.persistenceCases.push({name:'keyboard toggle persists through real background config API',passed:true,probe:firstProbe});
     await closePage(popup);popup = await openPopup();assert.equal(await toggle().getAttribute('data-display-mode'),'translation-only');
@@ -222,7 +222,7 @@ const server = http.createServer(async (request, response) => {
     const modes = options.getByRole('radiogroup',{name:'翻译模式',exact:true});await modes.waitFor();await modes.getByRole('radio',{name:'仅译文模式',exact:true}).click();await closePage(options);await saved('display',0);
     await until(async () => await toggle().getAttribute('data-display-mode') === 'translation-only','options to popup sync');report.crossPageSync = true;report.persistenceCases.push({name:'options change then immediate close synchronizes existing popup',reopened:0,passed:true});
     await toggle().click();await saved('display',1);
-    currentCase = 'google-guard';await patch({service:'google'});await until(async () => await toggle().isDisabled(),'Google guard');assert.match(await toggle().getAttribute('title'),/谷歌|Google/u);await shot(popup,'popup-google-disabled-2x');await patch({service});await until(async () => !await toggle().isDisabled(),'custom service enabled');
+    currentCase = 'google-guard';await patch({service:'google'});await until(async () => await toggle().isDisabled(),'Google guard');assert.match(await toggle().getAttribute('aria-description'),/谷歌|Google/u);await shot(popup,'popup-google-disabled-2x');await patch({service});await until(async () => !await toggle().isDisabled(),'custom service enabled');
     report.cases.push({name:'Google website service exposes disabled mode shortcut with explanation',passed:true});
     currentCase = 'diagnostic';await closePage(popup);
     for (const touch of [false,true]) {popup = await openPopup({diagnostic:true,touch});await geometry(popup,touch?'diagnostic-touch':'diagnostic-desktop',touch);await popup.locator('[data-diagnostic-details-toggle]').click();await popup.locator('[data-diagnostic-details]').waitFor();

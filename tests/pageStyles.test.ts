@@ -161,6 +161,24 @@ describe('页面公共样式与译文外观生命周期', () => {
         expect(rendered.parentNode).toBe(paragraph);
     });
 
+    it('登记大量存活样式根时将弱引用清理工作限制为线性', async () => {
+        let styleReads = 0;
+        vi.stubGlobal('WeakRef', class {
+            constructor(private value: object) {}
+            deref() {if ((this.value as Element).localName === 'style') styleReads++; return this.value;}
+        });
+        const {installPageStyles} = await import('@/src/app/content/pageStyles');
+        const remove = installPageStyles(context());
+        const roots: ShadowRoot[] = [];
+        try {
+            for (let index = 0; index < 1000; index++) {
+                const root = openRoot(); roots.push(root); prepareTranslationStyleRoot(root);
+            }
+            expect(roots.every(root => root.querySelector('style[data-fr-translation-owned]'))).toBe(true);
+            expect(styleReads).toBeLessThanOrEqual(roots.length * 16);
+        } finally {remove();}
+    });
+
     it('新根登记和配置更新都扫除死亡弱引用，外观不变的无限滚动也不累积登记对象', async () => {
         const refs: Array<{dead: boolean; reads: number; deref(): HTMLStyleElement | undefined}> = [];
         vi.stubGlobal('WeakRef', class {

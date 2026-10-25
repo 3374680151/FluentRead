@@ -1,11 +1,12 @@
 import * as Vue from 'vue';
 import {afterEach, describe, expect, it, vi} from 'vitest';
 import {mountAreaTranslator} from './helpers/areaTranslatorHarness';
+import AreaTranslator from '@/src/features/area-translation/ui/AreaTranslator.vue';
 let close: (() => void) | undefined;
 afterEach(() => {close?.(); vi.unstubAllGlobals(); vi.useRealTimers();});
 function deferred() {let resolve!: () => void; const promise = new Promise<void>(yes => {resolve = yes;}); return {promise, resolve};}
 function mountRecovery() {
-  const fixture = mountAreaTranslator(); close = fixture.unmount;
+  const fixture = mountAreaTranslator(AreaTranslator); close = fixture.unmount;
   const captured = 'data:image/png,original-selection';
   const result = {image: 'data:image/png,crop', sourceText: 'Source', translatedText: '译文', service: 'microsoft', serviceName: '微软翻译', model: '', mode: 'standard', lines: [], warnings: []};
   fixture.capture.mockResolvedValue(captured);
@@ -94,7 +95,7 @@ describe('圈选结果拖动', () => {
 });
 
 describe('圈选真实控件与异步所有权', () => {
-  function mountControls() {const fixture = mountAreaTranslator(); close = fixture.unmount; return fixture;}
+  function mountControls() {const fixture = mountAreaTranslator(AreaTranslator); close = fixture.unmount; return fixture;}
   const pointer = {isTrusted: true, button: 0, pointerId: 11, clientX: 20, clientY: 30};
   async function select(f: ReturnType<typeof mountControls>) {
     expect(f.beginSelection()).toBe(true); await Vue.nextTick();

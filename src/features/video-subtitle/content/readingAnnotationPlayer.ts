@@ -1,7 +1,7 @@
 /**
  * @file src/features/video-subtitle/content/readingAnnotationPlayer.ts
  * 文件职责：拥有播放器当前原句的读音显示、菜单交互与配置切换生命周期。
- * 主要内容：装配独立读音控制器和本地请求端，关闭时跳过语言解析，按原句及轨道上下文缓存语言元数据；为完整句学习提供始终可用的原轨上下文，更新稳定读音节点和菜单状态，菜单保持固定功能名称并由显式开关表达状态，无适用读音时给出简短原因且不显示重试，保留仅译文语义，并在显示模式切换时请求宿主重置当前句翻译资格，隐藏及销毁时清理自有任务与监听。
+ * 主要内容：装配独立读音控制器和本地请求端，关闭时跳过语言解析，按轨道标识、来源 URL 与语言偏好缓存语言元数据，换句不重复扫描页面脚本；为完整句学习提供始终可用的原轨上下文，更新稳定读音节点和菜单状态，无适用读音时给出简短原因且不显示重试，仅译文时保留偏好并就近提供双语入口，在显示模式切换时请求宿主重置当前句翻译资格，隐藏及销毁时清理自有任务与监听。
  * 模块边界：只操作视频 feature 自有 UI 并通过既有入口读写共享配置；播放器定位、翻译状态与字幕布局由宿主注入，原轨上下文不依赖读音开关，不访问词典、创建 Worker 或管理视频采集。
  */
 import type {Config} from '@/src/core/config/model';
@@ -13,10 +13,12 @@ import {annotateVideoReading} from './readingAnnotationClient';
 import {isOriginalTimedTextUrl, isYouTubeVideoPage, normalizeVideoSubtitleDisplayMode, renderHumanVideoCaption, renderVideoReadingAnnotation, videoUi} from './ui';
 import {chooseYoutubeCaptionTrackForLocation, type VideoSubtitleCue} from './youtubeSubtitleData';
 
+interface ReadingSourceContext {key: string; captured?: {url: string}; cues: VideoSubtitleCue[]}
+
 interface ReadingPlayerPorts {
   getPlayer(): HTMLElement | null;
   canRead(): boolean;
-  getSourceContext(): {key: string; captured?: {url: string}; cues: VideoSubtitleCue[]};
+  getSourceContext(): ReadingSourceContext;
   nativeSync(): void;
   scheduleLayout(): void;
   updateMenu(): void;
@@ -40,11 +42,19 @@ export function createVideoReadingPlayer(ports: ReadingPlayerPorts) {
     return isYouTubeVideoPage() && captured && !isOriginalTimedTextUrl(captured.url) ? [] : cues;
   };
   const getSourceLanguage = () => {
-    const {key, captured} = ports.getSourceContext();
-    if (isYouTubeVideoPage()) return new URL(captured?.url || window.location.href).searchParams.get('lang')
-      || chooseYoutubeCaptionTrackForLocation(document, window.location, config.from)?.languageCode || config.from;
-    const native = key.startsWith('x:native:') ? key.slice('x:native:'.length) : '';
-    return native && native !== 'original' ? native : config.videoSourceLanguage;
+    const context = ports.getSourceContext();
+    const nextKey = JSON.stringify([context.key, context.captured?.url || '', config.from, config.videoSourceLanguage, window.location.href]);
+    if (nextKey === languageKey) return sourceLanguage;
+    languageKey = nextKey;
+    const {key, captured} = context;
+    if (isYouTubeVideoPage()) {
+      sourceLanguage = new URL(captured?.url || window.location.href).searchParams.get('lang')
+        || chooseYoutubeCaptionTrackForLocation(document, window.location, config.from)?.languageCode || config.from;
+    } else {
+      const native = key.startsWith('x:native:') ? key.slice('x:native:'.length) : '';
+      sourceLanguage = native && native !== 'original' ? native : config.videoSourceLanguage;
+    }
+    return sourceLanguage;
   };
   const onVisibility = () => {if (document.visibilityState === 'hidden') controller.clear();};
   document.addEventListener('visibilitychange', onVisibility);
@@ -53,18 +63,17 @@ export function createVideoReadingPlayer(ports: ReadingPlayerPorts) {
     sourceContext: {getCues: getLearningCues, getLanguage: getSourceLanguage},
     get state() {return controller.state;},
     clear: controller.clear,
-    reset: controller.reset,
+    reset() {languageKey = ''; sourceLanguage = ''; controller.reset();},
     destroy() {document.removeEventListener('visibilitychange', onVisibility); controller.destroy();},
     renderCaption(player: HTMLElement, container: HTMLElement, source: string, translation: string): void {
       renderHumanVideoCaption(player, container, source, translation);
       if (!source || !enabled() || !ports.canRead() || normalizeVideoSubtitleDisplayMode(config.videoSubtitleDisplayMode) === 'translation-only'
         || document.visibilityState === 'hidden') {controller.clear(); return;}
       // DOM 回退可逐帧刷新；大型 YouTube 脚本中的语言元数据只在实际上下文变化后解析。
-      const nextKey = JSON.stringify([source, ports.getSourceContext().key, config.from, config.videoSourceLanguage, window.location.href]);
-      if (nextKey !== languageKey) {languageKey = nextKey; sourceLanguage = getSourceLanguage();}
-      controller.sync(source, sourceLanguage, true);
+      controller.sync(source, getSourceLanguage(), true);
     },
     syncMenu(menu: HTMLElement, subtitlesEnabled: boolean, selectedMode: string): void {
+      const readingEnabled = enabled() && subtitlesEnabled;
       const toggle = menu.querySelector<HTMLButtonElement>('[data-action="toggle-reading-annotation"]');
       if (toggle) {
         toggle.setAttribute('aria-checked', String(config.videoSubtitleAppearance.readingAnnotation === true));
@@ -74,14 +83,20 @@ export function createVideoReadingPlayer(ports: ReadingPlayerPorts) {
       const status = menu.querySelector<HTMLElement>('[data-reading-status]');
       if (status) {
         status.textContent = !browserCapabilities.extensionDom ? videoUi('video.readingAnnotation.unavailable')
-          : selectedMode === 'translation-only' && enabled() ? videoUi('video.readingAnnotation.originalRequired')
-            : controller.state.status === 'loading' ? videoUi('video.readingAnnotation.loading')
-              : controller.state.status === 'error' ? videoUi('video.readingAnnotation.error')
-                : controller.state.status === 'no-reading' ? videoUi('video.readingAnnotation.noReading') : '';
+          : !readingEnabled ? ''
+            : selectedMode === 'translation-only' ? videoUi('video.readingAnnotation.originalRequired')
+              : controller.state.status === 'loading' ? videoUi('video.readingAnnotation.loading')
+                : controller.state.status === 'error' ? videoUi('video.readingAnnotation.error')
+                  : controller.state.status === 'no-reading' ? videoUi('video.readingAnnotation.noReading') : '';
         status.hidden = !status.textContent;
       }
       const retry = menu.querySelector<HTMLButtonElement>('[data-action="retry-reading-annotation"]');
-      if (retry) retry.hidden = controller.state.status !== 'error';
+      if (retry) retry.hidden = !readingEnabled || selectedMode === 'translation-only' || controller.state.status !== 'error';
+      const bilingual = menu.querySelector<HTMLButtonElement>('[data-reading-bilingual]');
+      if (bilingual) {
+        bilingual.hidden = !readingEnabled || selectedMode !== 'translation-only';
+        bilingual.disabled = !subtitlesEnabled;
+      }
     },
     handleAction(action: string | undefined): boolean {
       if (action === 'toggle-reading-annotation') {
@@ -95,7 +110,7 @@ export function createVideoReadingPlayer(ports: ReadingPlayerPorts) {
     syncConfig(nextConfig: Config): void {
       const nextMode = normalizeVideoSubtitleDisplayMode(nextConfig.videoSubtitleDisplayMode);
       if (nextMode !== displayMode) {displayMode = nextMode; ports.resetCaption();}
-      if (!enabled() || !nextConfig.on || !nextConfig.videoTranslationEnabled || nextConfig.videoSubtitleVisible === false
+      if (!browserCapabilities.extensionDom || !nextConfig.videoSubtitleAppearance.readingAnnotation || !nextConfig.on || !nextConfig.videoTranslationEnabled || nextConfig.videoSubtitleVisible === false
         || nextMode === 'translation-only') controller.clear();
     },
   };

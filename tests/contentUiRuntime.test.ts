@@ -73,10 +73,12 @@ interface MockUi {
 }
 
 function ui(instance: unknown = {mounted: true}): MockUi {
+  const shadowHost = document.createElement('div');
+  document.documentElement.append(shadowHost);
   return {
     mounted: {instance},
-    remove: vi.fn(),
-    shadowHost: document.createElement('div'),
+    remove: vi.fn(() => shadowHost.remove()),
+    shadowHost,
     uiContainer: document.createElement('body'),
   };
 }
@@ -386,13 +388,35 @@ describe('悬浮球 content runtime', () => {
 
   it('userscript 悬浮球继续打开脚本设置入口', async () => {
     vi.stubEnv('BROWSER', 'userscript');
+    Object.defineProperty(document, 'fullscreenElement', {configurable: true, value: document.createElement('video')});
     mocks.createVueShadowUi.mockResolvedValueOnce(ui({toggleTranslation: vi.fn()}));
     const runtime = await import('@/src/features/floating-ball/content/runtime');
     await runtime.mountFloatingBall({} as never);
     mocks.createVueShadowUi.mock.calls[0][1].props.onSettingsClick({isTrusted: true, currentTarget: document.createElement('button')});
     await Promise.resolve();
     expect(mocks.sendMessage).toHaveBeenCalledWith({type: 'openOptionsPage'});
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    mocks.sendMessage.mockRejectedValueOnce(new Error('settings unavailable'));
+    mocks.createVueShadowUi.mock.calls[0][1].props.onSettingsClick({isTrusted: true});
+    await Promise.resolve();
+    expect(consoleError).toHaveBeenCalledWith('[FluentRead] 打开设置页失败', expect.any(Error)); consoleError.mockRestore();
     runtime.unmountFloatingBall();
+    Object.defineProperty(document, 'fullscreenElement', {configurable: true, value: null});
+  });
+
+  it('uses the main control as a popup anchor when the event port has no current target and handles hidden tools', async () => {
+    const runtime = await import('@/src/features/floating-ball/content/runtime'), mounted = ui();
+    mocks.createVueShadowUi.mockResolvedValue(mounted); await runtime.mountFloatingBall({} as never);
+    const click = mocks.createVueShadowUi.mock.calls[0][1].props.onSettingsClick;
+    click(undefined); click({isTrusted: true, currentTarget: null}); expect(mocks.togglePopup).not.toHaveBeenCalled();
+    const main = document.createElement('div'); main.className = 'floating-ball-main'; mounted.uiContainer.append(main);
+    click({isTrusted: true, currentTarget: null}); expect(mocks.togglePopup).toHaveBeenCalledWith(main);
+    Object.defineProperty(document, 'fullscreenElement', {configurable: true, value: document.createElement('video')}); document.dispatchEvent(new Event('fullscreenchange'));
+    expect(mocks.closePopup).toHaveBeenCalledOnce(); expect(mounted.uiContainer.style.getPropertyValue('display')).toBe('none');
+    Object.defineProperty(document, 'fullscreenElement', {configurable: true, value: null}); document.dispatchEvent(new Event('fullscreenchange'));
+    expect(mounted.uiContainer.style.getPropertyValue('display')).toBeFalsy();
+    mocks.subscribeConfig.mock.calls[0][0]({...mocks.config, floatingBallToolsDisplay: 'hidden'}); expect(mocks.closePopup).toHaveBeenCalled();
+    runtime.unmountFloatingBall(); click({isTrusted: true, currentTarget: main}); expect(mocks.togglePopup).toHaveBeenCalledOnce();
   });
 
   it('仅可信设置事件打开页内面板，失败后可重试并在卸载时清理', async () => {
@@ -472,6 +496,7 @@ describe('悬浮球 content runtime', () => {
       shadowHost: document.createElement('div'),
       uiContainer: document.createElement('body'),
     };
+    document.documentElement.append(mountedUi.shadowHost);
     mocks.createVueShadowUi.mockResolvedValue(mountedUi);
     const runtime = await import('@/src/features/floating-ball/content/runtime');
 
@@ -480,6 +505,52 @@ describe('悬浮球 content runtime', () => {
     expect(mocks.createVueShadowUi).toHaveBeenCalledOnce();
     runtime.unmountFloatingBall();
     expect(mountedUi.remove).toHaveBeenCalledOnce();
+  });
+  it('reconciles a removed floating-ball host through the actual registry, releasing old subscriptions and callbacks', async () => {
+    const {createContentFeatureRegistry} = await import('@/src/app/content/featureRegistry');
+    const runtime = await import('@/src/features/floating-ball/content/runtime');
+    const first = ui({setTranslationState: vi.fn(), setTranslationStatus: vi.fn(), setPosition: vi.fn()});
+    const secondInstance = {setTranslationState: vi.fn(), setTranslationStatus: vi.fn(), setPosition: vi.fn()}, second = ui(secondInstance);
+    const id = 'fluent-read-floating-ball-container';
+    mocks.createVueShadowUi.mockImplementationOnce(async () => {first.shadowHost.id = id; return first;})
+      .mockImplementationOnce(async () => {second.shadowHost.id = id; return second;});
+    const context = {isInvalid: false} as never, activation = new AbortController();
+    const registry = createContentFeatureRegistry([{id: 'floating-ball', isEnabled: () => true, mount: () => runtime.mountFloatingBall(context),
+      unmount: runtime.unmountFloatingBall, isMounted: () => Boolean(document.getElementById(id))}]);
+    await registry.mountEnabled({ctx: context, signal: activation.signal, isCurrent: () => true});
+    const staleProgress = mocks.subscribeFullPageTranslationProgress.mock.calls[0][0], staleStatus = mocks.subscribeTranslationToolbarStatus.mock.calls[0][0], staleConfig = mocks.subscribeConfig.mock.calls[0][0];
+    document.body.replaceWith(document.createElement('body')); await registry.reconcileEnabled(); expect(mocks.createVueShadowUi).toHaveBeenCalledOnce();
+    first.shadowHost.remove(); await expect(registry.reconcileEnabled()).resolves.toEqual([{id: 'floating-ball', status: 'mounted'}]);
+    expect(document.getElementById(id)).toBe(second.shadowHost); expect(first.remove).toHaveBeenCalledOnce();
+    for (const unsubscribe of [mocks.unsubscribeMangaTranslation, mocks.unsubscribeFullPageTranslationProgress, mocks.unsubscribeTranslationToolbarStatus, mocks.unsubscribeConfig]) expect(unsubscribe).toHaveBeenCalledOnce();
+    staleProgress({active: true}); staleStatus('error'); staleConfig({...mocks.config, floatingBallPosition: 'left'});
+    expect(secondInstance.setTranslationState).not.toHaveBeenCalled(); expect(secondInstance.setTranslationStatus).not.toHaveBeenCalled(); expect(secondInstance.setPosition).not.toHaveBeenCalled();
+    mocks.subscribeFullPageTranslationProgress.mock.calls[1][0]({active: true}); expect(secondInstance.setTranslationState).toHaveBeenCalledWith(true);
+    registry.unmountAll(); expect(second.remove).toHaveBeenCalledOnce(); expect(mocks.restoreOriginalContent).not.toHaveBeenCalled();
+  });
+  it('rejects a late replacement mount after deactivation and lets the next registry activation recover', async () => {
+    const {createContentFeatureRegistry} = await import('@/src/app/content/featureRegistry');
+    const runtime = await import('@/src/features/floating-ball/content/runtime'), pending = pendingUi(), id = 'fluent-read-floating-ball-container';
+    const first = ui(), late = ui(), fresh = ui(), context = {isInvalid: false} as never, old = new AbortController();
+    mocks.createVueShadowUi.mockImplementationOnce(async () => {first.shadowHost.id = id; return first;}).mockReturnValueOnce(pending.promise)
+      .mockImplementationOnce(async () => {fresh.shadowHost.id = id; return fresh;});
+    const feature = {id: 'floating-ball', isEnabled: () => true, mount: () => runtime.mountFloatingBall(context), unmount: runtime.unmountFloatingBall, isMounted: () => Boolean(document.getElementById(id))};
+    const registry = createContentFeatureRegistry([feature]); await registry.mountEnabled({ctx: context, signal: old.signal, isCurrent: () => !old.signal.aborted});
+    first.shadowHost.remove(); const replacing = registry.reconcileEnabled(); await Promise.resolve(); await Promise.resolve();
+    expect(mocks.createVueShadowUi).toHaveBeenCalledTimes(2); old.abort(); registry.unmountAll();
+    const next = createContentFeatureRegistry([feature]), activating = next.mountEnabled({ctx: context, signal: new AbortController().signal, isCurrent: () => true});
+    late.shadowHost.id = id; pending.resolve(late);
+    await expect(replacing).resolves.toEqual([{id: 'floating-ball', status: 'skipped'}]);
+    await expect(activating).resolves.toEqual([{id: 'floating-ball', status: 'mounted'}]);
+    expect(first.remove).toHaveBeenCalledOnce(); expect(late.remove).toHaveBeenCalledOnce(); expect(document.getElementById(id)).toBe(fresh.shadowHost); expect(mocks.createVueShadowUi).toHaveBeenCalledTimes(3);
+    next.unmountAll(); expect(fresh.remove).toHaveBeenCalledOnce();
+  });
+  it.each(['disabled', 'invalid-context'] as const)('cleans detached ownership without recreating it when %s', async reason => {
+    const runtime = await import('@/src/features/floating-ball/content/runtime'), mounted = ui(), context = {isInvalid: false};
+    mocks.createVueShadowUi.mockResolvedValue(mounted); await runtime.mountFloatingBall(context as never); mounted.shadowHost.remove();
+    if (reason === 'disabled') mocks.config.disableFloatingBall = true; else context.isInvalid = true;
+    await runtime.mountFloatingBall(context as never); expect(mounted.remove).toHaveBeenCalledOnce(); expect(mocks.createVueShadowUi).toHaveBeenCalledOnce();
+    expect(mocks.unsubscribeConfig).toHaveBeenCalledOnce(); runtime.unmountFloatingBall();
   });
 });
 

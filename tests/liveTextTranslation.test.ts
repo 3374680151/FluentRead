@@ -32,6 +32,8 @@ import {collectLiveTranslationTextSlots as collectRealSlots} from '@/src/core/tr
 
 const snapshot = {service: 'microsoft', model: 'default', thinking: false, sourceLanguage: 'en', targetLanguage: 'zh',
     useCache: true, enableAIContext: false, enableAIMultiSegment: false, enableNativeBatch: true, displayMode: 'single' as const, style: 0};
+// 旧调用方可省略 AI 预算；请求入口必须补齐默认值后再将完整快照交给翻译层。
+const requestSnapshot = {...snapshot, aiMultiSegmentMaxSegments: 8, aiMultiSegmentMaxCharacters: 2_000};
 
 describe('实时文本翻译快照', () => {
     beforeEach(() => {
@@ -51,7 +53,7 @@ describe('实时文本翻译快照', () => {
         const result = await createTranslationRequest(owner, 'content', 'bilingual', snapshot, undefined, undefined, undefined, undefined, true, 'all');
         expect(result).toEqual({kind: 'snapshot', sources: ['Source text'], translations: ['来源文字']});
         expect(runtime.getCurrentTranslationCore).toHaveBeenLastCalledWith('all');
-        expect(runtime.translateTextSlots).toHaveBeenLastCalledWith(['Source text'], snapshot, undefined, undefined, undefined, true);
+        expect(runtime.translateTextSlots).toHaveBeenLastCalledWith(['Source text'], requestSnapshot, undefined, undefined, undefined, true);
         expect(owner.textContent).toBe('Source text');
     });
 
@@ -79,7 +81,7 @@ describe('实时文本翻译快照', () => {
             sources: ['Preview changes'], translations: ['预览更改'], text: '预览更改',
         });
         expect(runtime.translateTextSlots).toHaveBeenLastCalledWith(
-            ['Preview changes'], snapshot, undefined, undefined, undefined, false);
+            ['Preview changes'], requestSnapshot, undefined, undefined, undefined, false);
         // 请求阶段绝不改写宿主属性，写入由渲染层在提交时完成。
         expect(owner.getAttribute('value')).toBe('Preview changes');
     });
@@ -136,6 +138,7 @@ describe('实时文本翻译快照', () => {
 
 describe('双语正文整块翻译', () => {
     const bilingual = {...snapshot, displayMode: 'bilingual' as const};
+    const bilingualRequestSnapshot = {...requestSnapshot, displayMode: 'bilingual' as const};
     beforeEach(() => {
         runtime.slots = [];
         runtime.translations = [];
@@ -180,7 +183,7 @@ describe('双语正文整块翻译', () => {
         const result = await createTranslationRequest(target, 'content', 'bilingual', bilingual);
         expect(runtime.translateTextSlots).toHaveBeenCalledTimes(1);
         expect(runtime.translateTextSlots).toHaveBeenCalledWith(
-            ['Read the guide.'], bilingual, undefined, undefined, undefined, false);
+            ['Read the guide.'], bilingualRequestSnapshot, undefined, undefined, undefined, false);
         expect(result).toEqual({
             kind: 'snapshot',
             sources: ['Read', 'the guide', '.'],
@@ -199,7 +202,7 @@ describe('双语正文整块翻译', () => {
 
             const result = await createTranslationRequest(target, 'content', 'bilingual', bilingual);
             expect(runtime.translateTextSlots).toHaveBeenNthCalledWith(2,
-                ['Read', 'the guide', '.'], bilingual, undefined, undefined, undefined, false);
+                ['Read', 'the guide', '.'], bilingualRequestSnapshot, undefined, undefined, undefined, false);
             expect(result).toEqual({
                 kind: 'snapshot',
                 sources: ['Read', 'the guide', '.'],
@@ -255,7 +258,7 @@ describe('双语正文整块翻译', () => {
         const result = await createTranslationRequest(target, 'content', 'bilingual', bilingual);
         expect(runtime.translateTextSlots).toHaveBeenCalledTimes(1);
         expect(runtime.translateTextSlots).toHaveBeenCalledWith(
-            ['Use', 'to', 'load', 'data'], bilingual, undefined, undefined, undefined, false);
+            ['Use', 'to', 'load', 'data'], bilingualRequestSnapshot, undefined, undefined, undefined, false);
         expect(result).toMatchObject({translations: ['译:Use', '译:to', '译:load', '译:data']});
     });
 
@@ -267,7 +270,7 @@ describe('双语正文整块翻译', () => {
         await createTranslationRequest(target, 'content', 'bilingual', bilingual);
         expect(runtime.translateTextSlots).toHaveBeenCalledTimes(1);
         expect(runtime.translateTextSlots).toHaveBeenCalledWith(
-            ['Read', 'the guide'], bilingual, undefined, undefined, undefined, false);
+            ['Read', 'the guide'], bilingualRequestSnapshot, undefined, undefined, undefined, false);
     });
 
     it('宿主保留换行时整段原文保留文本换行，样式读取失败时按普通空白处理', async () => {

@@ -771,6 +771,29 @@ function insideListFixture(document: Document, beforeOriginal: boolean, inside =
 }
 
 describe('inside 列表前置译文的真实渲染接线', () => {
+    it('只读取布局预算内的直接子节点，宽列表不先复制全部children', async () => {
+        await withDocumentRealm(async document => {
+            const {prepareInsideListTranslation} = await import('@/src/features/full-page-translation/content/insideListLayout');
+            const fixture = insideListFixture(document, true);
+            let visits = 0;
+            const child = document.createElement('span');
+            const children = new Proxy({length: 100_000,
+                *[Symbol.iterator]() {for (let index = 0; index < this.length; index++) {visits++; yield child;}},
+            }, {get(target, key, receiver) {
+                if (typeof key === 'string' && /^\d+$/u.test(key)) {visits++; return child;}
+                return Reflect.get(target, key, receiver);
+            }});
+            Object.defineProperty(fixture.owner, 'children', {configurable: true, value: children});
+            const before = fixture.content.getAttribute('style');
+            try {
+                prepareInsideListTranslation(fixture.owner, fixture.content, true);
+                expect(fixture.content.getAttribute('style')).toBe(before);
+                expect(fixture.source.data).toBe(fixture.sourceHTML);
+                expect(visits).toBeLessThanOrEqual(256);
+            } finally {Reflect.deleteProperty(fixture.owner, 'children'); fixture.restore();}
+        });
+    });
+
     it('factory 与 refresh 保持原生标记同行的整体译文盒，并精确恢复原 Text 与邻项', async () => {
         await withDocumentRealm(document => {
             const fixture = insideListFixture(document, true);

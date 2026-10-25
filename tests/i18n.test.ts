@@ -45,6 +45,24 @@ import {translateServiceLabel} from '@/src/core/i18n/serviceLabels';
 registerAllUiLanguageBundles();
 
 describe('界面 i18n 契约', () => {
+  it('两点选取的动态快捷键冲突说明翻译整句和实际占用功能名', () => {
+    const owners = ['鼠标悬停翻译', '全文翻译', '划词翻译', '圈选翻译', '段落复制', '局部翻译', '输入框翻译', '额外翻译方案'];
+    for (const language of ['en-US', 'ja-JP', 'ko-KR', 'fr-FR', 'ru-RU', 'es-ES'] as const) {
+      for (const owner of owners) {
+        const translatedOwner = translateLegacyText(owner, language);
+        expect(translatedOwner, `${language} ${owner}`).not.toBe(owner);
+        for (const source of [`快捷键已用于${owner}，请点击快捷键更换后使用`, `此快捷键已用于${owner}，请更换组合键`]) {
+          const result = translateLegacyText(source, language);
+          expect(result, `${language} ${source}`).not.toBe(source);
+          expect(result).toContain(translatedOwner);
+          if (language !== 'ja-JP') expect(result).not.toMatch(/[\u3400-\u9fff]/u);
+        }
+      }
+    }
+    expect(translateLegacyText('快捷键已用于段落复制，请点击快捷键更换后使用', 'en-US')).toBe('This shortcut is used for Paragraph copy. Click the shortcut to change it before use.');
+    expect(translateLegacyText('此快捷键已用于额外翻译方案，请更换组合键', 'en-US')).toBe('This shortcut is already used for Additional translation profile. Choose another combination.');
+  });
+
   it('原型属性名既不是资源键也不是旧文案，不会被替换为原生函数或对象', () => {
     for (const key of ['constructor', 'toString', '__proto__', 'hasOwnProperty']) {
       for (const language of ['zh-CN', 'en-US', 'ja-JP'] as const) {
@@ -855,6 +873,63 @@ describe('界面 i18n 契约', () => {
     expect(translateLegacyText('最多 8192 字符', 'fr-FR')).toBe('8192 caractères maximum');
     expect(translateLegacyText('最多 8192 字符', 'ru-RU')).toBe('Не более 8192 символов');
     expect(translateLegacyText('最多 8192 字符', 'es-ES')).toBe('Máximo 8192 caracteres');
+  });
+
+  it('两点选取的设置、起终点和拒绝原因在六种外语中有真实译文', () => {
+    const sources = [
+      '两点选取',
+      '编辑两点选取快捷键',
+      '开启后按快捷键，再依次点击文字起点和终点，无需按住鼠标；完成自动退出，Esc 取消',
+      '请选择带 Ctrl、Alt 或 Shift 的组合键',
+      '点击文字起点',
+      '点击文字终点',
+      '未点中文字，请点击起点',
+      '未点中文字，请点击终点',
+      '起点与终点相同，请换一个位置',
+      '选区过长，请点击较近的终点',
+      '此范围不支持，请换一个终点',
+      '额外翻译方案',
+    ];
+    expect(runtimeFeedbackRows.filter(row => sources.includes(row[0]))).toEqual([]);
+    for (const source of sources) expect(correctionRows.filter(row => row[0] === source)).toHaveLength(1);
+    for (const language of ['en-US', 'ja-JP', 'ko-KR', 'fr-FR', 'ru-RU', 'es-ES'] as const) {
+      for (const source of sources) {
+        const localized = translateLegacyText(source, language);
+        expect(localized, `${language}: ${source}`).not.toBe(source);
+        if (language !== 'ja-JP') expect(localized, `${language}: ${source}`).not.toMatch(/[\u3400-\u9fff]/u);
+      }
+    }
+  });
+
+  it('两点选取复合提示翻译真实状态前缀与 Esc 后缀，并保留扫描占位数字', () => {
+    const cancelSuffixes = {
+      'en-US': 'Esc to cancel',
+      'ja-JP': 'Esc でキャンセル',
+      'ko-KR': 'Esc로 취소',
+      'fr-FR': 'Échap pour annuler',
+      'ru-RU': 'Esc — отмена',
+      'es-ES': 'Esc para cancelar',
+    } as const;
+    for (const language of Object.keys(cancelSuffixes) as Array<keyof typeof cancelSuffixes>) {
+      for (const source of ['点击文字起点', '点击文字终点', '未点中文字，请点击起点', '未点中文字，请点击终点',
+        '起点与终点相同，请换一个位置', '选区过长，请点击较近的终点', '此范围不支持，请换一个终点']) {
+        const localized = translateLegacyText(`${source} · Esc 取消`, language);
+        expect(localized).toBe(`${translateLegacyText(source, language)} · ${cancelSuffixes[language]}`);
+        expect(localized).not.toContain(source);
+        const spacedSource = ` \t${source} · Esc 取消\n`;
+        expect(translateLegacyText(spacedSource, language)).toBe(` \t${localized}\n`);
+        expect(translateLegacyText(spacedSource, 'zh-CN')).toBe(spacedSource);
+      }
+      for (const count of [0, 1, 12, 125, 987654321]) {
+        const source = `${count} · Esc 取消`;
+        const localized = `${count} · ${cancelSuffixes[language]}`;
+        expect(translateLegacyText(source, language)).toBe(localized);
+        expect(translateLegacyText(` \t${source}\n`, language)).toBe(` \t${localized}\n`);
+        expect(translateLegacyText(` \t${source}\n`, 'zh-CN')).toBe(` \t${source}\n`);
+      }
+    }
+    expect(translateLegacyText('点击文字起点 · Esc 取消', 'zh-CN')).toBe('点击文字起点 · Esc 取消');
+    expect(runtimeFeedbackRows.some(row => row[0] === '12 · Esc 取消')).toBe(false);
   });
 
   it('人工校正容易发生语义误判的高频设置文案', () => {

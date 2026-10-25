@@ -505,13 +505,87 @@ describe('configstoreAudit lazy history and persistence recovery', () => {
     it.each([false, true])('migrates obsolete history projection without losing its cursor (write fails=%s)', async fails => {
         const raw = configstoreAuditHistory();
         Object.assign(raw.entries[0].config, {count: 9, uiLanguageSetupCompleted: true});
-        const {store, port, records} = await configstoreAuditLoad({owner: true, records: {'local:configHistory': raw}});
-        if (fails) vi.mocked(port.setItem).mockRejectedValueOnce(new Error('projection write unavailable'));
+        const {store, port, records} = await configstoreAuditLoad({owner: true, records: {'local:configHistory': raw}, configurePort: (port, records) => {
+            port.setItemIfUnchanged = vi.fn(async (key, expected, value) => {
+                if (fails) throw new Error('projection write unavailable');
+                if (JSON.stringify(records.get(key)) !== JSON.stringify(expected)) return false;
+                records.set(key, structuredClone(value));
+                return true;
+            });
+        }});
         await store.configHistoryReady;
         expect(store.getConfigHistorySnapshot().cursor).toBe(2);
         expect(store.getConfigHistorySnapshot().entries[0].config).not.toHaveProperty('count');
-        expect(vi.mocked(port.setItem).mock.calls.some(([key]) => key === 'local:configHistory')).toBe(true);
+        expect(port.setItemIfUnchanged).toHaveBeenCalledWith('local:configHistory', raw, expect.any(Object));
+        expect(port.setItem).not.toHaveBeenCalled();
         if (!fails) expect((records.get('local:configHistory') as ConfigHistoryState).entries[0].config).not.toHaveProperty('count');
+    });
+
+    it('keeps obsolete history migration in memory on get/set-only ports until an explicit history action', async () => {
+        const raw = configstoreAuditHistory();
+        Object.assign(raw.entries[0].config, {count: 9});
+        const {store, port, records} = await configstoreAuditLoad({owner: true, records: {'local:configHistory': raw}});
+        await store.configHistoryReady;
+        expect(store.getConfigHistorySnapshot().entries[0].config).not.toHaveProperty('count');
+        expect(port.setItem).not.toHaveBeenCalled();
+        expect(records.get('local:configHistory')).toEqual(raw);
+        await store.applyConfigHistoryAction('undo');
+        expect(port.setItem).toHaveBeenCalledOnce();
+        expect((records.get('local:configHistory') as ConfigHistoryState).entries[0].config).not.toHaveProperty('count');
+    });
+
+    it.each([false, true])('history projection migration preserves a concurrent external commit (watch=%s)', async notify => {
+        const raw = configstoreAuditHistory();
+        Object.assign(raw.entries[0].config, {count: 9});
+        const latest = appendConfigHistorySnapshot(raw, {to: 'ko'}, '2026-10-25T01:00:00Z')!;
+        const gate = configstoreAuditDeferred<void>(), started = configstoreAuditDeferred<void>();
+        configstoreAuditCleanups.push(() => gate.resolve());
+        const {store, records, emit} = await configstoreAuditLoad({owner: true, records: {'local:configHistory': raw}, configurePort: (port, records) => {
+            port.setItem = vi.fn(async (key, value) => {
+                started.resolve(); await gate.promise; records.set(key, structuredClone(value));
+            });
+            port.setItemIfUnchanged = vi.fn(async (key, expected, value) => {
+                started.resolve(); await gate.promise;
+                if (JSON.stringify(records.get(key)) !== JSON.stringify(expected)) return false;
+                records.set(key, structuredClone(value));
+                return true;
+            });
+        }});
+        const ready = Promise.resolve(store.configHistoryReady);
+        await started.promise;
+        if (notify) emit('local:configHistory', latest);
+        else records.set('local:configHistory', latest);
+        gate.resolve(); await ready;
+        expect(records.get('local:configHistory')).toEqual(latest);
+        expect(store.getConfigHistorySnapshot()).toEqual(latest);
+    });
+
+    it('a failed history migration reread cannot overwrite a newer watch update', async () => {
+        const raw = configstoreAuditHistory();
+        Object.assign(raw.entries[0].config, {count: 9});
+        const latest = appendConfigHistorySnapshot(raw, {to: 'ko'}, '2026-10-25T01:00:00Z')!;
+        const newer = appendConfigHistorySnapshot(latest, {to: 'de'}, '2026-10-25T02:00:00Z')!;
+        const gate = configstoreAuditDeferred<void>(), started = configstoreAuditDeferred<void>();
+        configstoreAuditCleanups.push(() => gate.resolve());
+        const {store, emit} = await configstoreAuditLoad({owner: true, records: {'local:configHistory': raw}, configurePort: (port, records) => {
+            const original = vi.mocked(port.getItem).getMockImplementation()!;
+            let reads = 0;
+            vi.mocked(port.getItem).mockImplementation(async key => {
+                if (key !== 'local:configHistory' || ++reads === 1) return original(key);
+                const snapshot = structuredClone(records.get(key));
+                started.resolve(); await gate.promise;
+                return snapshot as never;
+            });
+            port.setItemIfUnchanged = vi.fn(async key => {
+                records.set(key, latest);
+                return false;
+            });
+        }});
+        const ready = Promise.resolve(store.configHistoryReady);
+        await started.promise;
+        emit('local:configHistory', newer);
+        gate.resolve(); await ready;
+        expect(store.getConfigHistorySnapshot()).toEqual(newer);
     });
 
     it('ignores invalid, duplicate and stale external history while a real cursor write is pending', async () => {
@@ -700,6 +774,10 @@ describe('configstoreAudit own-key and preview boundaries', () => {
         expect(diff.changeCount).toBe(1);
         expect(diff.groups[0].changes[0].after).toContain('已配置（内容已摘要）');
         expect(JSON.stringify(diff).length).toBeLessThan(5000);
+        const mapping = buildConfigDiff({model: {openai: before}}, {model: {openai: after}});
+        expect(mapping.groups[0].changes).toEqual([{key: 'model.openai', label: 'OpenAI模型',
+            before: '已配置（内容已摘要）', after: '已配置（内容已摘要）'}]);
+        expect(JSON.stringify(mapping).length).toBeLessThan(5000);
     });
 
     it('formats only the four visible array entries', () => {
@@ -721,6 +799,19 @@ describe('configstoreAudit own-key and preview boundaries', () => {
 });
 
 describe('configstoreAudit explicit destination binding', () => {
+    it.each(['fixture-new-openai', ''])('persists mixed-service legacy token edit %j through actual import, store and encrypted repository', async token => {
+        const {store, repository} = await configstoreAuditLoad({owner: true, indexed: true,
+            initial: {service: 'openai', apiKeys: {openai: ['fixture-old-openai'], deepseek: ['fixture-old-deepseek']}}});
+        const {prepareConfigForImport} = await import('@/src/core/config/transfer');
+        const imported = prepareConfigForImport({on: true, service: 'openai', display: 1, from: 'auto', to: 'en',
+            apiKeys: {deepseek: ['fixture-new-deepseek']}, token: {openai: token}}, store.config);
+        await store.requestConfigSave(imported);
+        const expectedKeys = {openai: token ? [token] : [], deepseek: ['fixture-new-deepseek']};
+        expect(store.config.apiKeys).toEqual(expectedKeys);
+        expect(store.config.token.openai).toBe(token || undefined);
+        expect(await repository!.get('local:credentials')).toMatchObject({apiKeys: expectedKeys});
+        expect((await store.prepareHydratedConfigForExport()).apiKeys).toEqual(expectedKeys);
+    });
     const service = 'aliyunTranslation';
     const initial = () => normalizeConfig({service, token: {[service]: 'fixture-id'}, secret: {[service]: 'fixture-old-secret'}, serviceRegion: {[service]: 'cn-hangzhou'}});
     const importBase = {on: true, service, display: 1, from: 'auto', to: 'en', serviceRegion: {[service]: 'ap-southeast-1'}};

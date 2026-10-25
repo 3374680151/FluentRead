@@ -1,5 +1,7 @@
 # 测试与回归
 
+版本标签触发的安装包发布、全部交付目标、完整测试门禁及手动演练见 [自动发布安装包](./maintainers/releases.md)。发布脚本的 Node 夹具由 `processRegression.test.ts` 登记，覆盖版本一致性、缺失/损坏产物、附件摘要、草稿恢复和公开 Release 禁止覆盖等行为。
+
 ## 运行时错误与告警
 
 功能断言与运行时诊断共同决定测试结果。日常测试、针对性回归和正式发版回归均须检查选定范围内 FluentRead 自身的错误与告警；发现后定位根因、修复并重跑相关用例。译文出现、界面可用或构建成功不能代替这项检查，也不因此扩大为无关功能的全量回归。
@@ -116,6 +118,8 @@ GitHub 仓库列表和 Issue 列表同时保留旧容器与当前结构的保护
 
 ## 网页个人校订
 
+`personalCorrectionUiRuntime` 还覆盖同一个译文节点反复失效与重译：旧观察器退出时必须释放节点身份，重新选中后继续观察原文变化，旧观察器的排队回调不能关闭新卡片。
+
 `personalCorrectionMemory`、`personalCorrectionDom`、`personalCorrectionTranslation`、`personalCorrectionComposition` 和三组 `personalCorrectionUi` 测试覆盖确认后保存、版本竞争、范围与语言隔离、近似候选、冲突拒绝自动复用、取消、节点归属、项目显式加入、编辑、删除与撤销；实际 Vue 模板检查语言信息归入页签栏、范围选择归入底部操作栏，以及范围帮助的悬停、键盘聚焦、Escape 收起与卸载清理。新增执行模块纳入严格四维覆盖率。
 
 生产 Chrome 扩展构建后运行 `node scripts/testing/run-personal-corrections-test.cjs --extension-dir .output/chrome-mv3 --playwright-root <捆绑 Node 包目录> --focus-safe-helper <focus-safe-browser.cjs 路径> --artifacts-dir <证据目录> --real-url https://example.com`。脚本使用第二屏临时 Edge 后台窗口和可信输入，翻译响应为确定性 Google 夹具；网页、双语渲染、后台消息和加密存储使用生产实现。验证原句重复复用时零额外 provider 请求、近似句只作草稿、两种语言与标题语境隔离、材料/项目范围、恢复重译、公共缓存隔离、页签栏右侧语言与底部紧凑范围的实际几何、范围帮助的真实悬停/焦点与 390px 提示边界、焦点恢复，保存 JSON、DOM 和截图。此证据不代表在线译文质量或 Firefox 实机验收。
@@ -125,6 +129,30 @@ GitHub 仓库列表和 Issue 列表同时保留旧容器与当前结构的保护
 播放器菜单和字幕外观设置共用 `videoSubtitleAppearance.bilingualOrder`，默认原文在上；切换只重排原文、读音和译文，读音始终紧跟原文，单语显示与字幕下载顺序保持各自语义。`videoSubtitleAppearance`、`videoSubtitleAppearanceSettingsLifecycle`、`videoUiI18n`、`videoSubtitleTrackPriorityRuntime`、`videoCaptionPlatformRuntime` 和 `videoNativeFullscreen` 覆盖归一化、持久化、即时更新、缓存/节点保留、单语和原生轨道选择。
 
 生产 Chrome 构建后，运行 `node scripts/testing/run-video-menu-ui-test.cjs --suite subtitle-order --extension-dir .output/chrome-mv3 --playwright-root <Node包目录> --focus-safe-helper scripts/testing/focus-safe-browser.cjs --runtime-diagnostics <浏览器测试技能>/scripts/runtime-diagnostics.cjs --artifacts-dir <证据目录>`。专项在第二屏临时 Edge 后台正常窗口中验证真实点击和键盘切换、字幕上下几何、无重复翻译请求、刷新后偏好、单语显示、390/320px 菜单与外部配置同步，并保存截图及运行时诊断。网页、媒体、原字幕和翻译响应使用确定性夹具，不代表原站、在线服务、Firefox 或 Safari 系统全屏实机验收。
+
+## 实现审计：取消、恢复与热路径
+
+`apiKeyRotation` 验证单密钥、无密钥和关闭轮询时的取消终态，凭据回显脱敏，以及无敏感元数据时保留原错误类和恢复标记。`informationHighlightArtifacts` 验证缓存命中期间取消、无视取消的连接或流读取、迟到响应释放和超时来源禁止回写；`documentHistory` 与 `documentHistoryCommitter` 验证 blocked/timeout 后的迟到连接释放、恢复连接与旧事件隔离。模型等待使用受控 transport，不能代替真实大文件或 CDN 下载验收。
+
+模型流的取消等待还覆盖 2,048 个连续数据块及 EOF：保留实际字节与 SHA-256 校验，确认不会让同一个未决取消 Promise 累积所有读取的回调；操作计数不能替代真实浏览器堆内存测量。`personalCorrectionMemory` 验证清理后的迟到广播、扩展运行时撤销后的安全注销、注册失败和注册期间取消，始终使用注册时的事件对象完成本地清理。
+
+`freeWebProviders` 与 `serializationPerformance` 验证七类免费适配器沿用原包槽位边界：原文中的字面标记、空槽和空白必须保留，译文注入活动标记则拒绝结果，不能重新猜测或更换命名空间。HTTP/SSE 响应使用受控夹具，不代表在线服务验收。`offscreenMessageRouter` 验证取消后不再读取、编码迟到音频或格式化迟到错误；正常响应仍按原协议结算一次。
+
+`informationHighlightBackend` 验证暂停后的立即恢复会等待旧下载排空，后续暂停、删除和销毁能撤销旧恢复意图。`informationHighlightContent` 验证同一 Text 节点的数据重分配、同值重写及改回原文后重建绘制位置，同时保留评分缓存和未变化滚动的 Range 身份；原生 Range 的真实变更另以临时 Edge 对照夹具验证。`documentAppLifecycle` 和 `pdfOcr` 验证混合 PDF 补入扫描段落后，按原页、块位置及原文迁移已有译文和人工确认；重复原句不能跨块误配，取消与识别失败保留原状态，明确重译才清空确认。
+
+`contentUiRuntime` 通过真实 feature registry 和悬浮球 runtime 验证宿主被页面移除后释放旧订阅并重建、旧排队回调隔离、停用后的迟到挂载移除与再次启用恢复；单纯替换 body 保留原实例。Shadow UI 工厂与组件端口在该测试中受控，不等于真实 Vue 挂载或网站验收。
+
+`popupBootstrap` 验证设置页等待配置及界面资源时的退出与水合状态复核；阻止迟到挂载后，启动失败仍须由真实入口消费拒绝并提供手动恢复提示，不能留下空白页。`pageDiscourseContext` 验证候选本身就是文章或正文根时不读取根外兄弟和文档标题；请求等待期间移入另一材料须拒绝旧依据，同一材料内的合法移动继续有效。
+
+`documentTextWrappedParagraphs` 验证补充平面汉字与普通汉字之间的固定宽度折行，覆盖 LF、CRLF、CR、边界空白及 Latin/emoji 对照，导出原文保持不变。`pdfReadingRegions` 与实际阅读计划消费者验证纯文本计划无保留区域时直接保留条目身份和顺序，不访问区域几何；操作计数只说明跳过的计算，不代表实际 PDF 渲染耗时。
+
+`materialSource` 验证主动收藏新材料时立即清理旧恢复失败提示。`translationStatsAggregation`、`modelUsageAggregation` 与 `usageDashboardLifecycle` 验证已有记录起点（含 null 和 0）不再触发额外全量起点扫描，缺省时逐项归约而不展开无界函数实参；稀疏直方图的零或负分位数也须返回有限下界。大数组属于纯聚合合同测试，不能据此声称正常有界存储曾发生界面崩溃。
+
+`vocabularyReencounterLifecycle` 通过真实 feature registry 验证消息订阅失败时回滚、恢复后重试、注册期间失效和卸载后的排队通知；扫描器和消息端口受控。`vocabularyTtsPageCancellationRuntime` 挂载真实收藏组件，验证停止后不解码等待恢复的音频、旧浏览器话语的开始事件不影响下一次朗读及超时保护；音频设备、浏览器语音与供应商仍是受控端口。
+
+`inputBox` 与 `inputTranslationContentFeature` 覆盖 fieldset 继承禁用、首个 legend 例外、响应前再次检查及提示定位的按帧合并与卸载清理。`videoCaptionPlatformRuntime` 保证失败句 A→B→A 在退避期内仍可手动重试；`videoPretranslationController` 检查换句不重绑原生字幕监听，轨道增删只操作变化项。`paragraphCopyCore` 验证复制代码时保留首行缩进及内部空行。
+
+`emojiLiterals` 对简单 emoji 检查零分段器构造，复杂字素每次扫描只构造一次；`harnessMemoryRecall` 用 200 条学习笔记检查无检索信息的查询不构建搜索投影，并保留偏好排序和每次重读。操作计数和 Node 微基准只证明所测计算减少，不代表页面帧率、输入延迟、实机内存或全项目无缺陷。函数索引、人工审查与实际行为验证须分别记录，未审函数不能因类型检查或测试总数而视为审查完成。
 
 ## 视频完整句学习
 
@@ -404,6 +432,8 @@ node scripts/testing/run-webdav-backup-ui-test.cjs \
 句子操作统一使用已有划词入口。定向回归使用 `tests/sentenceActionsMount.test.ts`、`tests/selectionTranslatorLifecycle.test.ts`、`tests/bilingualSentenceHighlight.test.ts` 和 `tests/selectionTtsContentController.test.ts`，验证普通悬停仅绘制高亮、选区卡片按需收藏句子、多语言来源、关闭偏好与请求清理。生产浏览器专项运行 `node scripts/testing/run-sentence-listening-test.cjs --selection-entry-only --extension-dir .output/chrome-mv3 --playwright-root <Node包目录> --focus-safe-helper <focus-safe-browser.cjs路径> --artifacts-dir /private/tmp/fluentread-sentence-selection`，验证原文和译文停留不弹入口、不增加请求；主动选中后只有一个既有小图标，点击才展开、复制和收藏，继续阅读、390px 布局、划词关闭和翻译—恢复—再次翻译。网页和翻译服务为本地确定性夹具，不代表外部服务质量或 Firefox 实机运行。
 
 译文样式由 `tests/translationAppearance.test.ts` 与 `tests/translationAppearanceStyles.test.ts` 覆盖预设注册表、旧版选项顺序、外观归一化、颜色换算与网页样式节点的安装、原位更新和移除；颜色换算还保留旧配置中的字母裸 hex（包括不透明四位与八位），继续拒绝透明和损坏值。`tests/pageStyles.test.ts` 验证外观样式随公共页面样式一起安装、订阅配置更新，并在移除或 context 失效时一起清理。生产扩展构建后执行 `node scripts/testing/run-translation-style-ui-test.cjs --extension-dir .output/chrome-mv3 --playwright-root <Node包目录> --focus-safe-helper <focus-safe-browser.cjs路径> --artifacts-dir /private/tmp/fluentread-translation-style`：在临时 Edge 与第二屏后台窗口中验证界面风格页第一组为译文样式、六类 71 张样式卡片逐一写入配置并同步预览，其中卡片与趣味各 12 种；覆盖色板与方向键、滑块、分段控件和自定义取色器、仅译文提示、逐句高亮开关、重新打开后的保存结果、设置搜索直达外观面板与逐句高亮开关、深色界面与 1024/820/390 宽度；再用本地确定性夹具真实悬浮翻译，确认外观调整无需新请求即可更新已有译文，停用插件或恢复默认时移除外观样式节点，并检查简约卡片底色在网页上生效。
+
+网页阅读样式兼容专项执行 `node scripts/testing/run-reading-style-compatibility-test.cjs --extension-dir .output/chrome-mv3 --playwright-root <Node包目录> --runtime-diagnostics <浏览器测试技能>/scripts/runtime-diagnostics.cjs --artifacts-dir <证据目录>`。它使用临时 Edge、第二屏后台正常窗口和本地确定性服务，让 24 款卡片与趣味样式经过真实内容脚本翻译；覆盖白色、黑色、暖黄、紫色页面、与网站相反的系统主题、同页深浅区域、已译文主题切换且没有新请求、390px 换行、链接点击与键盘焦点、自定义前景背景覆盖、强制颜色和打印。常规卡片还检查无实时背景滤镜、无外阴影、长页屏外隔离可用和完整滚动；该检查证明渲染路径与功能，不将单次滚动观察解释为 FPS 提升。报告保留运行时诊断、采集缺口、计算颜色与截图，受控页面结果不能替代所有真实网站、远程翻译服务或 Firefox 实机验收。
 
 ## 关键内容空间与交互工作量
 
@@ -1355,6 +1385,8 @@ node scripts/testing/run-section-translation-flow-test.cjs \
 
 使用 `--case-set sweep` 可单独验证真实 Alt+R 进入后左键划过两段、往返去重和间隙排除、从段落空白起划后收窄外壳、旧选择器退出动画不打断下一轮拖动、逐块高亮、松开仅锁定且确认前零请求、整组扩大缩小、精确翻译/恢复、混合已译状态补译、重新选择、Esc 取消后网页点击恢复，以及非首段被移除后的失效保护。`core` 保留原有单击、快捷键和页面生命周期回归，可与 `sweep` 分别运行。传入 `--runtime-diagnostics` 后保存内容脚本隔离世界、Popup 和后台的错误与告警；报告同时保留附加前启动日志等采集空窗。
 
+划过体验专项使用 `--case-set quality --quality-cases pointer,layout,nested-scroll,boundary,cancel,narrow`：`pointer` 记录同段内 120 次可信指针移动的高亮隐藏帧、几何变化、浮层 DOM 写入以及布局、样式与脚本开销，核对最终邻段命中、原文布局不变和确认前零请求；原生时序指标仅用于同环境对照。`sweep` 另验证单次跨六段并立即松手仍精确选择和翻译六段。`sectionTranslationPicker` 单测覆盖同帧折线保留、松手统一盘点、稳定窗迟到复验、无关侧栏滚动与路径内滚动的区分，以及多框读写分离；样式和几何同值时不重复写入浮层。
+
 使用临时 Edge profile、防抢焦点 helper 和 CDP 真实指针/按键，在类 GitHub 仓库页夹具上验证：Popup 局部按钮与主按钮同排等高，消息进入选择模式后稳定预览鼠标下的段落，边缘轻微移动不换选；点击只锁定选区、不请求服务且不跳转，锁定后鼠标移动与滚动不改变范围；可见按钮扩大到 README、缩小及重新选择，确认按钮才翻译该区域，网页收不到选择点击，视口外段落排在最后翻译，导航、文件列表、侧栏、页脚和代码保持原文；再次选择同一区域显示“恢复原文”并只恢复该区域。伪造点击和 Esc 不影响选择，真实 Esc 与右键退出且不发请求；主动选择侧栏时按全部节点范围翻译；已是目标语言与空白区域给出提示且不请求服务；快捷键默认关闭、开启后可进入和退出且在输入框中让行；全文恢复原文同时清除局部译文，关闭插件立即退出选择模式。追加 `--github-url <仓库地址>` 可在真实 GitHub README 上重复点选流程并断言 README 之外没有译文。翻译传输是确定性 Google 夹具，不代表外部服务可用性。
 
 ### 悬浮说明框翻译稳定性
@@ -1519,7 +1551,7 @@ pnpm test:pdf-selection -- \
 
 生产 Chrome 构建后，运行 `node scripts/testing/run-ai-multi-segment-test.cjs --extension-dir .output/chrome-mv3 --playwright-root <工作区 Node.js 包目录> --focus-safe-helper scripts/testing/focus-safe-browser.cjs --artifacts-dir /private/tmp/fluentread-ai-multi-segment`。
 
-专项在临时 Edge profile、第二屏后台可见窗口中，验证四个相邻纯文本/富文本段落实际形成一次包含四段来源的模型请求，并按 DOM 顺序回填；覆盖 AI 精翻开启和关闭、全文翻译—恢复—再次翻译、悬浮保持单段、关闭多段、动态新增内容、取消后的迟到响应与重新翻译。报告保存请求来源分组、DOM 断言、截图和原生焦点事件，测试结束删除自建 profile。响应来自虚构 DeepSeek 端点的确定性夹具，不读取用户密钥，也不代表真实供应商质量或 Firefox 实机验收。
+专项在临时 Edge profile、第二屏后台可见窗口中，验证四个相邻纯文本/富文本段落实际形成一次包含四段来源的模型请求，并按 DOM 顺序回填；覆盖 AI 精翻开启和关闭、请求并发为 1 和 2、全文翻译—恢复—再次翻译、悬浮保持单段、关闭多段、动态新增内容、取消后的迟到响应与重新翻译。默认八段短文本应形成一次请求；自定义 4 / 16 / 32 片段上限和原文字符预算须按实际来源分组生效，超预算单候选独立完整传输，不能截断。候选准备须允许收集配置的一批相邻片段，实际请求仍遵守配置的并发限制。新增设置仅在开关开启后显示，验证编辑、关闭重开、关闭保留、恢复默认、快速关闭后的最新值持久化以及窄屏布局。报告保存请求来源分组、DOM 断言、截图和原生焦点事件；导航前开始采集内容脚本隔离世界、扩展页面和后台的错误与告警，测试结束保存诊断并删除自建 profile。响应来自虚构 DeepSeek 端点的确定性夹具，不读取用户密钥，也不代表真实供应商质量或 Firefox 实机验收。
 
 ### 短标题跨语言上下文误译（issue #980）
 

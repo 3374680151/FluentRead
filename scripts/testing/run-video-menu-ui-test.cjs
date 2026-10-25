@@ -64,7 +64,10 @@ async function waitConfig(page, expected) {
   }
   throw Error(`reading preference not persisted: ${expected}`);
 }
-async function visible(locator, value = true) {assert.equal(await locator.isVisible(), value);}
+async function visible(locator, value = true) {
+  await locator.waitFor({state: value ? 'visible' : 'hidden', timeout: 5000});
+  assert.equal(await locator.isVisible(), value);
+}
 
 /** 只以真实生产内容脚本的布局结果判定，不在夹具中模拟字幕定位或触发应用事件。 */
 async function runSubtitleStability({page, entry, diagnostics, result, checkFocus}) {
@@ -252,6 +255,8 @@ async function runSubtitleOrder({page, entry, control, background, mediaSrc, dia
   const after = await background.evaluate(() => globalThis.__videoMenuUiTranslations);
   assert.equal(after, before, 'Changing subtitle order must reuse completed translations');
   result.cases.push({name: 'repeat-order-switch-keeps-nodes-and-cached-translation', passed: true, before, after, keyboard: 'ArrowRight + Space'});
+  const orderHint = menu.locator('[data-subtitle-order-hint]');
+  await visible(orderHint, false);
   for (const mode of ['translation-only', 'original-only']) {
     await menu.locator(`[data-mode="${mode}"]`).click();
     if (mode === 'translation-only') {await visible(translated); await visible(source, false);}
@@ -266,11 +271,21 @@ async function runSubtitleOrder({page, entry, control, background, mediaSrc, dia
       }));
     }
     assert.equal((await readConfig(control)).videoSubtitleAppearance.bilingualOrder, 'translation-first');
-    result.cases.push({name: `${mode}-preserves-order-preference-and-visible-language`, passed: true});
+    for (const order of ['original-first', 'translation-first']) assert.equal(await orderButton(order).isDisabled(), true);
+    await visible(orderHint);
+    assert.match(await orderHint.textContent(), /仅双语.*保留/);
+    assert.equal(await orderButton('translation-first').getAttribute('aria-checked'), 'true');
+    result.cases.push({name: `${mode}-disables-inactive-order-and-preserves-preference`, passed: true});
   }
   await menu.locator('[data-mode="bilingual"]').click();
   await waitCaption();
   await assertOrder('translation-first', 'order-back-to-bilingual');
+  for (const order of ['original-first', 'translation-first']) assert.equal(await orderButton(order).isDisabled(), false);
+  await visible(orderHint, false);
+  await page.waitForTimeout(300);
+  const restoredRequests = await background.evaluate(() => globalThis.__videoMenuUiTranslations);
+  assert.equal(restoredRequests, after, 'Returning to bilingual must restore the saved order and reuse completed translations');
+  result.cases.push({name: 'return-to-bilingual-restores-enabled-order-without-new-requests', passed: true, before: after, after: restoredRequests});
   for (const width of [390, 320]) {
     await menu.locator('[data-action="close-menu"]').click();
     await page.setViewportSize({width, height: 844});
@@ -551,6 +566,26 @@ async function main() {
     assert.match(await help.textContent(), /kyō|konnichiwa|watashi/);
     await shoot('menu-reading-help');
     await shoot('reading-off-hover');
+    diagnostics.setPhase('reading-help-pointer-transfer');
+    const helpBounds = await help.boundingBox();
+    const iconBounds = await toggle.boundingBox();
+    assert.ok(helpBounds && iconBounds);
+    const transferX = Math.max(helpBounds.x + 2, Math.min(iconBounds.x + iconBounds.width / 2, helpBounds.x + helpBounds.width - 2));
+    const helpIsAbove = helpBounds.y + helpBounds.height <= iconBounds.y;
+    const gapY = helpIsAbove ? (helpBounds.y + helpBounds.height + iconBounds.y) / 2
+      : (iconBounds.y + iconBounds.height + helpBounds.y) / 2;
+    await page.mouse.move(transferX, gapY);
+    await page.waitForTimeout(50);
+    await visible(help);
+    await help.hover();
+    await page.waitForTimeout(180);
+    await visible(help);
+    assert.equal(await help.evaluate(el => el.matches(':popover-open') && el.matches(':hover')), true);
+    assert.equal(configFingerprint(await readConfig(control)), offConfigBeforeHover, 'Pointer transfer into help must not change settings');
+    await assertCaptionStable('help-pointer-transfer');
+    await shoot('menu-reading-help-pointer-transfer');
+    result.cases.push({name: 'reading-help-stays-open-across-pointer-gap-into-popover', passed: true, helpBounds, iconBounds, gapY});
+    checkFocus();
     await menu.evaluate(el => el.parentElement.appendChild(el));
     await page.mouse.move(4, 4);
     await menu.locator('[data-mode="original-only"]').focus();
@@ -643,8 +678,23 @@ async function main() {
     assert.equal(await toggle.getAttribute('aria-checked'), 'true');
     await menu.locator('[data-mode="translation-only"]').click();
     await page.waitForFunction(() => document.querySelector('[data-reading-status]')?.textContent?.includes('原文'));
-    assert.equal((await readConfig(control)).videoSubtitleAppearance.readingAnnotation, true);
-    result.cases.push({name: 'reading-icon-toggle-persists-and-translation-only-explains', passed: true, onAppearance});
+    const translationOnlyConfig = await readConfig(control);
+    assert.equal(translationOnlyConfig.videoSubtitleAppearance.readingAnnotation, true);
+    assert.equal(translationOnlyConfig.videoSubtitleDisplayMode, 'translation-only', 'Reading preference must not automatically switch the display mode');
+    const showOriginal = menu.locator('[data-reading-bilingual]');
+    await visible(showOriginal);
+    assert.equal(await showOriginal.isDisabled(), false);
+    assert.equal(await showOriginal.getAttribute('role'), 'menuitem');
+    assert.equal(await showOriginal.getAttribute('aria-checked'), null);
+    await shoot('menu-reading-original-required');
+    await showOriginal.click();
+    await page.waitForFunction(() => document.querySelector('.fluent-read-video-menu-mode-group [data-mode="bilingual"]')?.getAttribute('aria-checked') === 'true'
+      && document.querySelector('[data-reading-bilingual]')?.hidden === true);
+    const bilingualConfig = await readConfig(control);
+    assert.equal(bilingualConfig.videoSubtitleDisplayMode, 'bilingual');
+    assert.equal(bilingualConfig.videoSubtitleAppearance.readingAnnotation, true);
+    await visible(showOriginal, false);
+    result.cases.push({name: 'translation-only-keeps-reading-preference-and-explicit-action-restores-bilingual', passed: true, onAppearance});
     await menu.locator('[data-mode="original-only"]').click();
     await toggle.click();
     await waitConfig(control, false);

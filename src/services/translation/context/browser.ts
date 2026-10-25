@@ -2,7 +2,7 @@
  * @file src/services/translation/context/browser.ts
  *
  * 文件职责：从当前浏览器页面捕获隐私受限、大小受控的翻译上下文，为页面摘要和大模型翻译提供可读背景。
- * 主要内容：克隆并清洗 DOM，排除表单、隐藏、脚本和敏感属性；大型页面有界捕获也检查根节点及祖先，避免绕过排除规则。按需加载 Defuddle core 与结构化 Markdown 适配器，失败时回退正文提取，缓存 snapshot，并导出 getPageTranslationContext 与 resetPageTranslationContextCache。
+ * 主要内容：克隆并清洗 DOM，排除表单、隐藏、脚本和敏感属性；大型页面有界捕获也检查根节点及祖先，先消耗包含空白的原始字符预算再归一化，避免绕过排除与开销边界。按需加载 Defuddle core 与结构化 Markdown 适配器，失败时回退正文提取，缓存 snapshot，并导出 getPageTranslationContext 与 resetPageTranslationContextCache。
  * 模块边界：本文件位于翻译 application service 层，负责用例编排和端口契约；不挂载页面 UI，且不应把某家供应商的网络细节扩散到 feature，具体 HTTP 协议由 providers/platform 实现。
  */
 
@@ -149,11 +149,9 @@ function collectBoundedReadableText(doc: Document): string {
         visited += 1;
         if (current.nodeType === 3) {
             const value = current.nodeValue!;
-            if (value.trim()) {
-                const remaining = pageContextLimits.captureCharacters - characters;
-                parts.push(value.slice(0, remaining));
-                characters += Math.min(value.length, remaining);
-            }
+            const clipped = value.slice(0, pageContextLimits.captureCharacters - characters);
+            characters += clipped.length;
+            if (clipped.trim()) parts.push(clipped);
         }
         current = walker.nextNode();
     }

@@ -49,8 +49,10 @@ function fixture(html = '<article><p id="paragraph">The extraordinary algorithm 
     Object.defineProperty(window.HTMLElement.prototype, 'getBoundingClientRect', {configurable: true, value() {
         const top = Number(this.getAttribute('data-top') || 20); return {top, bottom: top + Number(this.getAttribute('data-height') || 40)};
     }});
-    document.createRange = () => {let node: Text, start = 0, end = 0; return {
-        setStart(n: Text, s: number) {node = n; start = s;}, setEnd(_n: Text, e: number) {end = e;},
+    document.createRange = () => {let node: Text, endNode: Text, start = 0, end = 0; return {
+        setStart(n: Text, s: number) {node = n; start = s;}, setEnd(n: Text, e: number) {endNode = n; end = e;},
+        get startContainer() {return node;}, get endContainer() {return endNode;},
+        get startOffset() {return start;}, get endOffset() {return end;},
         toString() {return node.data.slice(start, end);},
         getBoundingClientRect() {const top = Number(node.parentElement!.getAttribute('data-text-top') ?? 20); return {top, bottom: top + 20};},
     } as unknown as Range;};
@@ -469,6 +471,32 @@ describe('page-owned scoring, paint and cancellation', () => {
         controller.setEnabled(true); await f.settle(); expect(f.document.querySelectorAll('[data-fr-information-highlight-style]')).toHaveLength(1); expect(f.document.querySelector('[data-fr-information-highlight-style]')).toBe(style);
         controller.dispose(); expect(style.isConnected).toBe(false); controller.dispose(); controller.refresh(); controller.retry(); controller.setEnabled(true);
         expect(controller.getState()).toMatchObject({enabled: false, phase: 'idle'}); expect(f.frames.size).toBe(0); expect(vi.getTimerCount()).toBe(0);
+    });
+    it.each(['background', 'heatmap'] as const)('rebuilds %s paint when the same text moves between existing Text nodes without rescoring', async style => {
+        const f = fixture('<p>Hello extraordinary <em>scientific vocabulary preserves original paragraphs.</em></p>');
+        const paragraph = f.document.querySelector('p')!, first = paragraph.firstChild as Text, second = paragraph.querySelector('em')!.firstChild as Text;
+        const text = paragraph.textContent, score = vi.fn(async (source: string) => scoreInformationKeywords(source));
+        const controller = installInformationHighlight(f.document, {...defaults, style, mode: 'surprisal-local'}, {scoreLocal: score});
+        controller.setEnabled(true); await f.settle(); const words = f.painted();
+        const ranges = () => [...f.registry.values()].flatMap(paint => [...paint]); const old = ranges(); expect(words.length).toBeGreaterThan(0);
+        first.data = 'Hello '; second.data = 'extraordinary scientific vocabulary preserves original paragraphs.';
+        expect(paragraph.textContent).toBe(text); expect(paragraph.firstChild).toBe(first); expect(paragraph.querySelector('em')!.firstChild).toBe(second);
+        f.mutate(first); await f.settle(); expect(f.painted()).toEqual(words); expect(ranges().some(range => old.includes(range))).toBe(false); expect(score).toHaveBeenCalledOnce();
+        const restored = ranges(); f.document.dispatchEvent(new f.window.Event('scroll')); f.window.dispatchEvent(new f.window.Event('resize')); await f.settle();
+        expect(ranges()).toEqual(restored); expect(score).toHaveBeenCalledOnce(); controller.dispose();
+    });
+    it.each(['startContainer', 'endContainer', 'startOffset', 'endOffset'] as const)('rebuilds paint after the existing Range %s changes while Text snapshots stay identical', async endpoint => {
+        const f = fixture(), score = vi.fn(async (source: string) => scoreInformationKeywords(source));
+        const controller = installInformationHighlight(f.document, {...defaults, mode: 'surprisal-local'}, {scoreLocal: score});
+        controller.setEnabled(true); await f.settle(); const words = f.painted(), old = [...f.registry.get(INFORMATION_HIGHLIGHT_NAME)!];
+        const range = old[0], node = range.startContainer as Text;
+        // 受控 Range 端口模拟原生 Text.data 同值重写后的端点失效；真实 DOM 语义另由浏览器对照验证。
+        if (endpoint === 'startContainer') range.setStart(f.document.createTextNode(node.data), range.startOffset);
+        else if (endpoint === 'endContainer') range.setEnd(f.document.createTextNode(node.data), range.endOffset);
+        else if (endpoint === 'startOffset') range.setStart(node, 0);
+        else range.setEnd(node, 0);
+        f.mutate(node); await f.settle(); const restored = [...f.registry.get(INFORMATION_HIGHLIGHT_NAME)!];
+        expect(restored.some(item => old.includes(item))).toBe(false); expect(f.painted()).toEqual(words); expect(score).toHaveBeenCalledOnce(); controller.dispose();
     });
     it('reports missing native paint and refuses invalid owners without observers, requests or DOM fallback', async () => {
         const f = fixture(undefined, false), before = f.document.body.innerHTML;

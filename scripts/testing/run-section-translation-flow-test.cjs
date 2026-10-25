@@ -19,8 +19,8 @@ const diagnosticTools = diagnosticsPath ? require(path.resolve(diagnosticsPath))
 const diagnostics = diagnosticTools?.createRuntimeDiagnostics();
 const caseSet = arg('case-set', 'core');
 if (!['core', 'sweep', 'quality', 'all'].includes(caseSet)) throw new Error('--case-set 必须是 core、sweep、quality 或 all');
-const qualityCases = arg('quality-cases', 'layout,nested-scroll,replacement,boundary,shadow,retry,cancel,performance,narrow').split(',');
-const knownQualityCases = ['layout', 'nested-scroll', 'replacement', 'boundary', 'shadow', 'retry', 'cancel', 'performance', 'narrow'];
+const qualityCases = arg('quality-cases', 'pointer,layout,nested-scroll,replacement,boundary,shadow,retry,cancel,performance,narrow').split(',');
+const knownQualityCases = ['layout', 'nested-scroll', 'replacement', 'boundary', 'shadow', 'retry', 'cancel', 'performance', 'pointer', 'narrow'];
 if (!qualityCases.length || qualityCases.some(name => !knownQualityCases.includes(name)) || new Set(qualityCases).size !== qualityCases.length) throw new Error('--quality-cases 包含未知或重复的专项名称');
 if (!playwrightRoot || !helper) throw new Error('必须提供 --playwright-root 和 --focus-safe-helper');
 const {chromium} = require(path.join(playwrightRoot, 'playwright'));
@@ -413,6 +413,33 @@ async function noticeText() {return page.evaluate(() => document.querySelector('
     assert.equal((await pickerState()).confirmDisabled, true); await page.keyboard.press('Escape');
     assert.equal(await requestCount(), beforeCancel);
     await page.locator('#p1').evaluate((element, html) => element.insertAdjacentHTML('afterend', html), original);
+    report.cases.push(currentCase);
+
+    currentCase = 'one fast pointer move collects every crossed paragraph and release immediately locks the complete selection';
+    await page.evaluate(() => {
+      const fixture = document.createElement('section');
+      fixture.id = 'fast-sweep-fixture';
+      fixture.style.cssText = 'margin:24px;padding:20px;max-width:760px;border:1px solid #aaa';
+      fixture.innerHTML = `<article id="fast-sweep-region">${Array.from({length: 6}, (_, index) => `<p id="fast-sweep-${index}" style="min-height:36px;margin:12px 0">Fast sweep paragraph ${index} is actual source text crossed by the same pointer path.</p>`).join('')}</article><p id="fast-sweep-neighbor">This neighboring paragraph is outside the fast sweep and stays original.</p>`;
+      document.body.prepend(fixture); scrollTo(0, 0);
+    });
+    const beforeFastSweep = await requestCount();
+    await startFromPopupMessage(); await hover('#fast-sweep-0');
+    const fastStart = await center('#fast-sweep-0'), fastEnd = await center('#fast-sweep-5');
+    await page.mouse.move(fastStart.x, fastStart.y); await page.mouse.down();
+    await page.mouse.move(fastEnd.x, fastEnd.y); await page.mouse.up();
+    await wait(async () => (await pickerState())?.selection === 'locked');
+    await waitLabel(/翻译此区域 · 6 段/, '已选 6 个区域');
+    assert.equal(await selectedCount(), 6);
+    assert.equal((await visibleBoxes()).length, 6);
+    assert.equal(await requestCount(), beforeFastSweep, 'even a one-event path waits for explicit confirmation');
+    await shot('sweep-fast-six-paragraphs');
+    await page.keyboard.press('Enter');
+    await wait(async () => (await translationCount('#fast-sweep-region p')) === 6);
+    assert.equal(await hasTranslation('#fast-sweep-neighbor'), false);
+    assert.equal(await page.locator('#fast-sweep-region .fluent-read-bilingual-content').count(), 6);
+    assert.equal(await page.locator('#fast-sweep-region .fluent-read-bilingual-content .fluent-read-bilingual-content').count(), 0);
+    report.fastSweep = {pointerMovesWhileDown: 1, crossedParagraphs: 6, selectedParagraphs: 6, translatedParagraphs: 6, outsideTranslations: 0};
     report.cases.push(currentCase);
     report.sweep = {entryHotkey: 'Alt+R', selectedRegions: 2, translated: 2, restored: 2, outsideTranslations: 0, requestsBeforeConfirmation: 0,
       whitespaceStartHit: 'readme-body', whitespaceStartSelectedRegions: 2, webpageClicksRestoredAfterCancellation: true};

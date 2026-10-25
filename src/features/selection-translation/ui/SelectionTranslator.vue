@@ -1,14 +1,17 @@
 <!--
  * @file src/features/selection-translation/ui/SelectionTranslator.vue
+ * 两点选取：默认关闭及文档适配器跳过快捷键冲突计算，快捷键开启单次起终点选择并放行开放 Shadow DOM 编辑区；复用原生选区与现有划词入口，完成后的首次选区读取保留同轮延迟滚动，随后恢复普通滚动收起，取消、编辑与卸载撤销首帧保护；短状态提示不捕获页面指针，未命中文字或起终点重合时说明可继续操作，配置变更和卸载释放控制器。
  * 通知布局：收藏与语音设置通知沿用安全可见视口订阅，触摸动作保留完整命中区；通知不增加独立监听或请求。
  * 极矮视口：同一卡片改为整卡滚动并收紧顶栏间距，保留输入与请求、手动几何和语音状态；Safari 键盘视口变化后仅在当前有限窗口内滚动卡片自身显露原聚焦输入，主动操作取消待处理显露；恢复尺寸后沿用原定位，不增加监听或计时器。
  * 文件职责：实现划词翻译的主要页面组件，覆盖选区捕获、触摸原生句柄稳定等待、避开原生菜单上下区域的行侧入口、可见视口与安全区定位、后台及宿主恢复来源校验、图标/小点/悬停/快捷键/仅右键菜单/直接弹出、原生菜单可信选区恢复与重复请求复用、翻译与词卡展示、免费 AI 讲解的显式启用、朗读、收藏选中的单词/表达/句子、双语分享卡片、鉴权服务配置入口、重试和关闭。
  * 主要内容：相同译文保留原文且不重复展示；Firefox 触摸入口为原生手柄保留独立侧距，以绑定来源快照的可信触摸处理缺少 click 的情况并取消拖动；Safari/Firefox 触摸入口成功开卡后保留当前快照并清空同一原生选区，异步空选区不误关卡片；组件管理可信手势、已关闭选区与选择丢失宽限、继续阅读或复制原文时自动收起、请求 token、按既有错误种类显示有限提示并仅为当前鉴权失败提供通用设置入口、行内代码保护与纯文本安全渲染、按标签页页面缩放补偿的弹窗定位、空白拖动、边角缩放、主题及可换行的多语言标题；普通译文先于完整原文，单行可横向滚动的导航与右侧固定分享、收藏、关闭及更多操作把高度留给正文，次级菜单按可见窗口覆盖显示；指针移动按帧合并并在结束时提交最后位置，已定位卡片不重复读取选区几何；富文本 UTF-16 跟读偏移一次计算并复用；默认过滤同语言选区，按配置开放中英反向入口，翻译方向始终按现有语言配置判断；统一卡片默认显示翻译并以同一导航进入学习；首次定位后保持弹窗锚点，手动尺寸下内容与播放状态变化只影响内部布局；闲置语音栏不占空间，自动卡生成与播放期间按底栏实际高度自然增高，达到视口上限后正文独立滚动；学习短回答自然收拢、长回答受高度上限约束，完整原文和译文按需对照并允许翻译继续完成；单词先展示原文与可用词卡，再补充辅助释义，以紧凑状态提示等待、未命中与网络失败；关闭或更换选区取消等待并阻止旧响应覆盖新结果；区分语音生成和播放，按实际音频时钟或浏览器词边界显示完整词高亮，并提供真实音频时间与前后 5 秒跳转。
  * 材料关联：主动收藏与阅读时捕获当前选区的稳定来源和文本位置，词书真实保存后才关联材料引用，隐私窗口不采集。
+ * 语音边界：单词朗读在仅本地模式下跳过词典外部音频，由既有后台本地语音链路处理失败与模型提示。
  * 模块边界：组件只通过公共客户端和 runtime 消息触达后台及现有设置入口，不直接持有 provider、IndexedDB 或 Offscreen 资源；纯选区算法在 core，活动 Range 通过回调交给 content/runtime 管理 modal 挂载所有权；扩展 PDF 文档页通过可选来源适配器复用同一卡片、标题和阅读上下文，来源失效时取消当前请求，词书协议独立维护；Safari 仅为可信聚焦的同一追问框、卡片和原文保留初次键盘缩高或明确旋转后的有限宿主页平移窗口，明确方向先于可见视口宽度更新时也保留该固定窗口，宽度追上不续期；极矮可滚动卡片内的可信纵向触摸另有不续期的400ms尾窗，只容许累计2px宿主页偏移，不拦截原生滚动；输入与框内编辑键结束当前窗口，外部手势、缩放、失焦与关闭撤销身份，普通滚动仍收卡；阅读依据的 DOM 锚点只属于当前选区，关闭、换区或卸载释放临时绘制和监听。
  -->
 <template>
-  <div v-ui-i18n v-show="showIndicator || showTooltip || noticeMessage || copySuccess" class="fr-selection-translator-root" :class="{'fr-touch-selection': touchInteraction}" :data-display-delay="selectionSettings.delay" @pointerdown.capture="dismissReadingToolsOutside" @pointerdown.stop @focusin="handleReadingInputFocus" @focusout="dismissReadingToolsOnFocusOut" @input="clearReadingKeyboardFocus" @wheel.stop="handleUiWheel">
+  <div v-ui-i18n v-show="showIndicator || showTooltip || noticeMessage || copySuccess || clickSelectionState !== 'idle'" class="fr-selection-translator-root" :class="{'fr-touch-selection': touchInteraction}" :data-display-delay="selectionSettings.delay" @pointerdown.capture="dismissReadingToolsOutside" @pointerdown.stop @focusin="handleReadingInputFocus" @focusout="dismissReadingToolsOnFocusOut" @input="clearReadingKeyboardFocus" @wheel.stop="handleUiWheel">
+    <div v-if="clickSelectionState !== 'idle'" class="fr-click-selection-hint" :data-click-selection-state="clickSelectionState" :class="{'fr-click-selection-hint--dark': isDarkTheme}" role="status" aria-live="polite">{{ clickSelectionNotice || (clickSelectionState === 'start' ? '点击文字起点' : '点击文字终点') }} · Esc 取消</div>
     <button v-if="showIndicator && !showTooltip && triggerMode !== 'contextMenu'" class="fr-selection-indicator" :class="`fr-selection-indicator--${triggerMode}`" :style="indicatorStyle" type="button" aria-label="打开划词翻译" title="打开划词翻译" @pointerdown.prevent.stop="beginIndicatorTouch" @pointermove="trackIndicatorTouch" @pointerup="finishIndicatorTouch" @pointercancel="cancelIndicatorTouch" @contextmenu="cancelIndicatorTouch" @pointerenter="scheduleIndicatorHover" @pointerleave="leaveIndicator" @click="openTooltipFromIndicator">
       <span class="fr-selection-indicator-glyph" aria-hidden="true">译</span>
     </button>
@@ -184,6 +187,8 @@ import browser from 'webextension-polyfill';
 import {addRuntimeMessageListener} from '@/src/platform/browser/runtimeMessages';
 import {getSafeVisualViewportRect, observeVisualViewport} from '@/src/platform/dom/visualViewport';
 import {openShareCard, isShareCardMounted} from '@/src/features/share-card/public';
+import {createClickSelectionController} from '@/src/features/selection-translation/content/clickSelection';
+import {findClickSelectionHotkeyConflict, isClickSelectionAvailable, matchesClickSelectionShortcut} from '@/src/core/config/clickSelection';
 import { config, configReady, requestConfigPatch, subscribeConfig } from '@/src/services/config/store';
 import { translateText, translateTextBatch } from '@/src/services/translation/client';
 import {serializeTranslationError} from '@/src/services/translation/errors';
@@ -364,6 +369,7 @@ const vocabularyBusy = ref(false);
 let readingHoverTimer: number | null = null;
 let entryDismissTimer: number | null = null;
 let selectionFrame: number | null = null;
+let clickSelectionFirstReadPending = false;
 let positionFrame: number | null = null;
 let positionRevision = 0;
 let zoomRequestGeneration = 0;
@@ -429,6 +435,34 @@ let contextMenuSelection: ContextMenuSelection | null = null;
 let contextMenuSourceRejected = false;
 let tooltipResizeObserver: ResizeObserver | null = null;
 const selectionConfigVersion = ref(0);
+const clickSelectionState = ref<'idle' | 'start' | 'end'>('idle');
+const clickSelectionNotice = ref('');
+const clickSelection = createClickSelectionController({
+  onStateChange: state => { clickSelectionState.value = state; clickSelectionNotice.value = ''; },
+  onReject: reason => {
+    clickSelectionNotice.value = {
+      'range-too-large': '选区过长，请点击较近的终点',
+      'protected-content': '此范围不支持，请换一个终点',
+      'text-miss': clickSelectionState.value === 'start' ? '未点中文字，请点击起点' : '未点中文字，请点击终点',
+      'same-point': '起点与终点相同，请换一个位置',
+    }[reason];
+  },
+  onComplete: () => {
+    isSelecting = false;
+    uiPointerInteraction = false;
+    suppressSelectionUntil = 0;
+    dismissedSelection = null;
+    lastTrustedSelectionInteractionAt = Date.now();
+    scheduleSelectionRead();
+    clickSelectionFirstReadPending = selectionFrame !== null;
+  },
+});
+// 文档阅读器有自己的选区模型；此处只在普通网页启用两点选取。
+watch(() => {
+  selectionConfigVersion.value;
+  if (props.selectionAdapter || !isClickSelectionAvailable(config)) return '';
+  return `${config.selectionClickSelectHotkey}:${findClickSelectionHotkeyConflict(config, config.selectionClickSelectHotkey)}`;
+}, () => clickSelection.cancel());
 const readingPreferences = computed(() => {
   selectionConfigVersion.value;
   return normalizeHarnessPreferences(config.harness, config.customOpenAIProviders);
@@ -573,11 +607,13 @@ function isSelectionRangeConnected(range: Range): boolean {
 }
 
 function scheduleSelectionRead(shortcutTriggered = false): void {
+  if (clickSelection.active) return;
   if (shortcutTriggered) pendingSelectionShortcutUntil = performance.now() + PENDING_SELECTION_SHORTCUT_MS;
   if (isSelecting || isSelectionReadSuppressed()) return;
   if (selectionFrame !== null) return;
   selectionFrame = window.requestAnimationFrame(() => {
     selectionFrame = null;
+    clickSelectionFirstReadPending = false;
     const shouldTriggerShortcut = pendingSelectionShortcutUntil >= performance.now();
     pendingSelectionShortcutUntil = 0;
     if (!isSelecting && !isSelectionReadSuppressed()) applySelection(readSelectionSnapshot(), shouldTriggerShortcut);
@@ -603,6 +639,7 @@ function scheduleTouchSelectionRead(): void {
 }
 
 function suppressSelectionRead(duration = UI_SELECTION_SUPPRESSION_MS): void {
+  clickSelectionFirstReadPending = false;
   suppressSelectionUntil = Math.max(suppressSelectionUntil, performance.now() + duration);
   if (selectionFrame !== null) {
     window.cancelAnimationFrame(selectionFrame);
@@ -1940,7 +1977,7 @@ async function toggleWordAudio(pronunciation: WordPronunciation): Promise<void> 
   currentAudioKey.value = key;
   try {
     const externalAudio = pronunciation.audio;
-    if (externalAudio) {
+    if (externalAudio && config.selectionTtsMode !== 'local-only') {
       const externalStarted = await playExternalAudio(externalAudio, cleanText, 'word', key, requestId);
       if (!ttsContentController.isCurrentGeneration(requestId)) return;
       if (externalStarted) return;
@@ -2040,6 +2077,7 @@ function closeTooltip(): void {
   hideAll();
 }
 function hideAll(): void {
+  clickSelectionFirstReadPending = false;
   clearReadingKeyboardFocus();
   cancelIndicatorTouch();
   touchOpenedSelection = null;
@@ -2089,6 +2127,13 @@ function matchesSelectionModifierOnPointer(event: PointerEvent): boolean {
 }
 function handlePointerDown(event: PointerEvent): void {
   if (!event.isTrusted) return;
+  clickSelectionNotice.value = '';
+  if (clickSelection.handlePointerDown(event)) {
+    isSelecting = false;
+    uiPointerInteraction = false;
+    suppressSelectionRead();
+    return;
+  }
   if (import.meta.env.BROWSER === 'safari') prepareReadingCardPan(event);
   else clearReadingKeyboardFocus();
   // 第二根手指可以落在入口外；document capture 先撤销尚未完成的入口触摸。
@@ -2125,6 +2170,7 @@ function handlePointerDown(event: PointerEvent): void {
 }
 function handlePointerUp(event: PointerEvent): void {
   if (!event.isTrusted) return;
+  if (clickSelection.handlePointerUp(event)) return;
   if (import.meta.env.BROWSER === 'safari') finishReadingCardPan(event);
   lastTrustedSelectionInteractionAt = Date.now();
   if (uiPointerInteraction || isInsideUi(event.target)) {
@@ -2164,6 +2210,7 @@ function cancelEntryDismiss(): void {
   entryDismissTimer = null;
 }
 function handlePointerMove(event: PointerEvent): void {
+  if (clickSelection.active) return;
   if (event.isTrusted && event.pointerType === 'touch'
     && (import.meta.env.BROWSER !== 'safari' || !moveReadingCardPan(event))) clearReadingKeyboardFocus();
   trackIndicatorTouch(event);
@@ -2193,6 +2240,7 @@ function handlePageCopy(event: ClipboardEvent): void {
   if (event.isTrusted && selectionSettings.value.autoDismiss && !isInsideUi(event.target)) hideAll();
 }
 function handleSelectionChange(event: Event): void {
+  if (clickSelection.active) return;
   if (readingMode.value && isInsideUi(document.activeElement)) return;
   if (!event.isTrusted) return;
   if (import.meta.env.BROWSER !== 'userscript' && (contextMenuSelection || contextMenuSourceRejected)) return;
@@ -2459,6 +2507,8 @@ function handleScroll(event: Event): void {
   // 选区读取可能还在下一帧或 selectionchange 队列中；连同显示计时器一起清理，
   // 避免滚动结束后才出现小点或卡片。拖选中的自动滚动仍由 pointerup 处理新选区。
   if (!showTooltip.value) {
+    // 两点已完成但尚未读取原生 Selection 时，保留此前定位引发的同轮延迟滚动。
+    if (clickSelectionFirstReadPending && selectionFrame !== null && !snapshot.value) return;
     if (!isSelecting && (snapshot.value || selectionFrame !== null
       || Date.now() - lastTrustedSelectionInteractionAt <= TRUSTED_SELECTION_INTERACTION_GRACE_MS)) hideAll();
     return;
@@ -2467,6 +2517,10 @@ function handleScroll(event: Event): void {
   if (readingMode.value && readingEvidenceScrollFrame !== undefined) { schedulePositionUpdate(); return; }
   if (selectionSettings.value.autoDismiss) { hideAll(); return; }
   schedulePositionUpdate();
+}
+function isClickSelectionEditingEvent(event: KeyboardEvent): boolean {
+  return (event.composedPath?.() ?? [event.target]).some(target => target instanceof Element
+    && target.closest('input, textarea, select, [contenteditable]:not([contenteditable="false"])'));
 }
 function handleKeydown(event: KeyboardEvent): void {
   if (!event.isTrusted || (event.target instanceof Element && event.target.id === 'fluent-read-share-card-container')) return;
@@ -2481,9 +2535,30 @@ function handleKeydown(event: KeyboardEvent): void {
     if (event.key === 'Escape' && snapshot.value) { event.preventDefault(); event.stopPropagation(); closeTooltip(); }
     return;
   }
+  if (clickSelectionFirstReadPending && (event.key === 'Escape' || isClickSelectionEditingEvent(event))) { hideAll(); return; }
+  if (event.key === 'Escape' && clickSelection.active) {
+    event.preventDefault();
+    event.stopPropagation();
+    clickSelection.cancel();
+    return;
+  }
   if (event.key === 'Escape' && snapshot.value) { hideAll(); return; }
   if (event.repeat || event.isComposing) return;
-  if (event.target instanceof Element && event.target.closest('input, textarea, select, [contenteditable]:not([contenteditable="false"])')) return;
+  if (event.target instanceof Element && event.target.closest('input, textarea, select, [contenteditable]:not([contenteditable="false"])')) { clickSelection.cancel(); return; }
+  if (!props.selectionAdapter && matchesClickSelectionShortcut(event, config)) {
+    // 开放 Shadow DOM 的键盘事件会把 target 重定向到 host；仅为两点入口审核原始编辑路径。
+    if (isClickSelectionEditingEvent(event)) { clickSelection.cancel(); return; }
+    event.preventDefault();
+    event.stopPropagation();
+    if (!clickSelection.active) hideAll();
+    clickSelection.toggle();
+    return;
+  }
+  if (clickSelection.active) {
+    // 保留组合键的修饰键与普通翻页；其他主键退出本轮，让后续阅读动作独占指针。
+    if (!['Control', 'Alt', 'Shift', 'Meta', 'PageUp', 'PageDown', 'Home', 'End', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', ' '].includes(event.key)) clickSelection.cancel();
+    return;
+  }
   const matchesSelectionShortcut = matchesConfiguredHotkey(event, selectionShortcutConfig.value, selectionSettings.value.customHotkey);
   if (!matchesSelectionShortcut) return;
   selectionShortcutHeld = true;
@@ -2690,6 +2765,8 @@ onMounted(() => {
 
 onBeforeUnmount(() => {
   componentDisposed = true;
+  clickSelectionFirstReadPending = false;
+  clickSelection.dispose();
   clearReadingKeyboardFocus();
   cancelIndicatorTouch();
   touchOpenedSelection = null;
@@ -2703,6 +2780,7 @@ onBeforeUnmount(() => {
   unsubscribeVisualViewport?.();
   unsubscribeVisualViewport = null;
   if (selectionFrame !== null) window.cancelAnimationFrame(selectionFrame);
+  selectionFrame = null;
   cancelPositionUpdate();
   // 悬停延迟可能跨过卸载；卸载后不能再按旧选区打开阅读卡片。
   cancelReadingHover();
@@ -2740,6 +2818,8 @@ onBeforeUnmount(() => {
 
 <style scoped>
 .fr-selection-translator-root { position: fixed; inset: 0; z-index: 2147483647; width: 100vw; height: 100vh; pointer-events: none; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; color: #25252a; }
+.fr-click-selection-hint { position: fixed; top: max(12px, env(safe-area-inset-top)); left: 50%; transform: translateX(-50%); max-width: calc(100vw - 24px); padding: 7px 12px; border: 1px solid #e5d6de; border-radius: 8px; background: #fff; color: #694157; box-shadow: 0 2px 10px #3021321a; font-size: 12px; line-height: 1.5; text-align: center; pointer-events: none; }
+.fr-click-selection-hint--dark { background: #312b33; border-color: #64505e; color: #f2cede; }
 .fr-selection-indicator, .fr-translation-tooltip, .fr-copy-success-toast, .fr-action-toast { pointer-events: auto; }
 .fr-selection-indicator { position: fixed; width: 22px; height: 22px; padding: 0; border: 1px solid #f3c3d2; border-radius: 7px; transform: translate(-50%, -50%); background: #fff; color: #d83160; box-shadow: 0 2px 8px rgba(40, 35, 43, .2); cursor: pointer; transition: transform .14s ease, box-shadow .14s ease; }
 .fr-selection-indicator--dot { width: 8px; height: 8px; border:0; border-radius:50%; background:#ef4b86; }

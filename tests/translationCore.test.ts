@@ -2516,6 +2516,16 @@ describe('translation candidate core', () => {
             .toBe('___FLUENTREAD_slots_0_BEGIN___');
     });
 
+    it('round-trips the configurable maximum of 32 AI text slots with exact indexed ownership', () => {
+        const sources = Array.from({length: 32}, (_, index) => `Source ${index} 👩🏽‍🔬`);
+        const translations = sources.map((_, index) => `第${index}段译文。`);
+        const packet = serializeTranslationSlots(sources);
+        const slots = packet.starts.map((start, index) => `${start}${translations[index]}${packet.ends[index]}`);
+        expect(parseTranslationSlots(packet, slots.join('\n'))).toEqual(translations);
+        expect(parseTranslationSlots(packet, [...slots.slice(0, 30), slots[31], slots[30]].join('\n'))).toBeNull();
+        expect(parseTranslationSlots(packet, slots.slice(0, 31).join('\n'))).toBeNull();
+    });
+
     it('keeps snapshot serialization bounded to live readable slots', () => {
         const {document, core} = page(`
             <main><p id="target">

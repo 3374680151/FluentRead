@@ -1,7 +1,7 @@
 /**
  * @file src/app/content/embeddedFrameRuntime.ts
  * 文件职责：让 OMG! Ubuntu 评论、Kaggle 笔记本和 Hugging Face Spaces 正文 iframe 跟随所属页面的翻译会话。
- * 主要内容：通过既有配置订阅即时重排网页双语与仅译文工件，不重发翻译请求；顶层提供无凭据会话与当前页字体快照并支持从 Hugging Face 其他页面软导航进入 Space，受限子 frame 经后台认证后挂载翻译手势、样式与会话控制；真实路由变化同步失效上下文与请求提交代次，同地址通知不重复清理。
+ * 主要内容：通过既有配置订阅即时重排网页双语与仅译文工件，不重发翻译请求；按已水合的全局字体偏好同步已授权 frame，顶层会话快照不覆盖全局选择；顶层提供无凭据会话与字体诊断快照并支持从 Hugging Face 其他页面软导航进入 Space，受限子 frame 经后台认证后挂载翻译手势、样式与会话控制；真实路由变化同步失效上下文与请求提交代次，同地址通知不重复清理。
  * 模块边界：不在广告或其他第三方 frame 挂载功能；URL 配对由后台验证，正文候选由共享翻译核心处理。
  */
 import type {ContentScriptContext} from 'wxt/utils/content-script-context';
@@ -116,6 +116,7 @@ export async function startEmbeddedFrameApp(ctx: ContentScriptContext): Promise<
             syncBilingualSentenceHighlight(document, false);
             return;
         }
+        pageTranslationFont.set(config.browserDefaultTranslationFont === true);
         if (activation) return;
         activation = new AbortController();
         removeStyles = installPageStyles(ctx);
@@ -134,7 +135,6 @@ export async function startEmbeddedFrameApp(ctx: ContentScriptContext): Promise<
     const controller = createFrameSessionController({
         readState: () => browser.runtime.sendMessage({type: EMBEDDED_FRAME_REQUEST, action: 'state'}),
         isEnabled: enabled, setAvailable, restore,
-        syncState: state => { pageTranslationFont.set(state.browserDefaultFont === true); },
         start: (state) => autoTranslateEnglishPage({
             service: state.translationConfig!.service, model: state.translationConfig!.model,
             targetLanguage: state.translationConfig!.targetLanguage, displayMode: state.translationConfig!.displayMode,
@@ -165,6 +165,7 @@ export async function startEmbeddedFrameApp(ctx: ContentScriptContext): Promise<
         applyCoreTranslationPreferences(config);
         siteAdaptation.update(config.siteAdaptation, new URL(window.location.href));
         syncBilingualSentenceHighlight(document, enabled() && authorized && config.bilingualSentenceHighlightEnabled === true, config.bilingualSentenceHighlightStyle, config.bilingualSentenceHighlightAppearance);
+        if (enabled() && authorized) pageTranslationFont.set(config.browserDefaultTranslationFont === true);
         if (!enabled()) controller.suspend();
         else void controller.refresh();
     }));

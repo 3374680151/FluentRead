@@ -1,41 +1,36 @@
 # Website reading area
 
-If content is missing or too much is translated, start with the simple checks.
-
-GitHub release notes show translations after each explicit source line break for easy comparison. List items containing several paragraphs are translated paragraph by paragraph.
-
-Discord's server icon rail stays unchanged in both reading-area and all-nodes modes; channel message text remains translatable.
-
-Reddit user profiles support post text, comment cards, and their parent post titles across the Overview, Posts, and Comments tabs. Navigation, author names, timestamps, and voting controls stay unchanged in the default reading area.
+If text is missing or too much is translated, check the reading area first. Use site preferences to remember how a particular website should behave.
 
 <GuideVisual kind="rules" en />
 
 ## Missing content
 
-1. Refresh pages after installing or updating.
+1. Refresh the page after installing or updating.
 2. Scroll down: the default mode translates near your reading position.
-3. For menus and navigation, enable recognition of all nodes in advanced page-recognition settings, then restore and retranslate.
-4. For text inside an image or chart, try [area translation](/en/guide/area-translation).
+3. To include menus and buttons, enable all-node recognition under **Advanced settings → Page recognition**, then restore the original and translate again.
+4. For text inside an image or chart, use [area translation](/en/guide/area-translation).
 
-In the browser extension, full-page translation also covers Disqus comments on OMG! Ubuntu articles and Markdown tutorial text in Kaggle Notebooks. Scroll down to translate later content.
+Some sites keep author names, timestamps, votes, and navigation unchanged while translating articles, comments, or product descriptions. If the area you need is still missed, adjust its content rule or report the URL and area.
 
 ## Translate every time—or leave it alone
 
-Open **System & data → Website rules → Site preferences** to manage always-translate, disable-extension, and hide-floating-button preferences in one row per site. Host input is normalized to the root domain and includes its subdomains; paths and ports are not stored.
+Open **Settings → Tools & learning → Website rules → Site preferences**:
 
-Disabling the extension takes precedence over automatic translation but retains the other preferences for re-enabling. Hiding the floating button keeps shortcuts and other features available. Global automatic translation applies to every non-disabled site and retains the site list. Removing a site's preferences restores global defaults and can be undone.
+| Preference | Effect |
+| --- | --- |
+| Always translate | Translate new pages on that website automatically |
+| Disable extension | Restore the original and stop the extension on that site; overrides automatic translation |
+| Hide floating button | Hide the button while keeping shortcuts and other features available |
 
-Content rules adjust translation regions by host, path, and CSS selectors. Effective preview checks saved preferences, matching rules, and priority without visiting the site; it does not guarantee that the actual page can translate. Confirm the behavior on the real page after saving.
+Preferences use the root domain and include its subdomains, without paths or ports. Re-enabling a disabled site restores its other preferences. Removing preferences returns to global defaults. Global automatic translation applies to non-disabled sites and keeps your saved list.
 
-<details class="guide-details">
-<summary>Still wrong?</summary>
+The extension menu also offers always-translate and disable-site controls. Restoring the current article keeps it original, including when following its table-of-contents links. Always-translate takes effect again on the next article. Turning it off affects future automatic triggers and leaves current translations in place.
 
 ## Still wrong?
 
-Report the public URL, browser version, and a screenshot with private information removed on [GitHub Issues](https://github.com/FluentRead/FluentRead/issues). Explain which area should translate and which should stay original.
+Content rules select article and protected areas by domain, path, and CSS selector. Effective preview checks saved matching rules and priority without visiting the website. Check the actual page after saving.
 
-If you know webpage structure, you can use [custom site rules](/en/guide/custom-site-rules). They are optional; export a backup before editing.
+If you know webpage structure, follow [Custom site rules](/en/guide/custom-site-rules) and export a backup first. Otherwise, report a public URL, browser version, and a screenshot with private information removed on [GitHub Issues](https://github.com/FluentRead/FluentRead/issues). Explain which areas should translate and which should stay original.
 
-Detailed fields and examples are in the [repository reference](https://github.com/FluentRead/FluentRead/blob/main/docs/maintainers/product-reference/site-adaptation-20260906.md).
-
-</details>
+Detailed fields are in the [rule reference](https://github.com/FluentRead/FluentRead/blob/main/docs/maintainers/product-reference/site-adaptation-20260906.md).

@@ -207,12 +207,13 @@ export function createUserscriptCatalogCompressionPlugin(): Plugin {
                 ].join('\n');
             }
             const contents = JSON.stringify(JSON.parse(fs.readFileSync(sourcePath, 'utf8')));
-            const compressed = gzipUserscriptBuildData(Buffer.from(contents)).toString('base64');
+            const compressed = encodeUserscriptData(gzipUserscriptBuildData(Buffer.from(contents)));
             const digest = createHash('sha256').update(contents).digest('hex');
             return [
                 `/* Non-code site rules: ${normalizePath(sourcePath).slice(projectRoot.length)}; sha256 ${digest}. */`,
                 "import {inflateWithPako} from '@/userscript/pakoRuntime';",
-                `const bytes = Uint8Array.from(atob(${JSON.stringify(compressed)}), (character) => character.charCodeAt(0));`,
+                "import {decodeUserscriptData} from '@/userscript/dataEncoding';",
+                `const bytes = decodeUserscriptData(${JSON.stringify(compressed)});`,
                 'export default JSON.parse(inflateWithPako(bytes));',
             ].join('\n');
         },
@@ -287,8 +288,19 @@ export function bundledLibraryNotices(moduleIds: readonly string[]): string {
         if (headings) headings.push(heading);
         else licenseGroups.set(licenseText, [heading]);
     }
-    return [...licenseGroups].map(([licenseText, headings]) =>
+    const notices = [...licenseGroups].map(([licenseText, headings]) =>
         `/*\n${headings.join('\n')}\n${licenseText}\n*/`).join('\n');
+    if (!bundleLibraries) return notices;
+    // 完整独立版还包含不同版权及内嵌子依赖的同一 MIT 正文。仅匹配现有许可文件的完整
+    // 授权与免责文字，允许换行/空白差异；每个版权、来源和前后附加条款保留在原位置。
+    const permissionStart = tinycolorLicense.indexOf('Permission is hereby granted');
+    if (permissionStart < 0) throw new Error('Canonical bundled MIT permission terms are missing');
+    const terms = tinycolorLicense.slice(permissionStart).trim();
+    const escapedWords = terms.split(/\s+/u).map(word => word.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&'));
+    const repeatedTerms = new RegExp(escapedWords.join('\\s+'), 'gu');
+    if ([...notices.matchAll(repeatedTerms)].length < 2) return notices;
+    return notices.replace(repeatedTerms, '[Shared MIT terms below]')
+        + `\n/*\nShared MIT permission and warranty terms for the references above:\n${terms}\n*/`;
 }
 
 // Via 等旧内核可能缺少共享核心使用的基础方法；在单文件入口最前方注入小型兼容层。
@@ -612,7 +624,7 @@ export const userscriptAliases = [
 export default defineConfig({
     root,
     publicDir: false,
-    plugins: [...(!greasyForkSource ? [createStandaloneOpenAITransportPlugin()] : []), createUserscriptSettingsDataPlugin(root, !greasyForkSource, bundleLibraries), createDeepLXRuntimeBuildPlugin(root), unwrapWxtEntrypoints(), createUserscriptCatalogCompressionPlugin(), createUserscriptCharacterDataCompressionPlugin(root, !greasyForkSource), createUserscriptFrancDataCompressionPlugin(root, !greasyForkSource, bundleLibraries && !greasyForkSource), createUserscriptTldtsDataCompressionPlugin(root, bundleLibraries && !greasyForkSource, bundleLibraries && !greasyForkSource), createUserscriptAboutImagesCompressionPlugin(root, bundleLibraries && !greasyForkSource), createUserscriptServiceBrandIconsCompressionPlugin(root, bundleLibraries && !greasyForkSource), injectUserscriptBrowserShim(), vue(), bundleUserscriptCss(), createUserscriptInlineCssCompressionPlugin(root, !greasyForkSource)],
+    plugins: [...(!greasyForkSource ? [createStandaloneOpenAITransportPlugin()] : []), createUserscriptSettingsDataPlugin(root, !greasyForkSource, bundleLibraries), createDeepLXRuntimeBuildPlugin(root), unwrapWxtEntrypoints(), createUserscriptCatalogCompressionPlugin(), createUserscriptCharacterDataCompressionPlugin(root, !greasyForkSource), createUserscriptFrancDataCompressionPlugin(root, !greasyForkSource, !greasyForkSource), createUserscriptTldtsDataCompressionPlugin(root, bundleLibraries && !greasyForkSource, bundleLibraries && !greasyForkSource), createUserscriptAboutImagesCompressionPlugin(root, bundleLibraries && !greasyForkSource), createUserscriptServiceBrandIconsCompressionPlugin(root, bundleLibraries && !greasyForkSource), injectUserscriptBrowserShim(), vue(), bundleUserscriptCss(), createUserscriptInlineCssCompressionPlugin(root, !greasyForkSource)],
     resolve: {
         alias: userscriptAliases,
     },

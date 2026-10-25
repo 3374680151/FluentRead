@@ -1,7 +1,7 @@
 /**
  * @file tests/videoSubtitleAppearanceSettingsLifecycle.test.ts
  * 文件职责：执行字幕外观设置的真实客户端 SFC、共享布局与控件事件，验证设置草稿和实时预览的一致性。
- * 主要内容：覆盖双语上下顺序、移动端/X 自动贴底、手动偏移、位置显隐、七语可见标签与 ARIA、字号归一化、皮肤/重置、显示模式、读音示例显隐和父级草稿替换；读音示例使用固定演示数据，不加载转写引擎。
+ * 主要内容：覆盖双语上下顺序、移动端/X 自动贴底、手动偏移、位置显隐、七语可见标签与 ARIA、字号归一化、皮肤/重置、显示模式、读音示例显隐、单语顺序禁用、显式恢复双语和父级草稿替换；读音示例使用固定演示数据，不加载转写引擎。
  * 模块边界：保留 Vue 模板、设置子组件、配置归一化及翻译字典；仅以 DOM 与 Element Plus UI ports 和受控语言上下文替代浏览器环境，不读取组件私有状态或复制产品事件。
  */
 import {afterEach, beforeEach, describe, expect, it, vi} from 'vitest';
@@ -132,6 +132,7 @@ describe('视频字幕外观设置实际客户端模板', () => {
         const originalFirst = `${order} [data-option-index="0"]`;
         const translationFirst = `${order} [data-option-index="1"]`;
         expect(control(originalFirst).getAttribute('aria-checked')).toBe('true');
+        expect([...control(previewSelector).children].map(line => line.tagName)).toEqual(['SPAN', 'SMALL', 'B']);
         expect(control<HTMLElement>(previewSelector).style.getPropertyValue('--fluent-read-video-subtitle-translation-order')).toBe('3');
         const reading = control(readingPreviewSelector);
         await click(translationFirst);
@@ -139,16 +140,22 @@ describe('视频字幕外观设置实际客户端模板', () => {
         expect(control(translationFirst).getAttribute('aria-checked')).toBe('true');
         expect(control<HTMLElement>(previewSelector).style.getPropertyValue('--fluent-read-video-subtitle-translation-order')).toBe('0');
         expect(control(readingPreviewSelector)).toBe(reading);
+        expect([...control(previewSelector).children].map(line => line.tagName)).toEqual(['B', 'SPAN', 'SMALL']);
         expect(control(previewSelector).querySelector('span')?.textContent).toBe('今日はいい天気ですね。');
         await click('[aria-label="视频字幕显示模式"] [data-option-index="1"]');
         expect(control(previewSelector).querySelector('span')).toBeNull();
         expect(root.querySelector(readingPreviewSelector)).toBeNull();
         expect(control(previewSelector).querySelector('b')).not.toBeNull();
         expect(props.config.videoSubtitleAppearance.bilingualOrder).toBe('translation-first');
+        expect(control(order).getAttribute('aria-disabled')).toBe('true');
+        expect([...control(order).querySelectorAll<HTMLButtonElement>('button')].every(button => button.disabled)).toBe(true);
+        expect(control('.subtitle-order-item').textContent).toContain(translate('video.bilingualOrderHint', 'zh-CN'));
         await click('[aria-label="视频字幕显示模式"] [data-option-index="2"]');
         expect(control(previewSelector).querySelector('b')).toBeNull();
         expect(control(readingPreviewSelector).textContent).toBe('kyō wa ii tenki desu ne.');
+        expect(control(order).getAttribute('aria-disabled')).toBe('true');
         await click('[aria-label="视频字幕显示模式"] [data-option-index="0"]');
+        expect(control(order).getAttribute('aria-disabled')).toBe('false');
         await click(originalFirst);
         expect(props.config.videoSubtitleAppearance.bilingualOrder).toBe('original-first');
         expect(control<HTMLElement>(previewSelector).style.getPropertyValue('--fluent-read-video-subtitle-translation-order')).toBe('3');
@@ -274,7 +281,7 @@ describe('视频字幕外观设置实际客户端模板', () => {
     it('读音开关显示明确的演示数据，仅译文与隐藏字幕时收起读音且保留偏好', async () => {
         await mount(normalizeConfig({videoTranslationEnabled: true}));
         expect(control<HTMLInputElement>(readingSelector).checked).toBe(false);
-        expect(control('.subtitle-reading-item').textContent).toContain('日语约 17.8 MB / 印地语约 0.5 MB，首次使用下载，缓存后离线');
+        expect(control('.subtitle-reading-item').textContent).toContain(translate('video.readingAnnotation.explanation', 'zh-CN'));
         expect(root.querySelector(readingPreviewSelector)).toBeNull();
         expect(root.querySelector('[data-video-subtitle-reading-sample]')).toBeNull();
         await check(readingSelector, true);
@@ -322,12 +329,36 @@ describe('视频字幕外观设置实际客户端模板', () => {
             expect(control('.subtitle-reading-item .settings-item-label').textContent).toContain(label);
             expect(control('.subtitle-reading-item').textContent).toContain(translate('video.readingAnnotation.originalRequired', language));
             props.config.videoSubtitleDisplayMode = 'bilingual'; await settle();
-            expect(control('.subtitle-reading-item').textContent).toContain(translate('video.readingAnnotation.description', language));
+            expect(control('.subtitle-reading-item').textContent).toContain(translate('video.readingAnnotation.explanation', language));
             props.config.videoSubtitleDisplayMode = 'translation-only'; await settle();
             expect(control('[data-video-subtitle-reading-sample]').textContent).toBe(translate('video.readingAnnotation.previewSample', language));
             expect(root.querySelector(readingPreviewSelector)).toBeNull();
             expect(JSON.stringify(props.config.videoSubtitleAppearance)).toBe(saved);
         }
+    });
+
+    it('仅译文开启读音时保留模式，显式恢复双语后显示读音并保留上下顺序', async () => {
+        await mount(normalizeConfig({videoTranslationEnabled: true, videoSubtitleDisplayMode: 'translation-only',
+            videoSubtitleAppearance: {bilingualOrder: 'translation-first'}}));
+        const showOriginal = '[data-video-subtitle-reading-show-original]';
+        expect(root.querySelector(showOriginal)).toBeNull();
+        await check(readingSelector, true);
+        expect(props.config.videoSubtitleDisplayMode).toBe('translation-only');
+        expect(root.querySelector(readingPreviewSelector)).toBeNull();
+        expect(control(showOriginal).textContent).toBe(translate('settings.translationStyle.switchToBilingual', 'zh-CN'));
+        await click(showOriginal);
+        expect(props.config.videoSubtitleDisplayMode).toBe('bilingual');
+        expect(props.config.videoSubtitleAppearance).toMatchObject({readingAnnotation: true, bilingualOrder: 'translation-first'});
+        expect([...control(previewSelector).children].map(line => line.tagName)).toEqual(['B', 'SPAN', 'SMALL']);
+        expect(root.querySelector(showOriginal)).toBeNull();
+        await click('[aria-label="视频字幕显示模式"] [data-option-index="1"]');
+        await check('[role="switch"][aria-label="显示 流畅阅读 视频字幕"]', false);
+        expect(control<HTMLButtonElement>(showOriginal).disabled).toBe(true);
+        await click(showOriginal);
+        expect(props.config.videoSubtitleDisplayMode).toBe('translation-only');
+        await check('[role="switch"][aria-label="显示 流畅阅读 视频字幕"]', true);
+        await check(readingSelector, false);
+        expect(root.querySelector(showOriginal)).toBeNull();
     });
 
     it('无扩展 DOM 能力时解释读音不可用，开关禁用且不写入假偏好', async () => {

@@ -40,7 +40,7 @@ function fixture() {
   const reading = createVideoReadingPlayer(ports); instances.push(reading);
   const render = (text = 'こんにちは') => reading.renderCaption(player, caption, text, '译文');
   const menu = document.createElement('div');
-  menu.innerHTML = '<button data-action="toggle-reading-annotation"><svg aria-hidden="true"></svg></button><span data-reading-status></span><button data-action="retry-reading-annotation"></button>';
+  menu.innerHTML = '<button data-action="toggle-reading-annotation"><svg aria-hidden="true"></svg></button><span data-reading-status></span><button data-action="retry-reading-annotation"></button><button data-reading-bilingual data-action="show-reading-original"></button>';
   return {document, window, player, caption, context, ports, reading, render, menu,
     visibility(value: string) {visibility = value; document.dispatchEvent(new window.Event('visibilitychange'));}};
 }
@@ -95,6 +95,32 @@ describe('播放器读音与原轨上下文所有权', () => {
     expect(f.ports.updateMenu).toHaveBeenCalledTimes(3);
   });
 
+  it('连续换句复用同轨语言解析，每轮只读取一次上下文，轨道URL变更立即取消旧语言任务', async () => {
+    const f = fixture(); mocks.config.videoSubtitleAppearance.readingAnnotation = true;
+    for (let index = 0; index < 40; index += 1) { f.render(`こんにちは ${index}`); await flush(); }
+    expect(mocks.choose).toHaveBeenCalledOnce();
+    expect(f.ports.getSourceContext).toHaveBeenCalledTimes(40);
+    expect(mocks.annotate).toHaveBeenCalledTimes(40);
+    for (let index = 0; index < 40; index += 1) expect(f.reading.sourceContext.getLanguage()).toBe('ja');
+    expect(mocks.choose).toHaveBeenCalledOnce();
+
+    // 同一媒体上下文被显式重置时，允许原生播放器的新轨道元数据重新参与解析。
+    f.reading.reset(); f.render('こんにちは 안녕'); await flush();
+    expect(mocks.choose).toHaveBeenCalledTimes(2);
+
+    // 来源标识可能尚未刷新；不能仅凭相同 key 保留上一条轨道的语言。
+    f.context.captured = {url: 'https://www.youtube.com/api/timedtext?lang=ja'};
+    mocks.annotate.mockImplementationOnce(() => new Promise(() => undefined));
+    f.render('こんにちは 안녕 新しい'); await flush();
+    const oldSignal = mocks.annotate.mock.calls.at(-1)![2] as AbortSignal;
+    f.context.captured.url = 'https://www.youtube.com/api/timedtext?lang=ko';
+    f.render('こんにちは 안녕 新しい'); await flush();
+    expect(oldSignal.aborted).toBe(true);
+    expect(mocks.annotate).toHaveBeenLastCalledWith('こんにちは 안녕 新しい', 'ko', expect.any(AbortSignal));
+    expect(mocks.choose).toHaveBeenCalledTimes(2);
+    expect(f.ports.getSourceContext).toHaveBeenCalledTimes(83);
+  });
+
   it('学习上下文在读音关闭时仍可读取，翻译轨被排除，语言尊重原轨并提供元数据回退', () => {
     const f = fixture(); expect(f.reading.sourceContext.getCues()).toBe(f.context.cues);
     f.context.captured = {url: 'https://www.youtube.com/api/timedtext?lang=ja&tlang=en'};
@@ -120,6 +146,12 @@ describe('播放器读音与原轨上下文所有权', () => {
     expect(status.textContent).toBe('video.readingAnnotation.loading'); expect(retry.hidden).toBe(true);
     reject(new Error('failed')); await flush(); f.reading.syncMenu(f.menu, true, 'bilingual');
     expect(status.textContent).toBe('video.readingAnnotation.error'); expect(retry.hidden).toBe(false);
+    const bilingual = f.menu.querySelector<HTMLButtonElement>('[data-reading-bilingual]')!;
+    f.reading.syncMenu(f.menu, true, 'translation-only');
+    expect(retry.hidden).toBe(true); expect(bilingual.hidden).toBe(false); expect(bilingual.disabled).toBe(false);
+    f.reading.syncMenu(f.menu, false, 'translation-only');
+    expect(status.hidden).toBe(true); expect(retry.hidden).toBe(true); expect(bilingual.hidden).toBe(true); expect(bilingual.disabled).toBe(true);
+    f.reading.syncMenu(f.menu, true, 'bilingual'); expect(bilingual.hidden).toBe(true);
     expect(f.reading.handleAction('retry-reading-annotation')).toBe(true); expect(f.ports.updateCaption).toHaveBeenCalledOnce();
     f.render(); await flush(); f.reading.syncMenu(f.menu, true, 'bilingual'); expect(status.hidden).toBe(true);
     f.reading.syncMenu(f.menu, true, 'translation-only'); expect(status.textContent).toBe('video.readingAnnotation.originalRequired');
@@ -142,7 +174,7 @@ describe('播放器读音与原轨上下文所有权', () => {
     expect(f.reading.state.status).toBe('no-reading'); expect(status.textContent).toBe('video.readingAnnotation.noReading');
     expect(status.hidden).toBe(false); expect(retry.hidden).toBe(true); expect(mocks.annotate).not.toHaveBeenCalled();
     f.render(''); f.reading.syncMenu(f.menu, true, 'bilingual'); expect(status.hidden).toBe(true);
-    mocks.choose.mockReturnValue({languageCode: 'ja'}); mocks.annotate.mockResolvedValueOnce(null);
+    f.context.key = 'japanese-track'; mocks.choose.mockReturnValue({languageCode: 'ja'}); mocks.annotate.mockResolvedValueOnce(null);
     f.render(); await flush(); f.reading.syncMenu(f.menu, true, 'bilingual');
     expect(status.textContent).toBe('video.readingAnnotation.noReading'); expect(retry.hidden).toBe(true); expect(mocks.annotate).toHaveBeenCalledOnce();
     f.render(); await flush(); expect(mocks.annotate).toHaveBeenCalledOnce();
@@ -166,5 +198,17 @@ describe('播放器读音与原轨上下文所有权', () => {
     mocks.config.videoSubtitleAppearance.readingAnnotation = false; f.reading.syncConfig(mocks.config);
     const remove = vi.spyOn(f.document, 'removeEventListener'); f.reading.destroy();
     expect(remove).toHaveBeenCalledWith('visibilitychange', expect.any(Function));
+  });
+
+  it('配置通知使用传入快照立即撤回关闭的读音，尚未更新的共享对象不保留任务', async () => {
+    const f = fixture(); mocks.config.videoSubtitleAppearance.readingAnnotation = true;
+    mocks.annotate.mockImplementation(() => new Promise(() => undefined));
+    f.render(); await flush();
+    const signal = mocks.annotate.mock.calls[0][2] as AbortSignal;
+    const next = new Config();
+    next.videoSubtitleAppearance.readingAnnotation = false;
+    f.reading.syncConfig(next);
+    expect(signal.aborted).toBe(true); expect(f.reading.state.status).toBe('idle');
+    expect(mocks.config.videoSubtitleAppearance.readingAnnotation).toBe(true);
   });
 });

@@ -453,7 +453,7 @@ function formatQuickTranslationProfiles(value: unknown): string {
     if (!Array.isArray(value) || value.length === 0) return '无';
     return value.map((item) => {
         if (!isRecord(item)) return formatValue(item);
-        const action = item.action === 'full-page' ? '全文' : '悬停';
+        const action = item.action === 'full-page' ? '全文' : item.action === 'section' ? '局部' : '悬停';
         const hotkey = typeof item.hotkey === 'string' && item.hotkey ? item.hotkey : '未设置';
         const service = typeof item.service === 'string' && item.service
             ? serviceName(item.service)
@@ -524,6 +524,7 @@ const FIELD_DEFINITIONS: Record<string, FieldDefinition> = {
 
     display: {group: 'general', label: '翻译模式', format: (value) => formatEnum(value, DISPLAY_LABELS)},
     style: {group: 'general', label: '译文样式', format: (value) => formatEnum(value, STYLE_LABELS)},
+    browserDefaultTranslationFont: {group: 'general', label: '浏览器默认译文字体', format: formatBoolean},
     translationAppearance: {group: 'general', label: '译文外观', mapping: {
         itemLabel: (key) => TRANSLATION_APPEARANCE_FIELD_LABELS.get(key) ?? key,
         format: formatTranslationAppearanceValue,
@@ -602,7 +603,7 @@ const FIELD_DEFINITIONS: Record<string, FieldDefinition> = {
     selectionTranslatorHotkey: {group: 'translation', label: '划词快捷键', format: (value) => formatEnum(value, SELECTION_TRIGGER_LABELS)},
     customSelectionTranslatorHotkey: {group: 'translation', label: '自定义划词快捷键'},
     selectionTranslatorDelay: {group: 'translation', label: '划词显示延迟', format: (value) => formatNumber(value, ' ms')},
-    selectionTranslatorBidirectional: {group: 'translation', label: '中英双向划词', format: (value) => formatBoolean(value, true)},
+    selectionTranslatorBidirectional: {group: 'translation', label: '中英双向划词', format: (value) => formatBoolean(value)},
     selectionTtsVoices: {group: 'translation', label: '划词朗读音色'},
     selectionTtsMode: {group: 'translation', label: '朗读合成策略', format: (value) => formatEnum(value, LOCAL_TTS_MODE_LABELS)},
     selectionTtsLocalVoice: {group: 'translation', label: '本地朗读音色'},
@@ -669,6 +670,8 @@ const FIELD_DEFINITIONS: Record<string, FieldDefinition> = {
     translationCacheMaxEntries: {group: 'advanced', label: '翻译缓存条数上限', format: (value) => formatNumber(value, ' 条')},
     enableAIContext: {group: 'general', label: 'AI 智能上下文', format: formatBoolean},
     enableAIMultiSegment: {group: 'translation', label: 'AI 多段翻译', format: formatBoolean},
+    aiMultiSegmentMaxSegments: {group: 'translation', label: 'AI 多段每批最多片段数'},
+    aiMultiSegmentMaxCharacters: {group: 'translation', label: 'AI 多段每批最多字符数'},
     maxConcurrentTranslations: {group: 'advanced', label: '翻译并发数'},
     aiRequestTimeoutMs: {group: 'advanced', label: 'AI 翻译请求超时', format: value => typeof value === 'number' ? `${value / 1000} 秒` : formatValue(value)},
     translationRequestsPerSecond: {group: 'advanced', label: '每秒最多请求数', format: formatRequestRate},

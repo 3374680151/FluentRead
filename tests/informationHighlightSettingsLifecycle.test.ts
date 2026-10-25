@@ -39,6 +39,7 @@ const Dialog = runtime.defineComponent({inheritAttrs: false, props: {modelValue:
       if (event.key === 'Escape' && props.closeOnPressEscape) {emit('update:modelValue', false); emit('close')}
     }}, [slots.header?.(), slots.default?.(), slots.footer?.()]) : null
   }})
+const warnings = vi.fn()
 const send = vi.fn((_message: {type: string; modelId?: InformationHighlightModelId}) => Promise.resolve({success: true, status: model()}))
 function model(overrides: Partial<InformationHighlightModelStatus> = {}): InformationHighlightModelStatus {
   return {modelId: 'qwen2.5-0.5b', phase: 'absent', downloaded: false, initialized: false, downloadedBytes: 0, totalBytes: 490043908,
@@ -64,9 +65,9 @@ function expectOnlyReads() {expect(messages().every(type => type === 'GET_INFORM
 
 beforeEach(async () => {
   vi.useFakeTimers({toFake: ['setInterval', 'clearInterval']}); send.mockReset(); send.mockImplementation(async message => ({success: true, status: modelFor(message.modelId)}))
-  events = new Map(); tooltips.length = 0; document = parseHTML('<html><body><div id="app"></div></body></html>').document as unknown as Document
+  warnings.mockClear(); events = new Map(); tooltips.length = 0; document = parseHTML('<html><body><div id="app"></div></body></html>').document as unknown as Document
   Object.defineProperty(document, 'visibilityState', {configurable: true, value: 'visible'})
-  vi.stubGlobal('document', document); Object.assign(globalThis, {[key]: {send, Tooltip, Dialog, previewStory}})
+  vi.stubGlobal('document', document); Object.assign(globalThis, {[key]: {send, Tooltip, Dialog, previewStory, warnings}})
   server = await createServer({appType: 'custom', configFile: false, logLevel: 'silent', root: process.cwd(),
     resolve: {alias: {'@': resolve(process.cwd())}}, ssr: {noExternal: ['webextension-polyfill', 'element-plus']},
     // 夹具验证 DOM、组件事件和轮询，不使用文件观察或热更新。
@@ -74,13 +75,15 @@ beforeEach(async () => {
       if (id === 'webextension-polyfill') return '\0highlight-settings-browser'
       if (/\/src\/ui\/i18n(?:\.ts)?$/u.test(id)) return '\0highlight-settings-i18n'
       if (id === 'element-plus') return '\0highlight-settings-options'
+      if (id.endsWith('/CustomHotkeyInput.vue')) return '\0highlight-settings-hotkey'
       if (id.endsWith('/UiSelect.vue')) return '\0highlight-settings-select'
       if (id.endsWith('.vue') && !realComponents.some(name => id.endsWith(`/${name}.vue`))) return '\0highlight-settings-display'
       return null
     }, load(id) {
       if (id === '\0highlight-settings-browser') return `export default {runtime: {sendMessage: globalThis.${key}.send}}`
       if (id === '\0highlight-settings-i18n') return `export const useUiI18n = () => ({t: (key, params) => key === 'informationHighlight.preview.story' ? globalThis.${key}.previewStory : params ? key + ' ' + JSON.stringify(params) : key});`
-      if (id === '\0highlight-settings-options') return `import {h} from 'vue';export const ElOption = {render: () => null}; export const ElSwitch = {inheritAttrs: false, setup(_, {attrs}) {return () => h('button', attrs)}}; export const ElTooltip = globalThis.${key}.Tooltip; export const ElDialog = globalThis.${key}.Dialog;`
+      if (id === '\0highlight-settings-options') return `import {h} from 'vue';export const ElMessage = {warning: globalThis.${key}.warnings}; export const ElOption = {render: () => null}; export const ElSwitch = {inheritAttrs: false, setup(_, {attrs}) {return () => h('button', attrs)}}; export const ElTooltip = globalThis.${key}.Tooltip; export const ElDialog = globalThis.${key}.Dialog;`
+      if (id === '\0highlight-settings-hotkey') return "import {h} from 'vue'; export default {inheritAttrs: false, setup(_, {attrs}) {return () => h('div', {...attrs, 'data-highlight-hotkey-recorder': ''})}};"
       if (id === '\0highlight-settings-select') return "import {h} from 'vue';export default {setup(_, {attrs, slots}) {return () => h('div', attrs, slots.default?.())}};"
       if (id === '\0highlight-settings-display') return 'export default {render: () => null};'
       return null
@@ -101,6 +104,7 @@ async function compile(relative: string) {
   return component
 }
 async function mount(mode: 'keywords' | 'surprisal-local' = 'surprisal-local', active: boolean | undefined = true) {
+  await server!.ssrLoadModule('/src/ui/components/CustomHotkeyInput.vue')
   for (const name of realComponents.filter(name => name !== 'InformationHighlightSettings')) {
     await compile(`${folder}${name === 'SettingsGroup' ? 'components/' : ''}${name}.vue`)
   }
@@ -109,7 +113,7 @@ async function mount(mode: 'keywords' | 'surprisal-local' = 'surprisal-local', a
   props.config.informationHighlight = {enabled: false, hotkey: 'Alt+H', hotkeyEnabled: true, model: 'qwen2.5-0.5b', mode, density: 'high', color: 'blue', style: 'underline', intensity: 'standard'}; shown = runtime.ref(true)
   const renderer = runtime.createRenderer<Node, Element>({patchProp(el, name, _previous, value) {
     const handlers = events.get(el) || {}; events.set(el, handlers)
-    if (/^on[A-Z]/u.test(name)) {handlers[name] = value; return}
+    if (/^on[A-Z]/u.test(name) || name === 'validate') {handlers[name] = value; return}
     if (name === 'class') {el.setAttribute('class', value || ''); return}
     if (name === 'style') {const style = (el as HTMLElement).style; style.cssText = ''; Object.assign(style, value || {}); return}
     if (value === false || value === undefined || value === null) el.removeAttribute(name); else el.setAttribute(name, String(value))
@@ -128,6 +132,46 @@ async function mount(mode: 'keywords' | 'surprisal-local' = 'surprisal-local', a
 }
 
 describe('信息高亮设置真实父子模板与生命周期', () => {
+  it.each([true, false])('点选已预留时拒绝高亮启用和改键，全局开关 %s 不释放已配置组合', async on => {
+    await mount('keywords'); props.config.on = on; props.config.selectionTranslatorMode = 'bilingual'; props.config.disableSelectionTranslator = false;
+    props.config.selectionClickSelectEnabled = true; props.config.selectionClickSelectHotkey = 'Alt+Shift+S'; await settle();
+    event('[data-information-highlight-hotkey]')(); await settle();
+    const validate = event('[data-highlight-hotkey-recorder]', 'validate');
+    expect(validate('shift+alt+s')).toBe('informationHighlight.hotkey.conflict');
+    event('[data-highlight-hotkey-recorder]', 'onConfirm')('Alt+Shift+S'); await settle();
+    expect(props.config.informationHighlight.hotkey).toBe('Alt+H'); expect(document.querySelector('[data-highlight-hotkey-recorder]')).not.toBeNull();
+    event('[data-highlight-hotkey-recorder]', 'onCancel')(); await settle();
+    props.config.informationHighlight = {...props.config.informationHighlight, hotkeyEnabled: false, hotkey: 'Alt+Shift+S'}; await settle();
+    event('[data-information-highlight-hotkey-enabled]', 'onUpdate:modelValue')(true); await settle();
+    expect(props.config.informationHighlight.hotkeyEnabled).toBe(false); expect(props.config.selectionClickSelectEnabled).toBe(true);
+    expect(warnings).toHaveBeenCalledWith('informationHighlight.hotkey.conflict');
+    expect(element('[data-information-highlight-hotkey]').hasAttribute('disabled')).toBe(false);
+    event('[data-information-highlight-hotkey]')(); await settle();
+    expect(event('[data-highlight-hotkey-recorder]', 'validate')('Alt+Shift+S')).toBe('');
+    event('[data-highlight-hotkey-recorder]', 'onConfirm')('Alt+J'); await settle();
+    event('[data-information-highlight-hotkey-enabled]', 'onUpdate:modelValue')(true); await settle();
+    expect(props.config.informationHighlight).toMatchObject({hotkeyEnabled: true, hotkey: 'Alt+J', enabled: false});
+  })
+  it('高亮停用草稿重新启用时必须再次校验当前点选组合，关闭点选后可恢复', async () => {
+    await mount('keywords'); props.config.selectionTranslatorMode = 'bilingual'; props.config.disableSelectionTranslator = false;
+    props.config.selectionClickSelectEnabled = true; props.config.selectionClickSelectHotkey = 'Alt+Shift+S';
+    props.config.informationHighlight = {...props.config.informationHighlight, hotkeyEnabled: false, hotkey: 'Alt+Shift+S'}; await settle();
+    event('[data-information-highlight-hotkey-enabled]', 'onUpdate:modelValue')(true); await settle();
+    expect(props.config.informationHighlight.hotkeyEnabled).toBe(false); expect(warnings).toHaveBeenCalledWith('informationHighlight.hotkey.conflict');
+    props.config.selectionClickSelectEnabled = false; await settle();
+    event('[data-information-highlight-hotkey-enabled]', 'onUpdate:modelValue')(true); await settle();
+    expect(props.config.informationHighlight.hotkeyEnabled).toBe(true);
+  })
+  it.each(['preference-off', 'selection-disabled', 'selection-legacy-disabled'] as const)('%s 释放点选保留键，高亮启用不误拦停用的划词组合', async reason => {
+    await mount('keywords'); props.config.selectionClickSelectEnabled = reason !== 'preference-off';
+    props.config.selectionTranslatorMode = reason === 'selection-disabled' ? 'disabled' : 'bilingual';
+    props.config.disableSelectionTranslator = reason === 'selection-legacy-disabled';
+    props.config.selectionClickSelectHotkey = 'Alt+Shift+S'; props.config.selectionTranslatorTrigger = 'custom'; props.config.customSelectionTranslatorHotkey = reason === 'preference-off' ? 'Alt+X' : 'Alt+Shift+S';
+    props.config.informationHighlight = {...props.config.informationHighlight, hotkey: 'Alt+Shift+S', hotkeyEnabled: false}; await settle();
+    event('[data-information-highlight-hotkey-enabled]', 'onUpdate:modelValue')(true); await settle();
+    expect(props.config.informationHighlight.hotkeyEnabled).toBe(true); expect(warnings).not.toHaveBeenCalled();
+  })
+
   it('仅展示 Base 模型及真实大小，选择只保存偏好；下载和删除都先确认', async () => {
     let downloaded = false
     send.mockImplementation(async message => {

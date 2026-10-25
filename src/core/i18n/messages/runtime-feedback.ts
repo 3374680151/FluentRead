@@ -512,6 +512,7 @@ const videoRows: readonly RuntimeFeedbackRow[] = [
 
 /** 翻译卡片理解、学习笔记、单词本、术语库、网站适配、模型用量导入、写作与输入框翻译的反馈。 */
 const learningToolRows: readonly RuntimeFeedbackRow[] = [
+    ["Esc 取消", "Esc to cancel", "Esc でキャンセル", "Esc로 취소", "Échap pour annuler", "Esc — отмена", "Esc para cancelar"],
     ['阅读理解已停用', 'Reading comprehension is turned off', '読解は無効になっています', '독해가 꺼져 있습니다', 'La compréhension écrite est désactivée', 'Понимание текста отключено', 'La comprensión lectora está desactivada'],
     ['阅读助手已停用', 'The reading assistant is turned off', '読書アシスタントは無効になっています', '읽기 도우미가 꺼져 있습니다', 'L’assistant de lecture est désactivé', 'Помощник чтения отключён', 'El asistente de lectura está desactivado'],
     ['当前动作未启用', 'This action is not enabled', 'この操作は有効になっていません', '이 작업은 켜져 있지 않습니다', 'Cette action n’est pas activée', 'Это действие не включено', 'Esta acción no está activada'],

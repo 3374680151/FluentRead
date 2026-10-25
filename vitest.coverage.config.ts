@@ -19,6 +19,13 @@ export default defineConfig({
             reportsDirectory: 'coverage/core',
             reporter: ['text', 'json-summary', 'json', 'html'],
             include: [
+                'src/core/config/aiMultiSegment.ts',
+                'src/features/settings/ui/AiMultiSegmentSettings.vue',
+                'src/core/config/clickSelection.ts',
+                'src/shared/dom/pointerSelectionSession.ts',
+                'src/features/selection-translation/content/clickSelection.ts',
+                'src/features/settings/ui/ClickSelectionSettings.vue',
+                'src/features/settings/ui/InformationHighlightPreferences.vue',
                 'src/features/full-page-translation/content/manpageLayout.ts',
                 'src/features/full-page-translation/content/bilingualFlowLayout.ts',
                 'src/features/full-page-translation/content/insideListLayout.ts',

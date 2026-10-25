@@ -3,6 +3,7 @@ import {parseHTML} from 'linkedom';
 import {createMangaCanvas} from '@/src/features/image-translation/content/mangaCanvas';
 import {composeMangaPage} from '@/src/features/image-translation/content/mangaCompositor';
 import {encodeImageCanvas} from '@/src/features/image-translation/services/imageEncoding';
+import {createMangaReader} from '@/src/features/image-translation/content/mangaReader';
 vi.mock('@/src/features/image-translation/content/mangaCompositor', () => ({composeMangaPage: vi.fn()}));
 vi.mock('@/src/features/image-translation/services/imageEncoding', () => ({encodeImageCanvas: vi.fn()}));
 const compose = vi.mocked(composeMangaPage);
@@ -10,7 +11,7 @@ const encode = vi.mocked(encodeImageCanvas);
 const packet = {width: 400, height: 300, patches: [{x: 0, y: 0, width: 1, height: 1, image: 'data:image/png;base64,AQ=='}]};
 const result = {mangaPatches: packet, lines: [{text: '译文', bbox: {x0: 0, y0: 0, x1: 1, y1: 1}, backgroundColor: '#fff'}]};
 const deferred = <T,>() => {let resolve!: (value: T) => void, reject!: (error: Error) => void;const promise = new Promise<T>((yes, no) => {resolve = yes;reject = no;});return {promise, resolve, reject};};
-const flush = async () => {for (let n = 0; n < 8; n++) await Promise.resolve();};
+const flush = async () => {for (let n = 0; n < 30; n++) await Promise.resolve();};
 
 function fixture(recovery?: Parameters<typeof createMangaCanvas>[0]['recovery']) {
     encode.mockResolvedValue('data:image/png;base64,AQ==');
@@ -25,7 +26,7 @@ function fixture(recovery?: Parameters<typeof createMangaCanvas>[0]['recovery'])
             const canvas = element as HTMLCanvasElement;
             let drawn: HTMLCanvasElement | null = null;
             canvas.getContext = vi.fn(() => missingCaptureContext && canvas.width > 8 ? null : {
-                drawImage: (source: HTMLCanvasElement) => {drawn = source;},
+                drawImage: (source: HTMLCanvasElement) => {drawn = source;canvas.dataset.content = source.dataset.content || 'A';},
                 getImageData: () => {
                     if (drawn?.dataset.tainted === 'true') throw new DOMException('tainted', 'SecurityError');
                     return {data: new Uint8ClampedArray(256).fill(Number(drawn?.dataset.pixel ?? 1))};
@@ -46,12 +47,30 @@ function fixture(recovery?: Parameters<typeof createMangaCanvas>[0]['recovery'])
     document.elementFromPoint = hit;
     vi.stubGlobal('document', document);
     vi.stubGlobal('window', {innerWidth: 1280, innerHeight: 900});
+    // 同时覆盖不具备 WebCrypto 的 HTTP 内容环境；原生 digest 由专门用例验证。
+    vi.stubGlobal('crypto', {});
     vi.stubGlobal('getComputedStyle', (element: Element) => ({display: 'block', visibility: 'visible', opacity: '1', overflowX: 'visible', overflowY: 'visible', ...styles.get(element)}));
     compose.mockImplementation(async () => {const output = document.createElement('canvas') as HTMLCanvasElement;output.width = 400;output.height = 300;outputs.push(output);return output;});
     const ports = {enabled: vi.fn(() => true), configurationIdentity: vi.fn(() => 'config-1'), cacheEnabled: vi.fn(() => true), recovery, acceptsInteractionLayer:vi.fn((_canvas:HTMLCanvasElement,_hit:Element)=>false), translate: vi.fn().mockResolvedValue(result)};
     const runtime = createMangaCanvas(ports);
     return {document, window, canvas, bounds, styles, hit, snapshots, outputs, roots, ports, runtime,
         missingContext: () => {missingCaptureContext = true;}};
+}
+
+function readerFor(f: ReturnType<typeof fixture>) {
+    const outer = f.document.createElement('div');outer.className = 'images-container';
+    outer.innerHTML = '<div class="view-container"><div class="image-container"></div></div>';
+    outer.querySelector('.image-container')!.append(f.canvas);f.document.body.append(outer);
+    vi.stubGlobal('Element', f.window.Element);
+    vi.stubGlobal('IntersectionObserver', undefined);
+    vi.stubGlobal('MutationObserver', class {observe() {} disconnect() {}});
+    const callbacks = new Map<number, FrameRequestCallback>();let sequence = 0;
+    vi.stubGlobal('window', {innerWidth: 1280, innerHeight: 900, location: {href: 'https://manga.bilibili.com/mc30124/595886'},
+        requestAnimationFrame: (callback: FrameRequestCallback) => {callbacks.set(++sequence, callback);return sequence;},
+        cancelAnimationFrame: (id: number) => callbacks.delete(id), addEventListener: vi.fn(), removeEventListener: vi.fn()});
+    encode.mockImplementation(async canvas => `data:image/png;base64,${btoa(canvas.dataset.content || 'A')}`);
+    const reader = createMangaReader({enabled: () => true, identity: () => 'unused-image', translate: vi.fn(), restore: vi.fn(), release: vi.fn(), failed: () => false, changed: vi.fn(), canvas: f.runtime});
+    return reader;
 }
 afterEach(() => {vi.restoreAllMocks();vi.resetAllMocks();vi.unstubAllGlobals();});
 
@@ -89,13 +108,14 @@ describe('公开可读漫画画布的任务与显示所有权', () => {
         Object.defineProperty(f.document,'hidden',{configurable:true,value:false});Object.assign(f.bounds,{left:1500,right:1900});f.runtime.update();expect(feedback.hidden).toBe(true);
         Object.assign(f.bounds,{left:100,right:500});f.runtime.update();expect(feedback.hidden).toBe(false);f.runtime.dispose();
     });
-    it.each(['pause','redraw','reset','remove','dispose'])('错误提示在 %s 清理，旧错误与迟到设置失败不会重新出现', async change => {
+    it.each(['pause','invalidate','redraw','reset','remove','dispose'])('错误提示在 %s 清理，旧错误与迟到设置失败不会重新出现', async change => {
         const pending=deferred<void>(),settings=vi.fn(()=>pending.promise),retry=vi.fn(()=>false),f=fixture({retry,openSettings:settings});
         f.ports.translate.mockRejectedValueOnce(new Error('offline'));await expect(f.runtime.translate(f.canvas)).rejects.toThrow('offline');
         const root=f.roots[0],feedback=root.querySelector<HTMLElement>('.fr-image-feedback')!;
         const click=(target:Element)=>{const event=new f.window.Event('click',{bubbles:true});Object.defineProperty(event,'isTrusted',{value:true});target.dispatchEvent(event);};
         click(feedback.querySelector('.fr-image-service-settings')!);await flush();
         if(change==='pause')f.runtime.restore(f.canvas);
+        if(change==='invalidate')f.runtime.invalidate(f.canvas);
         if(change==='redraw'){f.canvas.dataset.pixel='2';f.runtime.update();}
         if(change==='reset')f.runtime.resetCache();
         if(change==='remove'){f.canvas.remove();f.runtime.update();}
@@ -143,6 +163,165 @@ describe('公开可读漫画画布的任务与显示所有权', () => {
         f.ports.configurationIdentity.mockReturnValue('new model');await flush();expect(openSettings).not.toHaveBeenCalled();
         f.runtime.update();expect(button.isConnected).toBe(false);f.runtime.dispose();
     });
+    it.each(['toggle', 'retry'])('显式%s在旧采样点未变时隐藏旧译层并翻译新原图', async action => {
+        const f = fixture(), reader = readerFor(f);
+        f.canvas.dataset.content = 'A';reader.toggle();await flush();
+        expect(f.ports.translate).toHaveBeenCalledOnce();
+        const output = f.outputs[0], identity = f.runtime.identity(f.canvas);
+        if (action === 'toggle') reader.toggle();
+        f.canvas.dataset.content = 'B';expect(f.runtime.identity(f.canvas)).toBe(identity);
+        if (action === 'toggle') reader.toggle();
+        else expect(reader.retry(f.canvas)).toBe(true);
+        expect(output.isConnected).toBe(false);
+        await flush();
+        expect(f.ports.translate).toHaveBeenCalledTimes(2);
+        expect(f.ports.translate.mock.calls[1][0]).toBe(`data:image/png;base64,${btoa('B')}`);
+        expect(f.outputs[1].isConnected).toBe(true);
+        reader.dispose();f.runtime.dispose();
+    });
+
+    it.each([true, false])('同源显式操作只验证一次并复用已完成译层，不重复模型与合成，缓存开关%s', async cache => {
+        const f = fixture();f.ports.cacheEnabled.mockReturnValue(cache);
+        const reader = readerFor(f);reader.toggle();await flush();
+        const output = f.outputs[0];expect(output.isConnected).toBe(true);expect(encode).toHaveBeenCalledTimes(2);
+        for (const action of ['toggle', 'retry']) {
+            const before = encode.mock.calls.length;
+            if (action === 'toggle') {reader.toggle();reader.toggle();}
+            else expect(reader.retry(f.canvas)).toBe(true);
+            expect(output.isConnected).toBe(false);expect(f.runtime.reuse(f.canvas)).toBe(false);
+            await flush();expect(output.isConnected).toBe(true);expect(encode).toHaveBeenCalledTimes(before + 1);
+            expect(f.ports.translate).toHaveBeenCalledOnce();expect(compose).toHaveBeenCalledOnce();
+        }
+        const count = encode.mock.calls.length;
+        for (let i = 0; i < 20; i++) {f.runtime.identity(f.canvas);f.runtime.update();}
+        expect(encode).toHaveBeenCalledTimes(count);
+        reader.dispose();f.runtime.dispose();
+    });
+
+    it('开启只标记当前及附近画布，远页不保留且无预译时不额外编码', async () => {
+        const f = fixture(), reader = readerFor(f), invalidate = vi.spyOn(f.runtime, 'invalidate');
+        for (let index = 1; index <= 3; index++) {
+            const canvas = f.document.createElement('canvas') as HTMLCanvasElement;canvas.width = 400;canvas.height = 300;
+            canvas.getBoundingClientRect = () => ({left: 0, top: index * 1000, right: 400, bottom: index * 1000 + 300, width: 400, height: 300}) as DOMRect;
+            f.canvas.parentElement!.append(canvas);
+        }
+        reader.toggle();await flush();
+        expect(invalidate).toHaveBeenCalledTimes(3);expect(invalidate).toHaveBeenNthCalledWith(1, f.canvas);
+        expect(f.ports.translate).toHaveBeenCalledOnce();expect(encode).toHaveBeenCalledTimes(2);
+        expect(reader.status()).toMatchObject({pageCount: 4, completed: 1});reader.dispose();f.runtime.dispose();
+    });
+
+    it('初始编码与合成复用同一不可变快照，发布前发现未采样重绘则丢弃译层且不写缓存', async () => {
+        const f = fixture({retry: vi.fn(() => false), openSettings: async () => {}});
+        encode.mockImplementation(async canvas => `data:image/png;base64,${btoa(canvas.dataset.content || 'A')}`);
+        const captured: string[] = [], originalCompose = compose.getMockImplementation()!;
+        compose.mockImplementation(async (...args) => {captured.push((args[0] as HTMLCanvasElement).dataset.content!);return originalCompose(...args);});
+        f.canvas.dataset.content = 'A';
+        f.ports.translate.mockImplementationOnce(async () => {f.canvas.dataset.content = 'B';return result;});
+        await expect(f.runtime.translate(f.canvas)).rejects.toThrow('画布内容已变化');
+        expect(f.ports.translate.mock.calls[0][0]).toBe(`data:image/png;base64,${btoa('A')}`);
+        expect(captured).toEqual(['A']);expect(encode.mock.calls[0][0]).toBe(compose.mock.calls[0][0]);
+        expect(encode.mock.calls[1][0]).toBe(encode.mock.calls[0][0]);
+        expect(f.outputs[0].width).toBe(0);expect(f.outputs[0].isConnected).toBe(false);expect(f.runtime.failed(f.canvas)).toBe(true);
+        const feedback = f.roots[0].querySelector<HTMLElement>('.fr-image-feedback')!;
+        expect(feedback.hidden).toBe(false);expect(feedback.textContent).toContain('画布内容已变化');
+        expect(f.runtime.reuse(f.canvas)).toBe(false);
+        f.canvas.dataset.content = 'A';await f.runtime.translate(f.canvas);
+        expect(f.ports.translate).toHaveBeenCalledTimes(2);expect(f.outputs[1].isConnected).toBe(true);
+        expect(feedback.isConnected).toBe(false);expect(f.roots[0].querySelector('.fr-image-feedback')).toBeNull();f.runtime.dispose();
+    });
+
+    it('A→B→C显式代次丢弃忽略取消的B编码，迟到完成不能覆盖C或恢复旧译层', async () => {
+        const f = fixture();encode.mockImplementation(async canvas => `data:image/png;base64,${btoa(canvas.dataset.content || 'A')}`);
+        await f.runtime.translate(f.canvas);const old = f.outputs[0], pending = deferred<string>();
+        f.canvas.dataset.content = 'B';f.runtime.invalidate(f.canvas);encode.mockReturnValueOnce(pending.promise);
+        const b = f.runtime.translate(f.canvas);await flush();expect(old.isConnected).toBe(false);
+        f.canvas.dataset.content = 'C';f.runtime.invalidate(f.canvas);await f.runtime.translate(f.canvas);
+        const current = f.outputs[1];expect(current.isConnected).toBe(true);
+        pending.resolve(`data:image/png;base64,${btoa('B')}`);await b;
+        expect(current.isConnected).toBe(true);expect(f.ports.translate.mock.calls.map(call => call[0])).toEqual([
+            `data:image/png;base64,${btoa('A')}`, `data:image/png;base64,${btoa('C')}`,
+        ]);expect(old.width).toBe(0);f.runtime.dispose();
+    });
+
+    it('关闭后再次开启取消在途识别但保留串行槽，迟到旧结果不合成且随后只翻译新来源', async () => {
+        const f = fixture(), reader = readerFor(f), pending = deferred<typeof result>();
+        f.canvas.dataset.content = 'A';f.ports.translate.mockReturnValueOnce(pending.promise);
+        reader.toggle();await flush();expect(f.ports.translate).toHaveBeenCalledOnce();
+        f.canvas.dataset.content = 'B';reader.toggle();reader.toggle();await flush();
+        expect(f.ports.translate.mock.calls[0][1].aborted).toBe(true);
+        expect(f.ports.translate).toHaveBeenCalledOnce();expect(compose).not.toHaveBeenCalled();
+        pending.resolve(result);await flush();
+        expect(f.ports.translate.mock.calls.map(call => call[0])).toEqual([
+            `data:image/png;base64,${btoa('A')}`, `data:image/png;base64,${btoa('B')}`,
+        ]);
+        expect(compose).toHaveBeenCalledOnce();expect(f.outputs[0].isConnected).toBe(true);
+        expect(reader.status()).toMatchObject({completed: 1, errors: 0, pending: false});
+        reader.dispose();f.runtime.dispose();
+    });
+
+    it.each(['initial', 'publication'])('异步原生摘要%s阶段取消后不识别、不发布或缓存迟到结果', async phase => {
+        const f = fixture(), pending = deferred<ArrayBuffer>(), digest = vi.fn();
+        if (phase === 'publication') digest.mockResolvedValueOnce(new Uint8Array(32).buffer);
+        digest.mockReturnValueOnce(pending.promise).mockResolvedValue(new Uint8Array(32).buffer);
+        vi.stubGlobal('crypto', {subtle: {digest}});
+        const task = f.runtime.translate(f.canvas);await flush();
+        expect(digest).toHaveBeenCalledTimes(phase === 'initial' ? 1 : 2);
+        f.runtime.invalidate(f.canvas);pending.resolve(new Uint8Array(32).buffer);await task;
+        expect(f.runtime.failed(f.canvas)).toBe(false);
+        if (phase === 'initial') expect(f.ports.translate).not.toHaveBeenCalled();
+        else {expect(f.outputs[0].width).toBe(0);expect(f.outputs[0].isConnected).toBe(false);}
+        await f.runtime.translate(f.canvas);
+        expect(f.ports.translate).toHaveBeenCalledTimes(phase === 'initial' ? 1 : 2);f.runtime.dispose();
+    });
+
+    it('WebCrypto不可用仍以完整来源区分缓存，源注入适配器不进入原生验证合同', async () => {
+        const f = fixture();vi.stubGlobal('crypto', undefined);await f.runtime.translate(f.canvas);
+        f.runtime.invalidate(f.canvas);await f.runtime.translate(f.canvas);expect(f.ports.translate).toHaveBeenCalledOnce();
+        const source = createMangaCanvas({...f.ports, source: {identity: () => 'url-load-revision', bounds: () => f.bounds as DOMRect,
+            capture: async (_element, target) => {target.width = 400;target.height = 300;}}});
+        await source.translate(f.canvas);source.invalidate(f.canvas);expect(source.reuse(f.canvas)).toBe(true);
+        source.dispose();source.invalidate(f.canvas);f.runtime.dispose();f.runtime.invalidate(f.canvas);
+    });
+
+    it('注入来源校验锚点与身份，成功裁切后复用压缩缓存，空身份不抓取', async () => {
+        const f = fixture(), identity = vi.fn<() => string | null>(() => 'segment-1'), anchor = vi.fn(() => f.canvas);
+        const source = createMangaCanvas({...f.ports, source: {identity, anchor, bounds: () => f.bounds as DOMRect,
+            capture: async (_element, target) => {target.width = 400;target.height = 300;},
+            viewport: () => ({x: 0, y: 50, width: 400, height: 200})}});
+        await source.translate(f.canvas);
+        expect(anchor).toHaveBeenCalledWith(f.canvas);expect(f.outputs[0].width).toBe(0);
+        source.release(f.canvas);await source.translate(f.canvas);
+        expect(f.ports.translate).toHaveBeenCalledOnce();expect(compose).toHaveBeenCalledTimes(2);
+        expect(source.reuse(f.canvas)).toBe(true);source.release(f.canvas);identity.mockReturnValue(null);
+        await source.translate(f.canvas);expect(source.identity(f.canvas)).toBeNull();
+        expect(f.ports.translate).toHaveBeenCalledOnce();source.dispose();f.runtime.dispose();
+    });
+
+    it.each(['source', 'publication'])('异步编码%s阶段取消后不启动识别或发布译层', async phase => {
+        const f = fixture(), pending = deferred<string>();
+        const runtime = phase === 'source' ? createMangaCanvas({...f.ports, source: {
+            identity: () => 'background-1', bounds: () => f.bounds as DOMRect,
+            capture: async (_element, target) => {target.width = 400;target.height = 300;},
+        }}) : f.runtime;
+        if (phase === 'publication') encode.mockResolvedValueOnce('data:image/png;base64,AQ==');
+        encode.mockReturnValueOnce(pending.promise);
+        const task = runtime.translate(f.canvas);await flush();runtime.restore(f.canvas);
+        pending.resolve('data:image/png;base64,AQ==');await task;
+        expect(runtime.failed(f.canvas)).toBe(false);
+        if (phase === 'source') expect(f.ports.translate).not.toHaveBeenCalled();
+        else expect(f.outputs[0].width).toBe(0);
+        expect(f.outputs.every(output => !output.isConnected)).toBe(true);runtime.dispose();f.runtime.dispose();
+    });
+
+    it('无文字完成页在显式验证期间也不复用且不合成空译层', async () => {
+        const f = fixture();f.ports.translate.mockResolvedValue({lines: []});
+        await f.runtime.translate(f.canvas);f.runtime.invalidate(f.canvas);await f.runtime.translate(f.canvas);
+        expect(f.ports.translate).toHaveBeenCalledOnce();expect(compose).not.toHaveBeenCalled();
+        expect(f.runtime.reuse(f.canvas)).toBe(true);f.runtime.dispose();
+    });
+
+
     it.each(['context','draw'])('分段输出裁切失败释放上下文和合成画布，并保留原文 %s',async mode=>{
         const f=fixture();
         const runtime=createMangaCanvas({...f.ports,source:{identity:()=> 'crop',bounds:()=>f.bounds as DOMRect,capture:async(_element,target)=>{target.width=400;target.height=300;},viewport:()=>({x:0,y:50,width:400,height:200})}});

@@ -51,19 +51,6 @@ export function supportsNativeVideoFullscreen(video: HTMLVideoElement | null): b
   return Boolean(video && typeof (video as NativeVideo).webkitEnterFullscreen === 'function');
 }
 
-/** VTTCue 接受 WebVTT 标记，正文必须按文字转义，不能把网站的尖括号解释成标签。 */
-export function buildNativeFullscreenCues(state: NativeFullscreenSubtitleState): VideoSubtitleCue[] {
-  return state.cues.flatMap(cue => {
-    const item = nativeCue(state, cue);
-    if (!item) return [];
-    const reading = state.reading;
-    if (reading?.enabled && state.mode !== 'translation-only' && readingKey(reading.source) === readingKey(item.source) && reading.text.trim()) {
-      item.cue.text = withReading(item.cue.text, item.source, reading.text.trim(), state.bilingualOrder === 'translation-first');
-    }
-    return [item.cue];
-  });
-}
-
 export function createNativeFullscreenSubtitles(read: () => NativeFullscreenSubtitleState) {
   let video: NativeVideo | null = null;
   let node: HTMLTrackElement | null = null;

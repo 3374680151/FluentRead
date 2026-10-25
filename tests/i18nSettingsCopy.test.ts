@@ -1,6 +1,6 @@
 /**
  * @file tests/i18nSettingsCopy.test.ts
- * 文件职责：验证通用偏好、悬浮球与免费翻译帮助的七语资源，以及真实悬浮球设置客户端模板。
+ * 文件职责：验证通用偏好、悬浮球、AI 多段与免费翻译帮助的七语资源，以及真实悬浮球设置客户端模板。
  * 主要内容：不安装旧文案扫描器，切换七种语言并验证选项、标签、说明与可访问名称立即同步；扩展和脚本分别展示真实入口；执行显隐、归一化和禁用状态事件。
  * 模块边界：被测 SFC、Vue 响应式与配置归一化保持真实；子控件是可操作端口，不启动浏览器或请求翻译服务。
  */
@@ -17,10 +17,11 @@ registerAllUiLanguageBundles();
 const languages: UiLanguage[] = ['zh-CN', 'en-US', 'ja-JP', 'ko-KR', 'fr-FR', 'ru-RU', 'es-ES'];
 const catalog = (language: UiLanguage) => JSON.parse(readFileSync(`src/core/i18n/messages/settings-copy/${language}.json`, 'utf8')) as {messages: Record<string, string>; legacy: Record<string, string>};
 const changedKeys = Object.keys(catalog('en-US').messages).filter(key => key.startsWith('settings.floatingBall.')
-  || key.startsWith('settings.personalCorrections.') || [
+  || key.startsWith('settings.personalCorrections.') || key.startsWith('settings.fullPage.multiSegment') || [
     'options.panel.floatingBall', 'settings.general.assistance', 'settings.general.aiContextHelp', 'settings.general.floatingBall',
     'settings.general.floatingBallDescription', 'settings.general.progressPanel', 'settings.general.progressPanelDescription',
     'settings.general.preferences', 'settings.general.themeDescription', 'settings.services.freeWeights.timeoutHelp',
+    'settings.fullPage.multiSegmentDescription', 'settings.fullPage.multiSegmentHelp',
   ].includes(key));
 let app: Vue.App | undefined;
 afterEach(() => {app?.unmount();app = undefined;vi.unstubAllGlobals();});

@@ -203,7 +203,10 @@ describe('mobile viewport menu host', () => {
     expect(probes()).toBe(1);
     binding.syncMenuHost(); binding.sync(); binding.syncMenuHost();
     expect(probes()).toBe(1); expect(factory).toHaveBeenCalledOnce();
-    expect(f.document.querySelectorAll('span[aria-hidden="true"]')).toHaveLength(0);
+    // 只认领实际被测量且使用安全区 env 的临时探针；菜单双行示意也合法使用 aria-hidden span。
+    const safeAreaProbe = f.safeReads.mock.calls.find(([node]) => node.matches('span[aria-hidden="true"][style*="safe-area-inset-top"]'))?.[0];
+    expect(safeAreaProbe).toBeDefined();
+    expect(safeAreaProbe?.parentNode).toBeNull();
     f.viewport.height = 180; f.viewport.offsetTop = 80;
     binding.syncMenuHost(); expect(host.clientHeight).toBe(154); expect(probes()).toBe(2);
     f.insets.bottom = 25; f.viewport.dispatchEvent(new f.window.Event('resize')); binding.syncMenuHost();

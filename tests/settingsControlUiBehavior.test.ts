@@ -19,11 +19,11 @@ import {options, getMultilingualTargetLanguageLabel} from '@/src/core/config/cat
 import {SENTENCE_HIGHLIGHT_STYLES} from '@/src/core/config/sentenceHighlight';
 import {getDefaultHarnessPrompt} from '@/src/core/harness/prompts';
 import {HARNESS_PROMPT_MAX_LENGTH, HARNESS_PROMPT_VARIABLES} from '@/src/core/config/harness';
-const webdav=vi.hoisted(()=>({settings:vi.fn(),clear:vi.fn(),save:vi.fn(),test:vi.fn(),confirm:vi.fn(),success:vi.fn(),status:vi.fn(),prepare:vi.fn(),prepareDelete:vi.fn(),cancel:vi.fn()}));
+const webdav=vi.hoisted(()=>({settings:vi.fn(),clear:vi.fn(),save:vi.fn(),test:vi.fn(),confirm:vi.fn(),success:vi.fn(),warning:vi.fn(),status:vi.fn(),prepare:vi.fn(),prepareDelete:vi.fn(),cancel:vi.fn()}));
 vi.mock('@/src/services/config/webDavBackupClient',()=>({webDavBackupClient:webdav}));
 vi.mock('webextension-polyfill',()=>({default:{runtime:{sendMessage:vi.fn()}}}));
 vi.mock('element-plus/es/components/alert/style/css',()=>({}));
-vi.mock('element-plus',()=>({ElAlert:{props:['title','type'],setup:(props:any)=>()=>h('p',{role:'alert','data-alert-type':props.type},props.title)},ElMessage:{success:webdav.success},ElMessageBox:{confirm:webdav.confirm}}));
+vi.mock('element-plus',()=>({ElAlert:{props:['title','type'],setup:(props:any)=>()=>h('p',{role:'alert','data-alert-type':props.type},props.title)},ElMessage:{success:webdav.success,warning:webdav.warning},ElMessageBox:{confirm:webdav.confirm}}));
 // RemoteConfigSync's public client contract is driven through child UI events; its separate lifecycle suite keeps the full transaction implementation real.
 vi.mock('@/src/features/settings/ui/RemoteConfigSync.vue',()=>({default:{props:['client'],emits:['busy'],setup:(props:any,{slots,expose,emit}:any)=>{
   const status=ref<any>(null),result=ref('');
@@ -41,7 +41,7 @@ vi.mock('@/src/features/settings/ui/HarnessSettings.vue',()=>({default:{emits:['
 vi.mock('@/src/features/reading-assistant/ui/answer/public',()=>({ReadingAnswer:{props:['text'],setup:(props:any)=>()=>h('output',props.text)}}));
 vi.mock('@/src/features/settings/ui/components/TranslationStylePreview.vue',()=>({default:{props:['pageTheme'],emits:['update:pageTheme'],setup:(props:any,{emit}:any)=>()=>h('button',{'data-preview-theme':props.pageTheme,onClick:()=>emit('update:pageTheme',props.pageTheme==='light'?'dark':'light')},'Preview')}}));
 vi.mock('@/src/features/settings/ui/components/SettingsNumberInput.vue',()=>({default:{props:['modelValue'],emits:['update:modelValue','change'],setup:(props:any,{emit,attrs}:any)=>()=>h('input',{...attrs,value:props.modelValue,onChange:(event:Event)=>{const raw=(event.target as HTMLInputElement).value;const value=raw===''?undefined:Number(raw);emit('update:modelValue',value);emit('change',value);}})}}));
-vi.mock('@/src/features/settings/ui/components/SegmentedControl.vue',()=>({default:{props:['modelValue','options'],emits:['update:modelValue'],setup:(props:any,{emit}:any)=>()=>h('div',props.options.map((option:any)=>h('button',{'data-prompt-kind':option.value,onClick:()=>emit('update:modelValue',option.value)},option.label)))}}));
+vi.mock('@/src/features/settings/ui/components/SegmentedControl.vue',()=>({default:{props:['modelValue','options','disabled'],emits:['update:modelValue'],setup:(props:any,{emit}:any)=>()=>h('div',props.options.map((option:any)=>h('button',{'data-prompt-kind':option.value,disabled:props.disabled,onClick:()=>emit('update:modelValue',option.value)},option.label)))}}));
 const SwitchPort=defineComponent({inheritAttrs:false,props:['modelValue'],emits:['update:modelValue'],setup:(props,{attrs,emit})=>()=>h('button',{...attrs,role:'switch','aria-checked':props.modelValue,onClick:()=>emit('update:modelValue',!props.modelValue)},'Switch')});
 let doc: Document, win: any;
 const apps = new Set<App>();
@@ -83,16 +83,21 @@ async function click(node:Element){expect(node.hasAttribute('disabled')).toBe(fa
 async function input(node:Element,value:string){(node as HTMLInputElement).value=value;node.dispatchEvent(new win.Event('input',{bubbles:true}));await flush();}
 
 
-it('normalizes paragraph thresholds and updates both layout switches through real template events',async()=>{
+it('normalizes paragraph thresholds and changes paragraph layout through real template events',async()=>{
   const config=reactive(new Config());const ui=mount(ParagraphHandlingSettings,{config});
   const fields=[...ui.host.querySelectorAll('input')];
   for(const raw of ['-1','999999999','', '42'])for(const [index,field] of fields.entries()){
     field.value=raw;field.dispatchEvent(new win.Event('change',{bubbles:true}));await flush();
     expect(index===0?config.minTranslationTextLength:config.eagerTranslationCharacters).toBe((index===0?normalizeMinTranslationTextLength:normalizeEagerTranslationCharacters)(raw===''?undefined:Number(raw)));
   }
-  for(const [index,field] of [...ui.host.querySelectorAll('[role="switch"]')].entries()){
-    const key=index===0?'longParagraphLineBreakEnabled':'translationBeforeOriginal';const before=config[key];await click(field);expect(config[key]).toBe(!before);
-  }
+  const before=config.longParagraphLineBreakEnabled;await click(ui.host.querySelector('[role="switch"]')!);expect(config.longParagraphLineBreakEnabled).toBe(!before);
+  const options=ui.host.querySelectorAll('[data-page-translation-order] button');
+  await click(options[1]);expect(config.translationBeforeOriginal).toBe(true);
+  await click(options[0]);expect(config.translationBeforeOriginal).toBe(false);
+  config.display=0;await flush();expect([...options].every(node=>node.hasAttribute('disabled'))).toBe(true);
+  expect(config.translationBeforeOriginal).toBe(false);
+  await click(button(ui.host,'settings.translationStyle.switchToBilingual'));expect(config.display).toBe(1);
+  expect([...options].every(node=>!node.hasAttribute('disabled'))).toBe(true);
 });
 it.each(['bilingual','translation-only','disabled'] as const)('preserves the previous enabled selection mode from %s',async mode=>{
   const config=reactive(new Config());config.selectionTranslatorMode=mode;const navigate=vi.fn();const ui=mount(SelectionSettings,{config,onNavigate:navigate});await click(ui.host.querySelector('[data-learning-navigation]')!);expect(navigate).toHaveBeenCalledWith('settings-vocabulary');
@@ -208,4 +213,14 @@ it('requires explicit insecure-HTTP consent and clears password on the actual di
   const save=ui.host.querySelector('[data-testid="webdav-save"]')!;expect(save.hasAttribute('disabled')).toBe(true);expect(ui.host.textContent).toContain('settings.webdav.httpWarning');
   const consent=ui.host.querySelector<HTMLInputElement>('input[type="checkbox"]')!;consent.checked=true;consent.dispatchEvent(new win.Event('change',{bubbles:true}));await flush();expect(save.hasAttribute('disabled')).toBe(false);
   const password=ui.host.querySelector('#webdav-password')!;await click(ui.host.querySelector('[data-dialog-dismiss]')!);expect(ui.host.querySelector('[data-dialog]')).toBeNull();await click(ui.host.querySelector('[data-testid="webdav-setup"]')!);expect((ui.host.querySelector('#webdav-password') as HTMLInputElement).value).toBe('');expect(password.isConnected).toBe(false);
+});
+
+it('划词真实开关在停用后重读点选冲突，保留原显示方式并允许显式解除',async()=>{
+  const config=reactive(Object.assign(new Config(),{selectionTranslatorMode:'translation-only',disableSelectionTranslator:false,selectionClickSelectEnabled:true}));
+  const ui=mount(SelectionSettings,{config});const toggle=ui.host.querySelector('[role="switch"]')!;await click(toggle);
+  config.quickTranslationProfiles=[{id:'occupied',action:'section',enabled:true,hotkey:'Alt+Shift+S',service:'',model:'',targetLanguage:'',displayMode:'inherit',fullPageMode:'inherit'}];
+  await click(toggle);expect(config.selectionTranslatorMode).toBe('disabled');expect(config.disableSelectionTranslator).toBe(true);expect(webdav.warning).toHaveBeenCalled();
+  config.quickTranslationProfiles[0].enabled=false;await click(toggle);expect(config.selectionTranslatorMode).toBe('translation-only');
+  await click(toggle);config.quickTranslationProfiles[0].enabled=true;config.selectionClickSelectEnabled=false;await click(toggle);
+  expect(config.selectionTranslatorMode).toBe('translation-only');expect(config.disableSelectionTranslator).toBe(false);
 });

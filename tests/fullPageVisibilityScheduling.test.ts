@@ -1,4 +1,5 @@
 import {afterEach, beforeEach, describe, expect, it, vi} from "vitest";
+import {getEventListeners, setMaxListeners} from 'node:events';
 import {parseHTML} from "linkedom";
 import chinesePosts from './fixtures/chinese-language-posts.json';
 import technicalPr906Posts from './fixtures/chinese-technical-pr-906.json';
@@ -10,6 +11,7 @@ import {builtinSiteRulePack} from '@/src/core/site-adaptation/catalog';
 import {normalizeSiteAdaptationSettings} from '@/src/core/site-adaptation/schema';
 import {collapseMutationRescanRoot, isConnectedMutationRoot, isOwnSyntheticSegmentMarkerMutation, mutationRootContains} from '@/src/features/full-page-translation/content/mutationObservation';
 import {DEFAULT_EAGER_TRANSLATION_CHARACTERS} from '@/src/core/config/pageTranslation';
+import {serializeTranslationSlots} from '@/src/core/translation/public';
 
 const runtime = vi.hoisted(() => ({
     realCore: null as TranslationCandidateCore | null,
@@ -62,6 +64,8 @@ const runtime = vi.hoisted(() => ({
         useCache: true,
         enableAIContext: false,
         enableAIMultiSegment: false,
+        aiMultiSegmentMaxSegments: 8,
+        aiMultiSegmentMaxCharacters: 2_000,
         nativeBatchTranslationEnabled: {} as Record<string, boolean>,
         display: 0,
         style: 0,
@@ -154,7 +158,6 @@ vi.mock('@/src/features/full-page-translation/ui/translationIndicators', () => (
 vi.mock("@/src/features/full-page-translation/content/titleTranslation", () => ({
     startFullPageTitleTranslation: () => undefined,
     stopFullPageTitleTranslation: () => undefined,
-    isFullPageTitleTranslationActive: () => false,
 }));
 vi.mock("@/src/features/full-page-translation/content/renderer", async (importOriginal) => ({
     ...await importOriginal<typeof import("@/src/features/full-page-translation/content/renderer")>(),
@@ -369,6 +372,7 @@ import {
 import {
     captureFullPageTranslationConfig,
     clearFullPageTranslationRequestCache,
+    getFullPageTranslationCandidateConcurrency,
     getTranslationInvocationIdentity,
     translateTextSlots,
     type FullPageTranslationConfigSnapshot,
@@ -563,6 +567,8 @@ describe("全文翻译可见性锚点", () => {
         runtime.config.useCache = true;
         runtime.config.enableAIContext = false;
         runtime.config.enableAIMultiSegment = false;
+        runtime.config.aiMultiSegmentMaxSegments = 8;
+        runtime.config.aiMultiSegmentMaxCharacters = 2_000;
         runtime.config.nativeBatchTranslationEnabled = {};
         runtime.config.display = 0;
         runtime.config.style = 0;
@@ -2973,7 +2979,7 @@ describe("全文翻译可见性锚点", () => {
         expect(singleTranslationText(second)).toBe(`译:${sourceText}`);
     });
 
-    it.each([true, false])('provider 等待期间显示设置变化仍沿用会话换行与顺序 %s', async (frozen) => {
+    it.each([true, false])('provider 等待期间顺序变化立即生效并沿用会话换行 %s', async (frozen) => {
         runtime.config.display = 1;
         runtime.config.fullPageTranslationMode = 'all';
         runtime.config.longParagraphLineBreakEnabled = frozen;
@@ -2993,11 +2999,11 @@ describe("全文翻译可见性锚点", () => {
         pending.resolve(['保持开始翻译时选择的展示设置。']);
         await finishScheduledWork();
         expect(runtime.renderOptions.at(-1)).toMatchObject({
-            longParagraphLineBreak: frozen, translationBeforeOriginal: frozen,
+            longParagraphLineBreak: frozen, translationBeforeOriginal: !frozen,
         });
         const state = getTranslationState(paragraph)!;
-        expect(state.bilingualReplay).toMatchObject({longParagraphLineBreak: frozen});
-        expect(state.bilingualBeforeSource).toBe(frozen);
+        expect(state.bilingualReplay).toMatchObject({longParagraphLineBreak: frozen, translationBeforeOriginal: !frozen});
+        expect(state.bilingualBeforeSource).toBe(!frozen);
         expect(paragraph.contains(source)).toBe(true);
         expect(runtime.requests).toHaveBeenCalledTimes(1);
     });
@@ -3031,6 +3037,8 @@ describe("全文翻译可见性锚点", () => {
             useCache: true,
             enableAIContext: false,
             enableAIMultiSegment: false,
+            aiMultiSegmentMaxSegments: 8,
+            aiMultiSegmentMaxCharacters: 2_000,
             displayMode: 'bilingual',
         });
         runtime.config.display = 0;
@@ -3728,6 +3736,78 @@ describe("全文翻译可见性锚点", () => {
         expect(vi.getTimerCount()).toBe(0);
     });
 
+    it.each([
+        {service: 'ai', enabled: true, model: 'ai-model', configured: 1, expected: 8},
+        {service: 'ai', enabled: true, model: 'ai-model', configured: 2, expected: 8},
+        {service: 'ai', enabled: true, model: 'ai-model', configured: 10, expected: 10},
+        {service: 'ai', enabled: true, model: 'ai-model', configured: 100, expected: 100},
+        {service: 'ai', enabled: true, model: 'ai-model', configured: 0, expected: 10},
+        {service: 'ai', enabled: false, model: 'ai-model', configured: 1, expected: 1},
+        {service: 'ai', enabled: true, model: 'mt-only', configured: 1, expected: 1},
+        {service: 'microsoft', enabled: true, model: '', configured: 1, expected: 1},
+        {service: 'composite:fixture', enabled: true, model: '', configured: 1, expected: 1},
+    ])('候选准备容量仅为可用 AI 多段保留一批 %j', ({service, enabled, model, configured, expected}) => {
+        expect(getFullPageTranslationCandidateConcurrency(translationSnapshot({service, model, enableAIMultiSegment: enabled}), configured))
+            .toBe(expected);
+    });
+
+    it.each([2, 16, 32])('AI 自定义 %s 段预算同时决定候选准备容量与分包，仍独立于请求并发', async maxSegments => {
+        const controllers: AbortController[] = [];
+        const BrowserAbortController = AbortController;
+        replaceGlobal('AbortController', class extends BrowserAbortController {
+            constructor() {
+                super();
+                // 浏览器 EventTarget 没有 Node 的默认十监听器门槛；只为本用例允许最多两批32段，结束仍检查全部释放。
+                setMaxListeners(64, this.signal);
+                controllers.push(this);
+            }
+        });
+        runtime.config.service = 'ai';
+        runtime.config.model.ai = 'ai-model';
+        runtime.config.enableAIMultiSegment = true;
+        runtime.config.aiMultiSegmentMaxSegments = maxSegments;
+        runtime.config.maxConcurrentTranslations = 1;
+        runtime.config.display = 1;
+        runtime.config.fullPageTranslationMode = 'all';
+        const snapshot = captureFullPageTranslationConfig();
+        expect(getFullPageTranslationCandidateConcurrency(snapshot, 1)).toBe(maxSegments);
+        expect(getFullPageTranslationCandidateConcurrency(snapshot, 100)).toBe(100);
+        const sources = Array.from({length: maxSegments + 1}, (_, index) => `Custom budget paragraph ${index}.`);
+        document.body.innerHTML = `<main>${sources.map(source => `<p>${source}</p>`).join('')}</main>`;
+        const owners = Array.from(document.querySelectorAll<HTMLElement>('p'));
+        owners.forEach(owner => setLayoutBox(owner, 600, 60));
+        runtime.candidates = owners.map(element => ({element, kind: 'content', reason: 'ai-custom-budget'}));
+        autoTranslateEnglishPage();
+        await finishScheduledWork();
+        expect(runtime.requests.mock.calls.map(([origins]) => origins)).toEqual([sources.slice(0, maxSegments), sources.slice(maxSegments)]);
+        expect(owners.map(owner => owner.querySelector('.fluent-read-bilingual-content')?.textContent))
+            .toEqual(sources.map(source => `译:${source}`));
+        restoreOriginalContent();
+        expect(controllers.every(controller => getEventListeners(controller.signal, 'abort').length === 0)).toBe(true);
+    });
+
+    it.each([1, 2])('AI 多段在请求并发 %s 时仍准入默认八段，两个批次按来源顺序回填', async concurrency => {
+        runtime.config.service = 'ai';
+        runtime.config.model.ai = 'ai-model';
+        runtime.config.enableAIMultiSegment = true;
+        runtime.config.maxConcurrentTranslations = concurrency;
+        runtime.config.display = 1;
+        runtime.config.fullPageTranslationMode = 'all';
+        const sources = Array.from({length: 16}, (_, index) => `Batch paragraph number ${index}.`);
+        document.body.innerHTML = `<main>${sources.map(source => `<p>${source}</p>`).join('')}</main>`;
+        const owners = Array.from(document.querySelectorAll<HTMLElement>('p'));
+        owners.forEach(owner => setLayoutBox(owner, 600, 60));
+        runtime.candidates = owners.map(element => ({element, kind: 'content', reason: 'ai-low-concurrency'}));
+        autoTranslateEnglishPage();
+        await finishScheduledWork();
+        expect(runtime.requests.mock.calls.map(([origins]) => origins)).toEqual([sources.slice(0, 8), sources.slice(8)]);
+        expect(owners.map(owner => owner.querySelector('.fluent-read-bilingual-content')?.textContent))
+            .toEqual(sources.map(source => `译:${source}`));
+        expect(runtime.requestOptions.every(options => options.aiMultiSegment === true)).toBe(true);
+        restoreOriginalContent();
+        expect(owners.map(owner => owner.textContent)).toEqual(sources);
+    });
+
     it('AI 多段经过 8ms 全文 drain 切片仍合并邻段并按各自 owner 回填', async () => {
         runtime.config.service = 'ai';
         runtime.config.model.ai = 'ai-model';
@@ -4206,6 +4286,132 @@ describe("全文翻译可见性锚点", () => {
         expect(runtime.requests).toHaveBeenCalledTimes(2);
     });
 
+    it.each([
+        {maxCharacters: 500, sourceLength: 200},
+        {maxCharacters: 2_000, sourceLength: 800},
+        {maxCharacters: 12_000, sourceLength: 5_000},
+    ])('AI 按自定义原文字符预算分包 $maxCharacters，长段不会填满段数才发送', async ({maxCharacters, sourceLength}) => {
+        const snapshot = translationSnapshot({service: 'ai', enableAIMultiSegment: true,
+            aiMultiSegmentMaxSegments: 32, aiMultiSegmentMaxCharacters: maxCharacters});
+        const sources = Array.from({length: 5}, (_, index) => String.fromCharCode(65 + index).repeat(sourceLength));
+        const session = {active: true, translationSlotCache: new Map()};
+        await expect(collectAIRequest(Promise.all(sources.map(source => translateTextSlots(
+            [source], snapshot, undefined, undefined, session)))))
+            .resolves.toEqual(sources.map(source => [`译:${source}`]));
+        expect(runtime.requests.mock.calls.map(([origins]) => origins)).toEqual([
+            sources.slice(0, 2), sources.slice(2, 4), sources.slice(4),
+        ]);
+    });
+
+    it('超过 AI 原文预算的单个候选完整独立发送，后续短段仍可合批', async () => {
+        const snapshot = translationSnapshot({service: 'ai', enableAIMultiSegment: true,
+            aiMultiSegmentMaxSegments: 32, aiMultiSegmentMaxCharacters: 500});
+        const session = {active: true, translationSlotCache: new Map()};
+        const sources = ['A'.repeat(600), 'B'.repeat(200), 'C'.repeat(200)];
+        await collectAIRequest(Promise.all(sources.map(source => translateTextSlots(
+            [source], snapshot, undefined, undefined, session))));
+        expect(runtime.requests.mock.calls.map(([origins]) => origins)).toEqual([sources.slice(0, 1), sources.slice(1)]);
+    });
+
+    it('超过 AI 两槽预算的单个富文本候选完整独立发送，后续短段按 owner 合批回填', async () => {
+        document.body.innerHTML = '<main><p id="rich">Read <strong>the guide</strong> carefully.</p><p id="second">Second paragraph.</p><p id="third">Third paragraph.</p></main>';
+        const owners = Array.from(document.querySelectorAll('p'));
+        const sources = [['Read ', 'the guide', ' carefully.'], ['Second paragraph.'], ['Third paragraph.']];
+        const richTranslations = ['阅读', '指南', '并仔细理解。'];
+        runtime.parsedSlots = richTranslations;
+        const snapshot = translationSnapshot({service: 'ai', enableAIMultiSegment: true,
+            aiMultiSegmentMaxSegments: 2, aiMultiSegmentMaxCharacters: 2_000});
+        const session = {active: true, translationSlotCache: new Map()};
+        const results = await collectAIRequest(Promise.all([2, 0, 1].map(async index => {
+            const owner = owners[index]!;
+            const translations = await translateTextSlots(sources[index]!, snapshot,
+                undefined, undefined, session, false, owner);
+            return [owner.id, translations] as const;
+        })));
+        expect(Object.fromEntries(results)).toEqual({
+            rich: richTranslations,
+            second: ['译:Second paragraph.'],
+            third: ['译:Third paragraph.'],
+        });
+        expect(runtime.requests.mock.calls.map(([origins]) => origins)).toEqual([
+            [serializeTranslationSlots(sources[0]!).payload],
+            ['Second paragraph.', 'Third paragraph.'],
+        ]);
+        expect(runtime.requestOptions[0]).toMatchObject({validateTranslationSlots: true});
+        expect(runtime.requestOptions[1]).toMatchObject({aiMultiSegment: true});
+    });
+
+    it.each([
+        {field: 'aiMultiSegmentMaxSegments' as const, initial: 2, changed: 32, sourceLength: 20},
+        {field: 'aiMultiSegmentMaxCharacters' as const, initial: 500, changed: 12_000, sourceLength: 200},
+    ])('AI 收集等待冻结 $field 并隔离不同预算的在途 owner 请求', async ({field, initial, changed, sourceLength}) => {
+        const snapshot = translationSnapshot({service: 'ai', enableAIMultiSegment: true, [field]: initial});
+        const original = {...snapshot};
+        const session = {active: true, translationSlotCache: new Map(),
+            ...createFullPageRequestSessionState()};
+        const sources = ['A', 'B', 'C'].map(source => source.repeat(sourceLength));
+        const pending = Promise.all(sources.map(source => translateTextSlots([source], snapshot, undefined, undefined, session)));
+        snapshot[field] = changed;
+        await collectAIRequest(pending);
+        expect(runtime.requests.mock.calls.map(([origins]) => origins)).toEqual([sources.slice(0, 2), sources.slice(2)]);
+        expect(getTranslationInvocationIdentity(original)).not.toBe(getTranslationInvocationIdentity(snapshot));
+
+        runtime.requests.mockClear();
+        const owner = document.createElement('p');
+        const sameOrigin = 'Same paragraph with different batch budgets';
+        await collectAIRequest(Promise.all([
+            translateTextSlots([sameOrigin], original, undefined, undefined, session, false, owner),
+            translateTextSlots([sameOrigin], snapshot, undefined, undefined, session, false, owner),
+        ]));
+        expect(runtime.requests).toHaveBeenCalledTimes(2);
+    });
+
+    it.each([
+        {field: 'aiMultiSegmentMaxSegments' as const, first: 2, second: 32},
+        {field: 'aiMultiSegmentMaxCharacters' as const, first: 500, second: 12_000},
+    ])('AI 相同服务的 $field 预算不同也不能混入同一批', async ({field, first, second}) => {
+        const session = {active: true, translationSlotCache: new Map()};
+        const snapshot = translationSnapshot({service: 'ai', enableAIMultiSegment: true});
+        await collectAIRequest(Promise.all(['A', 'B', 'C', 'D'].map((source, index) => translateTextSlots(
+            [source], {...snapshot, [field]: index < 2 ? first : second}, undefined, undefined, session))));
+        expect(runtime.requests.mock.calls.map(([origins]) => origins)).toEqual([['A', 'B'], ['C', 'D']]);
+    });
+
+    it.each([
+        {service: 'microsoft', model: '', enabled: true},
+        {service: 'ai', model: 'ai-model', enabled: false},
+        {service: 'ai', model: 'mt-only', enabled: true},
+    ])('无效 AI 预算变化不撤销 $service/$model 的操作身份或在途缓存复用', async ({service, model, enabled}) => {
+        runtime.nativeBatchEnabled = true;
+        const first = translationSnapshot({service, model, enableAIMultiSegment: enabled,
+            aiMultiSegmentMaxSegments: 2, aiMultiSegmentMaxCharacters: 500});
+        const second = {...first, aiMultiSegmentMaxSegments: 32, aiMultiSegmentMaxCharacters: 12_000};
+        expect(getTranslationInvocationIdentity(first)).toBe(getTranslationInvocationIdentity(second));
+        const session = {active: true, translationSlotCache: new Map(), ...createFullPageRequestSessionState()};
+        const source = 'One request keeps its ownership when unrelated AI budgets change.';
+        await Promise.all([
+            translateTextSlots([source], first, undefined, undefined, session),
+            translateTextSlots([source], second, undefined, undefined, session),
+        ]);
+        expect(runtime.requests).toHaveBeenCalledOnce();
+    });
+
+    it.each([
+        {aiMultiSegmentMaxSegments: 2, aiMultiSegmentMaxCharacters: 500},
+        {aiMultiSegmentMaxSegments: 32, aiMultiSegmentMaxCharacters: 12_000},
+    ])('AI 预算 %j 不改变原生服务四槽和两千字符上限', async budgets => {
+        runtime.nativeBatchEnabled = true;
+        const snapshot = translationSnapshot({...budgets, enableAIMultiSegment: true});
+        const session = {active: true, translationSlotCache: new Map()};
+        await Promise.all(['A', 'B', 'C', 'D', 'E'].map(source => translateTextSlots(
+            [source], snapshot, undefined, undefined, session)));
+        expect(runtime.requests.mock.calls.map(([origins]) => origins)).toEqual([['A', 'B', 'C', 'D'], ['E']]);
+        runtime.requests.mockClear();
+        const sources = ['F'.repeat(1_500), 'G'.repeat(600)];
+        await Promise.all(sources.map(source => translateTextSlots([source], snapshot, undefined, undefined, session)));
+        expect(runtime.requests.mock.calls.map(([origins]) => origins)).toEqual(sources.map(source => [source]));
+    });
+
     it('AI 收集窗口使用调用时的原文与配置，外部修改不污染旧请求或会话缓存', async () => {
         const requestController = new AbortController();
         const session: FullPageTranslationSessionCache = {active: true, translationSlotCache: new Map(), translationRequestCache: new Map(),
@@ -4268,7 +4474,7 @@ describe("全文翻译可见性锚点", () => {
         expect(sampleBuilds).toBe(1);
     });
 
-    it('AI 多段按完整请求快照分批，并以四个文本槽为跨候选合批上限', async () => {
+    it('AI 多段按完整请求快照分批，并遵守自定义四个文本槽上限', async () => {
         const session = {active: true, translationSlotCache: new Map()};
         const firstModel = translationSnapshot({
             service: 'ai',
@@ -4298,6 +4504,7 @@ describe("全文翻译可见性锚点", () => {
             service: 'ai',
             model: 'ai-model',
             enableAIMultiSegment: true,
+            aiMultiSegmentMaxSegments: 4,
         });
         await expect(collectAIRequest(Promise.all([
             translateTextSlots(['A1', 'A2'], enabled, undefined, undefined, session),
@@ -4354,6 +4561,47 @@ describe("全文翻译可见性锚点", () => {
         const second = translateTextSlots(['Second'], enabled, undefined, undefined, freshSession);
         await expect(collectAIRequest(Promise.all([first, second]))).rejects.toThrow('provider unavailable');
         expect(runtime.requests).toHaveBeenCalledTimes(1);
+    });
+
+    it('AI 在途协议失败后，已进入下一收集窗口的候选也按逐槽回退', async () => {
+        const session = {active: true, translationSlotCache: new Map()};
+        const snapshot = translationSnapshot({service: 'ai', enableAIMultiSegment: true});
+        const provider = deferred<string[]>();
+        runtime.requests.mockReturnValueOnce(provider.promise);
+        const first = Promise.all([
+            translateTextSlots(['First'], snapshot, undefined, undefined, session),
+            translateTextSlots(['Second'], snapshot, undefined, undefined, session),
+        ]);
+        await vi.advanceTimersByTimeAsync(32);
+        expect(runtime.requests).toHaveBeenCalledOnce();
+        const queued = translateTextSlots(['Queued one', 'Queued two'], snapshot, undefined, undefined, session);
+        provider.reject({kind: 'response', code: 'AI_MULTI_SEGMENT_RESPONSE_INVALID'});
+        await expect(first).resolves.toEqual([['译:First'], ['译:Second']]);
+        expect(runtime.requests).toHaveBeenCalledTimes(3);
+        await vi.advanceTimersByTimeAsync(32);
+        await expect(queued).resolves.toEqual(['译:Queued one', '译:Queued two']);
+        expect(runtime.requests.mock.calls.slice(1).map(([texts]) => texts)).toEqual([
+            ['First'], ['Second'], ['Queued one'], ['Queued two'],
+        ]);
+        expect(runtime.requestOptions.slice(1).every(options => !options.aiMultiSegment && !options.validateTranslationSlots)).toBe(true);
+    });
+
+    it('AI 协议熔断后的后续请求立即逐槽执行，不再等待收集窗口', async () => {
+        const session = {active: true, translationSlotCache: new Map()};
+        const snapshot = translationSnapshot({service: 'ai', enableAIMultiSegment: true});
+        runtime.requests.mockRejectedValueOnce({kind: 'response', code: 'AI_MULTI_SEGMENT_RESPONSE_INVALID'});
+        await collectAIRequest(Promise.all([
+            translateTextSlots(['First'], snapshot, undefined, undefined, session),
+            translateTextSlots(['Second'], snapshot, undefined, undefined, session),
+        ]));
+        runtime.requests.mockClear();
+        runtime.requestOptions = [];
+        const timers = vi.getTimerCount();
+        await expect(translateTextSlots(['After failure', 'Another slot'], snapshot, undefined, undefined, session))
+            .resolves.toEqual(['译:After failure', '译:Another slot']);
+        expect(runtime.requests.mock.calls.map(([texts]) => texts)).toEqual([['After failure'], ['Another slot']]);
+        expect(runtime.requestOptions.every(options => !options.aiMultiSegment && !options.validateTranslationSlots)).toBe(true);
+        expect(vi.getTimerCount()).toBe(timers);
     });
 
     it('AI 多段共享请求允许取消单个候选，剩余候选仍按原槽位取回结果', async () => {

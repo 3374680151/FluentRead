@@ -534,6 +534,109 @@ describe('document history storage', () => {
         expect(await history.list()).toEqual([]);
         expect(await history.save(record('b', 2))).toBe(true); expect((await history.list()).map(entry => entry.id)).toEqual(['b']);
     });
+    it.each(['blocked', 'timeout'] as const)('closes a late %s opening without invalidating the recovered connection', async reason => {
+        vi.useFakeTimers({toFake: ['setTimeout', 'clearTimeout']});
+        try {
+            const factory = new IDBFactory();
+            const lateDatabase = {close: vi.fn()} as unknown as IDBDatabase;
+            const pending = {result: lateDatabase} as unknown as IDBOpenDBRequest;
+            const open = vi.fn().mockReturnValueOnce(pending).mockImplementation((name, version) => factory.open(name, version));
+            const history = createDocumentHistory({open} as unknown as IDBFactory, 20);
+            const first = history.list();
+            if (reason === 'blocked') pending.onblocked!(new Event('blocked') as IDBVersionChangeEvent);
+            else await vi.advanceTimersByTimeAsync(20);
+            expect(await first).toEqual([]);
+            expect(await history.list()).toEqual([]);
+            expect(open).toHaveBeenCalledTimes(2);
+            pending.onsuccess!(new Event('success'));
+            await Promise.resolve();
+            expect(lateDatabase.close).toHaveBeenCalledOnce();
+            lateDatabase.onversionchange?.(new Event('versionchange') as IDBVersionChangeEvent);
+            expect(await history.list()).toEqual([]);
+            expect(open).toHaveBeenCalledTimes(2);
+            expect(vi.getTimerCount()).toBe(0);
+        } finally {vi.useRealTimers();}
+    });
+    it('does not let an invalidated connection versionchange discard the next active connection', async () => {
+        vi.useFakeTimers({toFake: ['setTimeout', 'clearTimeout']});
+        try {
+            const factory = new IDBFactory(), actualOpen = factory.open.bind(factory);
+            let ready!: () => void;
+            const reading = new Promise<void>(resolve => {ready = resolve;});
+            let previous!: IDBDatabase, previousVersionChange!: IDBDatabase['onversionchange'];
+            let delay = true;
+            const open = vi.spyOn(factory, 'open').mockImplementation((name, version) => {
+                const request = actualOpen(name, version);
+                request.addEventListener('success', () => {
+                    const database = request.result, transaction = database.transaction.bind(database);
+                    vi.spyOn(database, 'transaction').mockImplementation((stores, mode, options) => {
+                        const result = transaction(stores, mode, options);
+                        if (delay && mode === 'readonly') {
+                            delay = false;
+                            const objectStore = result.objectStore.bind(result);
+                            vi.spyOn(result, 'objectStore').mockImplementation(store => {
+                                const target = objectStore(store);
+                                vi.spyOn(target, 'openCursor').mockImplementation(() => {
+                                    previous = database; previousVersionChange = database.onversionchange; ready();
+                                    return {} as IDBRequest<IDBCursorWithValue | null>;
+                                });
+                                return target;
+                            });
+                        }
+                        return result;
+                    });
+                });
+                return request;
+            });
+            const history = createDocumentHistory(factory, 20), first = history.list();
+            await reading;
+            const close = vi.spyOn(previous, 'close');
+            await vi.advanceTimersByTimeAsync(20); expect(await first).toEqual([]);
+            expect(close).toHaveBeenCalledOnce();
+            expect(await history.list()).toEqual([]); expect(open).toHaveBeenCalledTimes(2);
+            previousVersionChange!.call(previous, new Event('versionchange') as IDBVersionChangeEvent);
+            expect(close).toHaveBeenCalledTimes(2);
+            expect(await history.list()).toEqual([]); expect(open).toHaveBeenCalledTimes(2);
+        } finally {vi.useRealTimers();}
+    });
+    it('does not let another old read deadline close an independently recovered connection', async () => {
+        vi.useFakeTimers({toFake: ['setTimeout', 'clearTimeout']});
+        try {
+            const factory = new IDBFactory(), actualOpen = factory.open.bind(factory);
+            const ready: Array<() => void> = [];
+            const started = Array.from({length: 2}, (_, index) => new Promise<void>(resolve => {ready[index] = resolve;}));
+            let delayedReads = 0;
+            const open = vi.spyOn(factory, 'open').mockImplementation((name, version) => {
+                const request = actualOpen(name, version);
+                request.addEventListener('success', () => {
+                    const database = request.result, transaction = database.transaction.bind(database);
+                    vi.spyOn(database, 'transaction').mockImplementation((stores, mode, options) => {
+                        const result = transaction(stores, mode, options);
+                        if (mode === 'readonly' && delayedReads < 2) {
+                            const objectStore = result.objectStore.bind(result);
+                            vi.spyOn(result, 'objectStore').mockImplementation(store => {
+                                const target = objectStore(store);
+                                vi.spyOn(target, 'openCursor').mockImplementation(() => {
+                                    ready[delayedReads++]();
+                                    return {} as IDBRequest<IDBCursorWithValue | null>;
+                                });
+                                return target;
+                            });
+                        }
+                        return result;
+                    });
+                });
+                return request;
+            });
+            const history = createDocumentHistory(factory, 20), first = history.list();
+            await started[0]; await vi.advanceTimersByTimeAsync(10);
+            const second = history.list(); await started[1];
+            await vi.advanceTimersByTimeAsync(10); expect(await first).toEqual([]);
+            expect(await history.list()).toEqual([]); expect(open).toHaveBeenCalledTimes(2);
+            await vi.advanceTimersByTimeAsync(10); expect(await second).toEqual([]);
+            expect(await history.list()).toEqual([]); expect(open).toHaveBeenCalledTimes(2);
+        } finally {vi.useRealTimers();}
+    });
     it('degrades to empty results when IndexedDB is missing, refuses to open or fails mid-request, and can recover afterwards', async () => {
         const absent = createDocumentHistory(null as never);
         expect(await absent.list()).toEqual([]); expect(await absent.load('a')).toBeNull(); expect(await absent.save(record('a', 1))).toBe(false);
