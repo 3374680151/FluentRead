@@ -1,5 +1,6 @@
 import * as runtime from 'vue';
 import VocabularyBook from '@/src/features/vocabulary/ui/VocabularyBook.vue';
+import LearningCenter from '@/src/features/settings/ui/LearningCenter.vue';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { parseHTML } from 'linkedom';
@@ -53,9 +54,13 @@ vi.mock('@/src/services/config/store', () => ({
   subscribeConfig: (...args: unknown[]) => (globalThis as any).__fluentReadVocabularyLifecycleTest.subscribeConfig(...args),
 }));
 
+vi.mock('@/src/features/reading-assistant/ui/public', () => ({HarnessReadingHistory:{render:()=>runtime.h('p',{'data-unrelated-history-port':''},'History')}}));
+vi.mock('@/src/features/settings/ui/LearningMemoryManager.vue', () => ({default:{render:()=>runtime.h('p',{'data-unrelated-memory-port':''},'Memory')}}));
+
 const mountedBooks: Array<() => void | Promise<void>> = [];
 afterEach(async () => {
   for (const dispose of mountedBooks.splice(0).reverse()) await dispose();
+  vi.useRealTimers();
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
   languageLoader.ensure.mockReset();
@@ -79,7 +84,7 @@ function deferred<T>() {
 async function mountBook(confirm: (...args: unknown[]) => Promise<unknown> = async () => undefined,
   response?: (message: Record<string, unknown>) => Promise<unknown>,
   configPatch: (patch: unknown) => Promise<void> = async () => undefined,
-  options: {keepAlive?: boolean; ready?: Promise<void>; entries?: (entry: VocabularyEntry) => VocabularyEntry[]; list?: () => Promise<unknown>; language?: UiLanguage; realI18nPlugin?: boolean} = {}) {
+  options: {keepAlive?: boolean; ready?: Promise<void>; entries?: (entry: VocabularyEntry) => VocabularyEntry[]; list?: () => Promise<unknown>; language?: UiLanguage; realI18nPlugin?: boolean; parent?: boolean; parentGate?: Promise<void>} = {}) {
   const entry = {id:'saved-a', term:'art', normalizedTerm:'art', identityKey:'en:art', sourceLanguage:'en', kind:'expression',
     translations:{'zh-cn':{text:'艺术',updatedAt:1}}, contexts:[{text:'We study art.',sourceUrl:'https://example.test/private-reading',capturedAt:1}], note:'A saved explanation.', phonetic:'',partOfSpeech:'',
     createdAt:1,updatedAt:1,lastSeenAt:1,encounterCount:1,masteryLevel:0,status:'new',nextReviewAt:1,lastReviewedAt:null,
@@ -98,7 +103,7 @@ async function mountBook(confirm: (...args: unknown[]) => Promise<unknown> = asy
     return {success:true,data:{entry:{...entry,status:'mastered'},log:{}}};
   });
   setComponentTestState({browser:{runtime:{sendMessage,onMessage:{addListener:listener=>{listeners.add(listener)},removeListener:listener=>{listeners.delete(listener)}}}},
-    config:{on:true,theme:'light',uiLanguage:options.language ?? 'zh-CN',vocabularyBookEnabled:true,selectionTranslatorMode:'disabled',to:'zh-CN'},
+    config:{on:true,theme:'light',uiLanguage:options.language ?? 'zh-CN',vocabularyBookEnabled:true,vocabularyReencounterEnabled:false,selectionTranslatorMode:'disabled',to:'zh-CN',harness:{memoryEnabled:true}},
     configReady:options.ready ?? Promise.resolve(),requestConfigPatch:configPatch,subscribeConfig:(callback:any)=>{configListeners.add(callback);return()=>configListeners.delete(callback)},confirm});
   const {window} = parseHTML('<html><head></head><body></body></html>');
   Object.defineProperty(window.document,'visibilityState',{configurable:true,value:'visible'});
@@ -113,7 +118,8 @@ async function mountBook(confirm: (...args: unknown[]) => Promise<unknown> = asy
   const windowRemove = options.keepAlive ? vi.fn(window.removeEventListener) : undefined;
   if (windowAdd) window.addEventListener = windowAdd;
   if (windowRemove) window.removeEventListener = windowRemove;
-  const component = VocabularyBook, doc = window.document;
+  const component = options.parentGate ? runtime.defineAsyncComponent(async () => {await options.parentGate;return LearningCenter;})
+    : options.parent ? LearningCenter : VocabularyBook, doc = window.document;
   const renderer = runtime.createRenderer<any, any>({
     createElement:(tag,ns)=>runtime.markRaw(ns==='svg'?doc.createElementNS('http://www.w3.org/2000/svg',tag):doc.createElement(tag)),
     createText:text=>doc.createTextNode(text),createComment:text=>doc.createComment(text),
@@ -131,22 +137,36 @@ async function mountBook(confirm: (...args: unknown[]) => Promise<unknown> = asy
   });
   const shown = runtime.ref(true);
   const otherPage = {render: () => null};
-  let panel: any;
+  let panel: any, parentPanel: any;
+  const sourceVisible = runtime.ref(true);
+  const isVisible = () => shown.value && sourceVisible.value;
+  // Actual parent/child instances stay intact; only the outer async module-resolution time is gated.
+  function findBook(instance: any): any {
+    if (!instance) return;
+    if (instance.type === VocabularyBook) return instance.setupState;
+    function walk(vnode: any): any {
+      if (!vnode) return;
+      const found = findBook(vnode.component);if (found) return found;
+      if (Array.isArray(vnode.children)) for (const child of vnode.children) {const nested = walk(child);if (nested) return nested;}
+    }
+    return walk(instance.subTree);
+  }
   let i18n!: UiI18nContext;
   const testLanguage = runtime.ref<UiLanguage>(options.language ?? 'zh-CN');
-  const bookNode = () => runtime.h(component,{onNavigate:navigate,ref:(instance:any)=>{if(instance)panel=instance.$.setupState;}});
+  const bookNode = () => runtime.h(component,{onNavigate:navigate,isVisible,ref:(instance:any)=>{if(instance){if(options.parent||options.parentGate)parentPanel=instance.$.setupState;else panel=instance.$.setupState;}}});
   const app = renderer.createApp({setup:()=>{i18n = useUiI18n();return ()=>options.keepAlive
     ? runtime.h(runtime.KeepAlive, null, {default: () => shown.value ? bookNode() : runtime.h(otherPage, {key: 'other-page'})})
     : bookNode();}});
-  app.config.warnHandler=()=>undefined;
+  const warnings:string[]=[];app.config.warnHandler=message=>warnings.push(message);
+  app.mixin({mounted(){const instance=this as any;if(instance.$options.__name==='VocabularyBook')panel=instance.$.setupState;}});
   const host=doc.createElement('main');doc.body.append(host);
   if (options.realI18nPlugin) app.use(createUiI18nPlugin({documentRoot: host as unknown as HTMLElement, uiRoot: null}));
   else app.provide(UI_I18N_KEY, testI18n(testLanguage));
   app.mount(host); let mounted = true; const unmount = () => {if(mounted){mounted=false;app.unmount();}};
   mountedBooks.push(unmount);
-  const flush = async () => {for(let i=0;i<12;i++){await Promise.resolve();await runtime.nextTick();}};
-  await flush(); if (!options.ready && !options.list) expect(panel.entries).toHaveLength(stored.length);
-  return {panel,entry,messages,exported,download,clicks,unmount,flush,shown,window,host,windowAdd,windowRemove,i18n,stored:()=>stored,navigate,listeners,setStored:(entries:VocabularyEntry[])=>{stored=entries},setListReply:(reply?:()=>Promise<unknown>)=>{listReply=reply},emitMessage:(message:unknown)=>{for(const listener of listeners)listener(message)},updateConfig:(patch:Record<string,unknown>)=>{const config=(globalThis as any)[TEST_STATE_KEY].config;Object.assign(config,patch);testLanguage.value = config.uiLanguage;for(const listener of configListeners)listener(config)}};
+  const flush = async () => {for(let i=0;i<12;i++){await Promise.resolve();await runtime.nextTick();const found=findBook((app as any)._instance);if(found)panel=found;}};
+  await flush(); if (!options.ready && !options.list && !options.parentGate) expect(panel.entries).toHaveLength(stored.length);
+  return {get panel(){return panel;},get parentPanel(){return parentPanel;},sourceVisible,warnings,entry,messages,exported,download,clicks,unmount,flush,shown,window,host,windowAdd,windowRemove,i18n,stored:()=>stored,navigate,listeners,setStored:(entries:VocabularyEntry[])=>{stored=entries},setListReply:(reply?:()=>Promise<unknown>)=>{listReply=reply},emitMessage:(message:unknown)=>{for(const listener of listeners)listener(message)},updateConfig:(patch:Record<string,unknown>)=>{const config=(globalThis as any)[TEST_STATE_KEY].config;Object.assign(config,patch);testLanguage.value = config.uiLanguage;for(const listener of configListeners)listener(config)}};
 }
 
 describe('VocabularyBook shared language resources', () => {
@@ -298,7 +318,7 @@ describe('VocabularyBook asynchronous action ownership', () => {
     await book.panel.removeEntry(book.entry);
     expect(book.panel.entries).toEqual([]); expect(book.panel.actionBusy).toBe(false);
     expect(book.panel.undoExport.entries).toEqual([book.entry]);
-    await book.panel.undoRemove();
+    await book.panel.undoRemove();await book.flush();
     expect(book.panel.undoExport).toBeNull(); expect(book.panel.entries).toEqual([book.entry]);
     expect(book.messages.find(message => message.action === 'importData')?.data).toMatchObject({entries:[book.entry]});
     expect(book.panel.actionBusy).toBe(false);
@@ -527,11 +547,12 @@ describe('VocabularyBook cached review keyboard ownership', () => {
     try {
       expect(listenerCalls(book.windowAdd!)).toHaveLength(0);expect(book.messages).toEqual([]);
       book.shown.value = false;await book.flush();ready.resolve();await book.flush();
-      expect(book.panel.entries).toHaveLength(1);book.panel.startReview();await book.flush();
+      expect(book.panel.entries).toHaveLength(0);expect(book.messages).toEqual([]);
       book.panel.recallDraft = 'Ready while cached';const before = reviewSnapshot(book);
       const hidden = dispatchKey(book, 'Space');await book.flush();
       expect(reviewSnapshot(book)).toEqual(before);expect(reviewMessages(book)).toEqual([]);expect(hidden.defaultPrevented).toBe(false);
-      book.shown.value = true;await book.flush();expect(reviewSnapshot(book)).toEqual(before);
+      book.shown.value = true;await book.flush();expect(book.panel.entries).toHaveLength(1);
+      book.panel.startReview();await book.flush();
       const visible = dispatchKey(book, 'Space');await book.flush();expect(visible.defaultPrevented).toBe(true);
       expect(book.panel.reviewAnswerVisible).toBe(true);expect(listenerCalls(book.windowAdd!)).toHaveLength(1);
     } finally {ready.resolve();book.unmount();await book.flush();}
@@ -554,12 +575,17 @@ describe('VocabularyBook cached review keyboard ownership', () => {
       book.panel.startReview();await book.flush();book.panel.reviewAnswerVisible = true;
       expect(dispatchKey(book, '2').defaultPrevented).toBe(true);await book.flush();
       expect(reviewMessages(book)).toHaveLength(1);expect(book.panel.actionBusy).toBe(true);
+      const initialLists=book.messages.filter(message=>message.action==='list').length;
       book.shown.value = false;await book.flush();book.stored().splice(0, 1, saved);
+      for(let index=0;index<5;index++){book.emitMessage({type:'fluentReadVocabularyBookChanged'});await book.flush();}
+      expect(book.messages.filter(message=>message.action==='list')).toHaveLength(initialLists);
       result.resolve({success: true, data: {entry: saved, log: {}}});await book.flush();
       expect(book.stored()[0]).toEqual(saved);expect(book.panel.entries[0]).toEqual(saved);
       expect(book.panel.reviewStats).toEqual({reviewed: 1, good: 1, again: 0});expect(book.panel.reviewIndex).toBe(1);
       expect(book.panel.actionBusy).toBe(false);expect(reviewMessages(book)).toHaveLength(1);
+      expect(book.messages.filter(message=>message.action==='list')).toHaveLength(initialLists);
       book.shown.value = true;await book.flush();expect(book.panel.reviewStats.reviewed).toBe(1);
+      expect(book.messages.filter(message=>message.action==='list')).toHaveLength(initialLists+1);
       expect(listenerCalls(book.windowAdd!)).toHaveLength(1);
     } finally {result.resolve({success: true, data: {entry: saved, log: {}}});await book.flush();book.unmount();}
   });
@@ -644,9 +670,9 @@ it('handles remote playback failure and visibility changes through mounted liste
   book.emitMessage({type:'selectionTtsState',clientRequestId:request.clientRequestId,state:'error'});await book.flush();expect(media.spoken).toHaveLength(1);
   Object.defineProperty(book.window.document,'visibilityState',{configurable:true,value:'hidden'});book.window.document.dispatchEvent(new book.window.Event('visibilitychange'));await book.flush();expect(book.panel.playingEntryId).toBe('');expect(media.cancel).toHaveBeenCalled();
   const before=book.messages.filter(message=>message.action==='list').length;book.emitMessage({type:'unrelated'});await book.flush();expect(book.messages.filter(message=>message.action==='list')).toHaveLength(before);
-  book.setStored([{...book.entry,term:'updated source',updatedAt:3}]);book.emitMessage({type:'fluentReadVocabularyBookChanged'});await book.flush();expect(book.host.querySelector('.entry-open')?.textContent).toBe('updated source');
-  Object.defineProperty(book.window.document,'visibilityState',{configurable:true,value:'visible'});book.window.document.dispatchEvent(new book.window.Event('visibilitychange'));await book.flush();expect(book.messages.filter(message=>message.action==='list')).toHaveLength(before+2);
-  const old=[...book.listeners];book.unmount();expect(book.listeners.size).toBe(0);for(const listener of old)listener({type:'fluentReadVocabularyBookChanged'});expect(book.messages.filter(message=>message.action==='list')).toHaveLength(before+2);
+  book.setStored([{...book.entry,term:'updated source',updatedAt:3}]);book.emitMessage({type:'fluentReadVocabularyBookChanged'});await book.flush();expect(book.host.querySelector('.entry-open')?.textContent).toBe('art');
+  Object.defineProperty(book.window.document,'visibilityState',{configurable:true,value:'visible'});book.window.document.dispatchEvent(new book.window.Event('visibilitychange'));await book.flush();expect(book.messages.filter(message=>message.action==='list')).toHaveLength(before+1);
+  const old=[...book.listeners];book.unmount();expect(book.listeners.size).toBe(0);for(const listener of old)listener({type:'fluentReadVocabularyBookChanged'});expect(book.messages.filter(message=>message.action==='list')).toHaveLength(before+1);
 });
 it('retries a failed list from its rendered error control and coalesces notifications without committing an obsolete list',async()=>{
   const book=await mountBook(undefined,undefined,undefined,{list:async()=>({success:false,error:{message:'Temporary listing failure'}})});
@@ -825,3 +851,225 @@ it('renders future review intervals without adding future or unscheduled entries
   const now=Date.now();const book=await mountBook(undefined,undefined,undefined,{entries:entry=>[null,now+5*60_000,now+3*3600_000,now+2*86400_000].map((nextReviewAt,index)=>({...entry,id:`future-${index}`,term:`scheduled ${index}`,status:'learning',nextReviewAt}))});
   const text=book.host.querySelector('.word-list')?.textContent;expect(text).toContain('未安排复习');expect(text).toContain('5 分钟后');expect(text).toContain('3 小时后');expect(text).toContain('2 天后');expect(book.host.querySelector('.start-review')?.hasAttribute('disabled')).toBe(true);
 });
+
+// Actual parent + Book, with only the outer Options-shaped KeepAlive/async load boundary injected.
+// This is not a complete OptionsApp or real-storage/browser acceptance test.
+describe('VocabularyBook visible read ownership', () => {
+  type Book = Awaited<ReturnType<typeof mountBook>>;
+  const lists = (book: Book) => book.messages.filter(message => message.action === 'list').length;
+  const notify = (book: Book) => book.emitMessage({type:'fluentReadVocabularyBookChanged'});
+  const retained = (book: Book) => ({query:book.panel.query,page:book.panel.page,kind:book.panel.kindFilter,
+    status:book.panel.statusFilter,sort:book.panel.sortOrder,started:book.panel.reviewStarted,
+    draft:book.panel.recallDraft,queue:book.panel.reviewQueue.map((entry: VocabularyEntry)=>entry.id),
+    index:book.panel.reviewIndex,answer:book.panel.reviewAnswerVisible,selection:book.panel.selectedEntryId});
+  function documentVisible(book: Book, visible: boolean) {
+    Object.defineProperty(book.window.document,'visibilityState',{configurable:true,value:visible?'visible':'hidden'});
+    book.window.document.dispatchEvent(new book.window.Event('visibilitychange'));
+  }
+
+  it('merges five settled broadcasts while the actual parent is cached and retains filters, page and review draft', async () => {
+    const book = await mountBook(undefined,undefined,undefined,{keepAlive:true,parent:true,entries:entry=>Array.from({length:5000},(_,index)=>({
+      ...entry,id:`hidden-${index}`,term:`word ${index}`,normalizedTerm:`word ${index}`,identityKey:`en:word ${index}`,lastSeenAt:index+1,
+    }))});
+    book.panel.query='word';book.panel.kindFilter='expression';book.panel.statusFilter='new';book.panel.sortOrder='term';
+    await book.flush();book.panel.page=2;book.panel.startReview();await book.flush();book.panel.recallDraft='Retained recall draft';
+    const before=retained(book), initial=lists(book);
+    book.shown.value=false;await book.flush();
+    const deltas:number[]=[];
+    for(let index=0;index<5;index++){const previous=lists(book);notify(book);await book.flush();deltas.push(lists(book)-previous);}
+    console.log('vocabulary-hidden-settled-broadcasts',JSON.stringify({entries:5000,deltas,additionalLists:lists(book)-initial}));
+    expect(deltas).toEqual([0,0,0,0,0]);expect(retained(book)).toEqual(before);
+    expect(book.host.querySelector('.fr-learning-center')).toBeNull();
+    book.shown.value=true;await book.flush();
+    expect(lists(book)).toBe(initial+1);expect(retained(book)).toEqual(before);expect(book.warnings).toEqual([]);
+  });
+
+  it.each(['KeepAlive','document'] as const)('pauses the actual minute scan for %s hiding and re-evaluates current time on resume',async mode=>{
+    vi.useFakeTimers();vi.setSystemTime(new Date('2026-10-25T00:00:00.000Z'));
+    const book=await mountBook(undefined,undefined,undefined,{keepAlive:true,parent:true});
+    let reads=0;const due=Date.now()+60*60*1000;
+    const counted=Object.freeze(Array.from({length:5000},(_,index)=>Object.freeze(Object.defineProperty({...book.entry,id:`clock-${index}`},'nextReviewAt',{
+      enumerable:true,get(){reads++;return due;},
+    }))));
+    book.panel.entries=counted;book.setListReply(async()=>({success:true,data:counted}));await book.flush();
+    if(mode==='KeepAlive')book.shown.value=false;else documentVisible(book,false);
+    await book.flush();reads=0;const before=lists(book), oldTime=book.panel.currentTime;
+    vi.advanceTimersByTime(180_025);const immediateHiddenReads=reads;await book.flush();
+    console.log('vocabulary-hidden-minute-scan',JSON.stringify({mode,entries:5000,immediateHiddenReads,totalHiddenReads:reads}));
+    expect(immediateHiddenReads).toBe(0);expect(reads).toBe(0);expect(lists(book)).toBe(before);
+    if(mode==='KeepAlive')book.shown.value=true;else documentVisible(book,true);
+    await book.flush();expect(lists(book)).toBe(before+1);expect(book.panel.currentTime).toBeGreaterThan(oldTime);expect(reads).toBeGreaterThan(0);
+    reads=0;vi.advanceTimersByTime(60_025);expect(reads).toBeGreaterThan(0);
+    book.unmount();await book.flush();reads=0;vi.advanceTimersByTime(60_025);await book.flush();expect(reads).toBe(0);
+  });
+
+  it('defers configReady initial list while the actual parent is hidden, then loads once with the retained query',async()=>{
+    const ready=deferred<void>();const book=await mountBook(undefined,undefined,undefined,{keepAlive:true,parent:true,ready:ready.promise});
+    book.panel.query='retained initial filter';book.shown.value=false;await book.flush();ready.resolve();await book.flush();
+    expect(lists(book)).toBe(0);expect(book.panel.entries).toEqual([]);
+    for(let index=0;index<5;index++){notify(book);await book.flush();}
+    expect(lists(book)).toBe(0);book.shown.value=true;await book.flush();
+    expect(lists(book)).toBe(1);expect(book.panel.entries).toHaveLength(1);expect(book.panel.query).toBe('retained initial filter');
+  });
+
+  it('uses the live parent getter when an actual asynchronous LearningCenter first mounts after hiding',async()=>{
+    const parent=deferred<void>();const book=await mountBook(undefined,undefined,undefined,{keepAlive:true,parent:true,parentGate:parent.promise});
+    expect(book.panel).toBeUndefined();expect(lists(book)).toBe(0);
+    book.shown.value=false;await book.flush();parent.resolve();await book.flush();
+    expect(book.panel).toBeDefined();expect(book.panel.entries).toEqual([]);expect(lists(book)).toBe(0);
+    book.shown.value=true;await book.flush();expect(lists(book)).toBe(1);expect(book.panel.entries).toHaveLength(1);expect(book.warnings).toEqual([]);
+  });
+
+  it('honors a false parent visibility getter even without child KeepAlive deactivation',async()=>{
+    const book=await mountBook(undefined,undefined,undefined,{parent:true});const initial=lists(book);
+    book.sourceVisible.value=false;await book.flush();notify(book);await book.flush();expect(lists(book)).toBe(initial);
+    book.sourceVisible.value=true;await book.flush();expect(lists(book)).toBe(initial+1);
+  });
+
+  it.each(['success','error'] as const)('keeps a serial read dirty across hide/resume and discards the old %s',async result=>{
+    const book=await mountBook(undefined,undefined,undefined,{keepAlive:true,parent:true});
+    const old=deferred<unknown>();book.setListReply(()=>old.promise);const initial=lists(book);
+    const loading=book.panel.loadEntries();await book.flush();expect(lists(book)).toBe(initial+1);
+    book.shown.value=false;await book.flush();for(let index=0;index<5;index++){notify(book);await book.flush();}
+    book.setListReply();book.setStored([{...book.entry,term:'Latest visible snapshot'}]);
+    book.shown.value=true;await book.flush();expect(lists(book)).toBe(initial+1);
+    old.resolve(result==='success'?{success:true,data:[{...book.entry,term:'Obsolete snapshot'}]}:{success:false,error:{message:'Obsolete hidden error'}});
+    await loading;await book.flush();expect(lists(book)).toBe(initial+2);
+    expect(book.panel.entries[0].term).toBe('Latest visible snapshot');expect(book.panel.loadError).toBe('');expect(book.panel.loading).toBe(false);
+  });
+
+  it('leaves a hidden completed read dirty until resume and retains an observable retry after a current failure',async()=>{
+    const book=await mountBook(undefined,undefined,undefined,{keepAlive:true});const old=deferred<unknown>();const initial=lists(book);
+    book.setListReply(()=>old.promise);void book.panel.loadEntries();await book.flush();book.shown.value=false;await book.flush();
+    old.resolve({success:false,error:{message:'Hidden obsolete failure'}});await book.flush();expect(lists(book)).toBe(initial+1);expect(book.panel.loadError).toBe('');
+    book.setListReply(async()=>({success:false,error:{message:'Current visible failure'}}));book.shown.value=true;await book.flush();
+    expect(lists(book)).toBe(initial+2);expect(book.panel.loadError).toBe('Current visible failure');
+    await book.flush();expect(lists(book)).toBe(initial+2);
+    book.setListReply();await clickBook(book,book.host.querySelector('.error-state button')!);expect(lists(book)).toBe(initial+3);expect(book.panel.loadError).toBe('');
+  });
+
+  it('retains notifications raised during a failing read without retrying the final failure indefinitely',async()=>{
+    const book=await mountBook();const old=deferred<unknown>();const initial=lists(book);book.setListReply(()=>old.promise);
+    void book.panel.loadEntries();await book.flush();notify(book);await book.flush();
+    book.setListReply(async()=>({success:false,error:{message:'Latest requested failure'}}));old.resolve({success:false,error:{message:'Superseded failure'}});await book.flush();
+    expect(lists(book)).toBe(initial+2);expect(book.panel.loadError).toBe('Latest requested failure');expect(book.panel.loading).toBe(false);
+    await book.flush();expect(lists(book)).toBe(initial+2);
+  });
+
+  it('invalidates an older visible read when a write starts and waits for the accepted ACK before draining dirty reads',async()=>{
+    const write=deferred<unknown>();const old=deferred<unknown>();
+    const book=await mountBook(undefined,async()=>write.promise);const initial=lists(book);book.setListReply(()=>old.promise);
+    void book.panel.loadEntries();await book.flush();const pending=book.panel.setMastered(book.entry);await book.flush();
+    notify(book);await book.flush();old.resolve({success:true,data:[{...book.entry,note:'Obsolete before save'}]});await book.flush();
+    expect(lists(book)).toBe(initial+1);expect(book.panel.entries[0].note).toBe(book.entry.note);expect(book.panel.actionBusy).toBe(true);
+    const saved={...book.entry,status:'mastered',note:'Authoritative saved note'};book.setStored([saved as VocabularyEntry]);book.setListReply();
+    write.resolve({success:true,data:{entry:saved,log:{}}});await pending;await book.flush();
+    expect(lists(book)).toBe(initial+2);expect(book.panel.entries[0].note).toBe('Authoritative saved note');expect(book.panel.actionBusy).toBe(false);
+  });
+
+  it.each([false,true])('settles an accepted mastery write hidden (failure=%s), then drains broadcasts on visible idle',async failure=>{
+    const gate=deferred<unknown>();const book=await mountBook(undefined,async()=>gate.promise,undefined,{keepAlive:true,parent:true});
+    book.panel.selectedEntryId=book.entry.id;book.panel.query='art';await book.flush();const initial=lists(book);
+    const pending=book.panel.setMastered(book.entry);await book.flush();book.shown.value=false;await book.flush();book.panel.query='New retained query';
+    for(let index=0;index<5;index++){notify(book);await book.flush();}expect(lists(book)).toBe(initial);
+    const saved={...book.entry,status:'mastered' as const,masteryLevel:5 as const,nextReviewAt:null,updatedAt:2};book.setStored(failure?[book.entry]:[saved]);
+    gate.resolve(failure?{success:false,error:{message:'Accepted save failure'}}:{success:true,data:{entry:saved,log:{}}});await pending;await book.flush();
+    expect(book.panel.actionBusy).toBe(false);expect(lists(book)).toBe(initial);expect(book.panel.entries[0].status).toBe(failure?'new':'mastered');
+    expect(book.panel.toastMessage).toContain(failure?'Accepted save failure':'已标记为掌握');
+    book.shown.value=true;await book.flush();expect(lists(book)).toBe(initial+1);
+    expect(book.panel.selectedEntryId).toBe(book.entry.id);expect(book.panel.query).toBe('New retained query');
+    expect(book.panel.toastMessage).toContain(failure?'Accepted save failure':'已标记为掌握');
+  });
+
+  it.each([false,true])('retains accepted undo ownership hidden (failure=%s) without awaiting a forbidden hidden list',async failure=>{
+    const gate=deferred<unknown>();let removing=true;
+    const book=await mountBook(undefined,async()=>removing?{success:true,data:{entry:book.entry,reviewLogs:[]}}:gate.promise,undefined,{keepAlive:true});
+    await book.panel.removeEntry(book.entry);removing=false;const initial=lists(book);
+    const pending=book.panel.undoRemove();await book.flush();expect(book.panel.actionBusy).toBe(true);book.shown.value=false;await book.flush();
+    gate.resolve(failure?{success:false,error:{message:'Restore failed'}}:{success:true,data:{inserted:1,updated:0,skipped:0}});await pending;await book.flush();
+    expect(book.panel.actionBusy).toBe(false);expect(lists(book)).toBe(initial);expect(book.panel.undoExport).toBeNull(); // Existing failure toast also clears undo; this change preserves that behavior.
+    expect(book.panel.toastMessage).toContain(failure?'Restore failed':'已恢复');
+    book.shown.value=true;await book.flush();expect(lists(book)).toBe(initial+1);expect(book.panel.entries).toHaveLength(1);
+  });
+
+  it.each(['confirmation','file','transport'] as const)('continues an accepted import hidden from its %s await and refreshes once after resume',async boundary=>{
+    const confirmation=deferred<unknown>(), file=deferred<string>(), transport=deferred<unknown>();
+    const book=await mountBook(()=>boundary==='confirmation'?confirmation.promise:Promise.resolve(),async()=>boundary==='transport'?transport.promise:{success:true,data:{inserted:1,updated:0,skipped:0}},undefined,{keepAlive:true});
+    const initial=lists(book),input={value:'import.json',files:[{size:boundary==='confirmation'?21*1024*1024:10,text:()=>boundary==='file'?file.promise:Promise.resolve(JSON.stringify(book.exported()))}]};
+    const pending=book.panel.importCollection({target:input});await book.flush();expect(input.value).toBe('');expect(book.panel.actionBusy).toBe(true);
+    book.shown.value=false;await book.flush();book.panel.query='Retained import filter';
+    confirmation.resolve(undefined);file.resolve(JSON.stringify(book.exported()));transport.resolve({success:true,data:{inserted:1,updated:0,skipped:0}});
+    await pending;await book.flush();expect(book.messages.filter(message=>message.action==='importData')).toHaveLength(1);
+    expect(book.panel.actionBusy).toBe(false);expect(lists(book)).toBe(initial);expect(book.panel.toastMessage).toContain('已导入');
+    book.shown.value=true;await book.flush();expect(lists(book)).toBe(initial+1);expect(book.panel.query).toBe('Retained import filter');
+  });
+
+  it('keeps an import parse failure and releases busy while hidden without clearing existing entries or the newer filter',async()=>{
+    const text=deferred<string>();const book=await mountBook(undefined,undefined,undefined,{keepAlive:true});const initial=lists(book);
+    const pending=book.panel.importCollection({target:{value:'bad.json',files:[{size:1,text:()=>text.promise}]}});await book.flush();book.shown.value=false;await book.flush();
+    book.panel.query='New draft filter';text.resolve('{');await pending;await book.flush();
+    expect(book.panel.actionBusy).toBe(false);expect(book.panel.entries).toHaveLength(1);expect(book.panel.toastMessage).toBeTruthy();expect(lists(book)).toBe(initial);
+    expect(book.messages.filter(message=>message.action==='importData')).toHaveLength(0);expect(book.panel.query).toBe('New draft filter');
+  });
+
+  it('unmounts the actual child on an inner tab change and removes retained listeners, reads and clock work',async()=>{
+    vi.useFakeTimers();const book=await mountBook(undefined,undefined,undefined,{keepAlive:true,parent:true});const initial=lists(book);
+    expect(book.listeners.size).toBe(2);book.parentPanel.activeTab='history';await book.flush();expect(book.listeners.size).toBe(0);
+    expect(book.host.querySelector('[data-unrelated-history-port]')).not.toBeNull();notify(book);vi.advanceTimersByTime(180_025);await book.flush();expect(lists(book)).toBe(initial);
+    book.parentPanel.activeTab='saved';await book.flush();expect(book.listeners.size).toBe(2);expect(lists(book)).toBe(initial+1);
+  });
+});
+
+
+describe('VocabularyBook refresh and deferred UI acknowledgements',()=>{
+  it.each(['version','entry'] as const)('retains recall for an equal snapshot but clears it for a different current %s',async change=>{
+    const book=await mountBook(undefined,undefined,undefined,{entries:entry=>[entry,{...entry,id:'saved-b',term:'Second item',identityKey:'en:second'}]})
+    book.panel.startReview();await book.flush();const current=book.panel.currentReview.id
+    book.panel.recallDraft='Same question recall';await book.panel.loadEntries();await book.flush()
+    expect(book.panel.currentReview.id).toBe(current);expect(book.panel.recallDraft).toBe('Same question recall')
+    book.setStored(change==='version'?book.stored().map(entry=>entry.id===current?{...entry,updatedAt:entry.updatedAt+1}:entry):book.stored().filter(entry=>entry.id!==current))
+    await book.panel.loadEntries();await book.flush();expect(book.panel.recallDraft).toBe('')
+    if(change==='entry')expect(book.panel.currentReview.id).not.toBe(current);else expect(book.panel.currentReview.updatedAt).toBe(2)
+  })
+
+  it('protects an actual Study updated event from an earlier list before accepting the later authoritative snapshot',async()=>{
+    const book=await mountBook();book.panel.openStudy(book.entry);await book.flush()
+    const old=deferred<unknown>(),latest=deferred<unknown>();let reads=0
+    book.setListReply(()=>++reads===1?old.promise:latest.promise);const loading=book.panel.loadEntries();await book.flush()
+    book.host.querySelector<HTMLButtonElement>('[data-study-save]')!.click();await book.flush()
+    expect(book.panel.studyEntry.note).toBe('Updated study note')
+    old.resolve({success:true,data:[{...book.entry,note:'Obsolete study note'}]});await book.flush()
+    expect(reads).toBe(2);expect(book.panel.studyEntry.note).toBe('Updated study note')
+    latest.resolve({success:true,data:[{...book.entry,note:'Updated study note'}]});await loading;await book.flush()
+    expect(book.panel.studyEntry.note).toBe('Updated study note');expect(book.panel.actionBusy).toBe(false)
+  })
+
+  it.each(['hidden','hide-show'] as const)('rejects queued menu focus after a live getter %s change but completes the accepted export',async mode=>{
+    const book=await mountBook(undefined,undefined,undefined,{keepAlive:true,parent:true});const details=book.panel.moreMenu,focus=vi.fn()
+    vi.spyOn(details,'querySelector').mockReturnValue({focus} as any)
+    Object.defineProperty(details,'open',{configurable:true,get:()=>true,set(){book.sourceVisible.value=false;if(mode==='hide-show')book.sourceVisible.value=true}})
+    await book.panel.exportAnki();await book.flush()
+    expect(focus).not.toHaveBeenCalled();expect(book.messages.filter(message=>message.action==='exportData')).toHaveLength(1)
+    expect(book.download).toHaveBeenCalledOnce();expect(book.panel.actionBusy).toBe(false)
+  })
+})
+
+
+describe('VocabularyBook visible read ownership after disposal and unusual rejection',()=>{
+  it('does not restart list or time work from retained read and visibility callbacks after unmount',async()=>{
+    vi.useFakeTimers();const book=await mountBook(undefined,undefined,undefined,{keepAlive:true})
+    const load=book.panel.loadEntries,visibility=book.panel.handleVisibilityChange
+    const messages=[...book.messages],entries=book.panel.entries,time=book.panel.currentTime
+    book.unmount();Object.defineProperty(book.window.document,'visibilityState',{configurable:true,value:'hidden'})
+    await load();visibility();vi.advanceTimersByTime(120_025);await book.flush()
+    expect(book.messages).toEqual(messages);expect(book.panel.entries).toBe(entries);expect(book.panel.currentTime).toBe(time)
+    expect(book.listeners.size).toBe(0)
+  })
+  it('shows the local read fallback for a non-Error rejection and permits the actual rendered retry',async()=>{
+    const book=await mountBook(undefined,undefined,undefined,{list:async()=>{throw 'Synthetic non-Error rejection'}})
+    expect(book.host.querySelector('.error-state')?.textContent).toContain('无法读取本地单词本')
+    expect(book.panel.loading).toBe(false);book.setListReply()
+    await clickBook(book,book.host.querySelector('.error-state button')!)
+    expect(book.panel.loadError).toBe('');expect(book.panel.entries).toHaveLength(1)
+  })
+})

@@ -1,7 +1,7 @@
 <!--
  * @file src/features/vocabulary/ui/VocabularyBook.vue
  * 文件职责：组织内容优先的学习收藏列表与主动复习，协调句子听读、解释保存、筛选与文件操作。
- * 主要内容：相同译文保留原文且不重复展示；把复习作为列表主操作，收藏开关与文件动作收进管理菜单；搜索与类型筛选合为一行，每条收藏直接提供学习入口；筛选排序独立于搜索输入，正文索引按需建立并限制文本字符总量，超预算词条继续完整匹配；界面文案订阅共享语言与资源修订，缓存期间首次加载的语言也能自动更新。配置、数据和朗读沿用已有消息协议，后台进度保持播放状态、结束或停止才释放，页面音频失败按在线与浏览器两级有限回退并合并重复错误通知；确认开始即占用操作状态，等待、菜单让步及响应后校验生命周期，拒绝迟到请求、文件下载和已卸载界面更新。
+ * 主要内容：相同译文保留原文且不重复展示；把复习作为列表主操作，收藏开关与文件动作收进管理菜单；搜索与类型筛选合为一行，每条收藏直接提供学习入口；筛选排序独立于搜索输入，正文索引按需建立并限制文本字符总量，超预算词条继续完整匹配；界面文案订阅共享语言与资源修订，缓存期间首次加载的语言也能自动更新。配置、数据和朗读沿用已有消息协议，后台进度保持播放状态、结束或停止才释放，页面音频失败按在线与浏览器两级有限回退并合并重复错误通知；收藏面板或文档隐藏时延后普通读取并停止到期扫描，恢复可见后串行读取，已接受的保存继续结算；确认开始即占用操作状态，等待、菜单让步及响应后校验生命周期，拒绝迟到请求、文件下载和已卸载界面更新。
  * 模块边界：UI 不直接访问 Dexie 或上传学习数据；完整备份进入备份与恢复页，收藏文件只包含本领域数据，数据库操作集中在后台 repository/handler，上下文和来源只有用户明确选择时才导出。
  -->
 <template>
@@ -201,6 +201,10 @@ import {
   type VocabularyStatus,
 } from '@/src/features/vocabulary/learningModel';
 
+const props = defineProps<{isVisible?: () => boolean}>();
+const keptAliveVisible = ref(true);
+const documentVisible = ref(true);
+const viewVisible = computed(() => (props.isVisible?.() ?? true) && keptAliveVisible.value && documentVisible.value);
 const emit = defineEmits<{ navigate: [section: string] }>();
 const {t, translateLegacy: translateControlLabel} = useUiI18n();
 const reencounterSupported = browserCapabilities.browser !== 'userscript';
@@ -261,6 +265,8 @@ let darkMedia: MediaQueryList | null = null;
 let loadRequestGeneration = 0;
 let completedLoadGeneration = 0;
 let loadLoopPromise: Promise<void> | null = null;
+let configured = false;
+let readEpoch = 0;
 
 const reviewActive = computed(() => reviewStarted.value);
 const reviewSessionProgress = computed(() => vocabularyReviewSessionProgress(reviewSessionState()));
@@ -331,7 +337,7 @@ const filteredEntries = computed(() => {
 const pageCount = computed(() => Math.max(1, Math.ceil(filteredEntries.value.length / pageSize)));
 const pagedEntries = computed(() => filteredEntries.value.slice((page.value - 1) * pageSize, page.value * pageSize));
 const currentClozeContext = computed(() => currentReview.value ? vocabularyReviewCloze(currentReview.value) : '');
-watch(() => [currentReview.value?.id, currentReview.value?.updatedAt], () => { recallDraft.value = ''; });
+watch([() => currentReview.value?.id, () => currentReview.value?.updatedAt], () => { recallDraft.value = ''; });
 watch(selectedEntryId, () => stopEntrySpeech());
 function openStudy(entry: VocabularyEntry): void {
   finishReview();
@@ -561,10 +567,9 @@ function applyTheme(): void {
 function scheduleTimeRefresh(): void {
   if (timeRefreshTimer !== null) window.clearTimeout(timeRefreshTimer);
   timeRefreshTimer = null;
-  if (!lifecycle.isActive()) return;
+  if (!lifecycle.isActive() || !configured || !viewVisible.value) return;
   const timestamp = Date.now();
   currentTime.value = timestamp;
-  if (document.visibilityState === 'hidden') return;
 
   const nearestDueAt = entries.value.reduce((nearest, entry) => {
     if (entry.nextReviewAt === null || entry.nextReviewAt <= timestamp) return nearest;
@@ -578,40 +583,64 @@ function scheduleTimeRefresh(): void {
 
 function handleVisibilityChange(): void {
   if (!lifecycle.isActive()) return;
-  if (document.visibilityState === 'hidden') stopEntrySpeech();
-  scheduleTimeRefresh();
-  if (document.visibilityState === 'visible') void loadEntries();
+  documentVisible.value = document.visibilityState !== 'hidden';
+  if (!documentVisible.value) stopEntrySpeech();
 }
+
+function canReadEntries(): boolean {
+  return lifecycle.isActive() && configured && viewVisible.value && !actionBusy.value;
+}
+
+// 暂停不等于卸载：普通读取延后，已接受写入仍通过原来的 lifecycle 接纳结果。
+watch(viewVisible, visible => {
+  readEpoch += 1;
+  scheduleTimeRefresh();
+  if (visible && configured) void loadEntries();
+}, {flush: 'sync'});
+watch(actionBusy, busy => {
+  if (busy) readEpoch += 1;
+  else void flushPendingEntries();
+}, {flush: 'sync'});
 
 async function loadEntries(): Promise<void> {
   if (!lifecycle.isActive()) return;
-  // 并发刷新合并为一个串行循环；若等待期间代次增长，旧响应不提交，循环会继续读取最新快照。
   loadRequestGeneration += 1;
+  // 隐藏或写入期间只记待办，不能等待未来恢复，否则持有 actionBusy 的保存会自锁。
+  if (canReadEntries()) await flushPendingEntries();
+}
+
+function flushPendingEntries(): Promise<void> | undefined {
+  if (!canReadEntries() || completedLoadGeneration >= loadRequestGeneration) return;
   if (loadLoopPromise) return loadLoopPromise;
-  loadLoopPromise = runLoadEntriesLoop().finally(() => { loadLoopPromise = null; });
+  loadLoopPromise = runLoadEntriesLoop().finally(() => {
+    loadLoopPromise = null;
+    // 覆盖循环退出到 finally 之间的新通知；失败代次已完成，不自动重试失败读取。
+    return flushPendingEntries();
+  });
   return loadLoopPromise;
 }
 
 async function runLoadEntriesLoop(): Promise<void> {
-  if (!lifecycle.isActive()) return;
   loading.value = true;
   loadError.value = '';
   try {
-    while (lifecycle.isActive() && completedLoadGeneration < loadRequestGeneration) {
+    while (canReadEntries() && completedLoadGeneration < loadRequestGeneration) {
       const generation = loadRequestGeneration;
+      const epoch = readEpoch;
       try {
         const nextEntries = await requestVocabulary<VocabularyEntry[]>({ type: VOCABULARY_BOOK_MESSAGE, action: 'list' });
-        if (lifecycle.isActive() && generation === loadRequestGeneration) {
+        if (canReadEntries() && epoch === readEpoch && generation === loadRequestGeneration) {
           entries.value = nextEntries;
           loadError.value = '';
           reconcileActiveReviewQueue();
         }
       } catch (cause) {
-        if (lifecycle.isActive() && generation === loadRequestGeneration) {
+        if (canReadEntries() && epoch === readEpoch && generation === loadRequestGeneration) {
           loadError.value = cause instanceof Error ? cause.message : '无法读取本地单词本';
         }
       } finally {
-        completedLoadGeneration = generation;
+        // 跨隐藏或写入的旧响应失效，保留待办，等可见且空闲后串行读取权威快照。
+        if (epoch === readEpoch) completedLoadGeneration = generation;
       }
     }
   } finally {
@@ -651,6 +680,8 @@ async function setReencounterEnabled(enabled: boolean): Promise<void> {
 }
 
 function replaceEntry(next: VocabularyEntry): void {
+  // 学习详情独立保存也会更新词条；拒绝保存前已经发出的列表响应。
+  readEpoch += 1;
   const index = entries.value.findIndex(entry => entry.id === next.id);
   if (index < 0) entries.value = [next, ...entries.value];
   else entries.value.splice(index, 1, next);
@@ -925,9 +956,10 @@ async function clearVocabulary(): Promise<void> {
 async function closeMoreMenuAndFocus(): Promise<void> {
   const details = moreMenu.value;
   if (!lifecycle.isActive() || !details) return;
+  const visible = viewVisible.value, epoch = readEpoch;
   details.open = false;
   await nextTick();
-  if (lifecycle.isActive() && details.isConnected && moreMenu.value === details) details.querySelector<HTMLElement>('summary')?.focus();
+  if (visible && viewVisible.value && epoch === readEpoch && lifecycle.isActive() && details.isConnected && moreMenu.value === details) details.querySelector<HTMLElement>('summary')?.focus();
 }
 
 function downloadFile(name: string, body: string, type: string): void {
@@ -974,11 +1006,10 @@ function handleBookChanged(message: unknown): undefined {
   return undefined;
 }
 // 缓存保留复习会话与已接受的保存，只有当前显示的页面处理全局复习按键。
-let reviewKeyboardActive = true;
-onActivated(() => { reviewKeyboardActive = true; });
-onDeactivated(() => { reviewKeyboardActive = false; });
+onActivated(() => { keptAliveVisible.value = true; });
+onDeactivated(() => { keptAliveVisible.value = false; });
 function handleReviewKeyboard(event: KeyboardEvent): void {
-  if (!reviewKeyboardActive || !lifecycle.isActive() || !reviewActive.value || actionBusy.value) return;
+  if (!viewVisible.value || !lifecycle.isActive() || !reviewActive.value || actionBusy.value) return;
   const target = event.target as HTMLElement | null;
   if (target?.matches('input, textarea, select, button, a')) return;
   if (event.key === 'Escape') { event.preventDefault(); finishReview(); return; }
@@ -992,6 +1023,7 @@ function handleReviewKeyboard(event: KeyboardEvent): void {
 
 let unsubscribeConfig: (() => void) | null = null;
 onMounted(async () => {
+  documentVisible.value = document.visibilityState !== 'hidden';
   darkMedia = window.matchMedia('(prefers-color-scheme: dark)');
   darkMedia.addEventListener('change', applyTheme);
   await lifecycle.runAfterReady(configReady, async () => {
@@ -1011,6 +1043,8 @@ onMounted(async () => {
     browser.runtime.onMessage.addListener(handleEntrySpeechState);
     window.addEventListener('keydown', handleReviewKeyboard);
     document.addEventListener('visibilitychange', handleVisibilityChange);
+    documentVisible.value = document.visibilityState !== 'hidden';
+    configured = true;
     await loadEntries();
   });
 });
