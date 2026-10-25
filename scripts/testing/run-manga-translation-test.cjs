@@ -54,7 +54,7 @@ if(process.argv.includes('--error-recovery-surface'))assert.ok(errorRecoveryTest
 const recoveryViewportValue=arg('recovery-viewport',null),recoveryViewportParts=recoveryViewportValue?.match(/^(\d{3,4})x(\d{3,4})$/);
 const recoveryViewport=recoveryViewportParts?{width:Number(recoveryViewportParts[1]),height:Number(recoveryViewportParts[2])}:null;
 const recoveryLongDetails=process.argv.includes('--recovery-long-details'),recoveryRtl=process.argv.includes('--recovery-rtl');
-if(recoveryViewportValue)assert.ok(errorRecoveryTest&&recoveryViewport&&recoveryViewport.width>=320&&recoveryViewport.width<=1600&&recoveryViewport.height>=240&&recoveryViewport.height<=1200,'Recovery CSS viewport must be 320–1600 x 240–1200 and requires --error-recovery');
+if(process.argv.includes('--recovery-viewport'))assert.ok(errorRecoveryTest&&recoveryViewport&&recoveryViewport.width>=320&&recoveryViewport.width<=1600&&recoveryViewport.height>=240&&recoveryViewport.height<=1200,'Recovery CSS viewport must be 320–1600 x 240–1200 and requires --error-recovery');
 if(recoveryLongDetails||recoveryRtl)assert.ok(errorRecoveryTest,'Recovery long-details and RTL flags require --error-recovery');
 const prefetchPages=Number(arg('prefetch-pages','0'));
 const explicitPipelineInputs=arg('pipeline-inputs',null)?.split(',').map(file=>path.resolve(file));
