@@ -2,7 +2,7 @@
  * @file src/features/input-translation/content/index.ts
  * 文件职责：实现网页输入框翻译 feature 的可注入生命周期，根据配置识别三连触发符、冻结请求所有权、调用后台并把译文安全提交回原控件或富文本编辑器。
  * 主要内容：相同译文保留原文且不重复展示；定义配置、依赖和 feature 契约，提供启用判断、配置键与替换/双语输出顺序写回，原生控件用原生 setter 与 input/change 事件写回，编辑宿主按光标文本度量推进三连序列并经 editableHost.ts 的原生编辑路径保留原文、清理触发符并写回；
- * 以请求 ID 复用共享 broker 取消，冻结实际服务的 AI 超时预算并给消息应答保留余量；提示与翻译并行启动，用 closed Shadow tooltip 提供取消、重试与恢复原文，随视口定位并清理临时资源，防止失焦、编辑或配置变化后的迟到提交。
+ * 以请求 ID 复用共享 broker 取消，冻结实际服务的 AI 超时预算并给消息应答保留余量；提示与翻译并行启动，用 closed Shadow tooltip 提供取消、重试与恢复原文，首次同步定位、后续视口事件按帧合并并清理临时资源，防止失焦、编辑或配置变化后的迟到提交。
  * 模块边界：本文件拥有内容页事件与临时 UI，不直接调用 provider 或全局 browser API；sendMessage、Shadow UI、站点禁用和 generation 均由 composition root 注入，输入纯算法来自 inputBox.ts，编辑宿主度量与写回来自 editableHost.ts。
  */
 import {hasDistinctTranslation} from '@/src/core/translation/result';
@@ -559,16 +559,30 @@ export function createInputTranslationContentFeature(
         };
         position();
         const view = rootDocument.defaultView;
-        view?.addEventListener?.('scroll', position, {capture: true, passive: true});
-        view?.addEventListener?.('resize', position, {passive: true});
+        let positionFrame: number | undefined;
+        let positionActive = true;
+        const schedulePosition = () => {
+            if (!positionActive || positionFrame !== undefined) return;
+            // 小型 DOM 适配器可不提供绘制时钟；真实页面把同帧多种视口事件合并成一次几何读取。
+            if (typeof view?.requestAnimationFrame !== 'function') { position(); return; }
+            positionFrame = view.requestAnimationFrame(() => {
+                positionFrame = undefined;
+                if (positionActive && inputTooltipUi === ui) position();
+            });
+        };
+        view?.addEventListener?.('scroll', schedulePosition, {capture: true, passive: true});
+        view?.addEventListener?.('resize', schedulePosition, {passive: true});
         const visualViewport = view?.visualViewport;
-        visualViewport?.addEventListener('resize', position);
-        visualViewport?.addEventListener('scroll', position, {passive: true});
+        visualViewport?.addEventListener('resize', schedulePosition);
+        visualViewport?.addEventListener('scroll', schedulePosition, {passive: true});
         removeTooltipPositionListeners = () => {
-            view?.removeEventListener?.('scroll', position, true);
-            view?.removeEventListener?.('resize', position);
-            visualViewport?.removeEventListener('resize', position);
-            visualViewport?.removeEventListener('scroll', position);
+            positionActive = false;
+            if (positionFrame !== undefined) view?.cancelAnimationFrame(positionFrame);
+            positionFrame = undefined;
+            view?.removeEventListener?.('scroll', schedulePosition, true);
+            view?.removeEventListener?.('resize', schedulePosition);
+            visualViewport?.removeEventListener('resize', schedulePosition);
+            visualViewport?.removeEventListener('scroll', schedulePosition);
         };
         if (!deps.config.animations) {
             tooltip.style.opacity = '1';

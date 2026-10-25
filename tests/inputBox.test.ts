@@ -90,6 +90,15 @@ describe('输入框快捷键', () => {
         } as unknown as HTMLElement)).toBe('');
     });
 
+    it('继承 fieldset 禁用状态的控件保持原文，legend 中可用控件仍可参与翻译', () => {
+        const input = {...fakeElement('INPUT'), disabled: false, matches: (selector: string) => selector === ':disabled'} as unknown as HTMLElement;
+        expect(isInputElement(input)).toBe(false);
+        const textarea = {...input, tagName: 'TEXTAREA'} as HTMLElement;
+        expect(isInputElement(textarea)).toBe(false);
+        const legendInput = {...input, matches: () => false} as unknown as HTMLElement;
+        expect(isInputElement(legendInput)).toBe(true);
+    });
+
     it('能穿透开放 Shadow DOM 获取真实焦点，但仍拒绝其中的密码框', () => {
         const inner = {...fakeElement('INPUT'), type: 'password'} as unknown as HTMLElement;
         const host = {

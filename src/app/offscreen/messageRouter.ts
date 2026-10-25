@@ -241,7 +241,7 @@ function respondWith<T>(
 
 /**
  * 在请求表中登记可取消操作：取消、成功与失败只回复一次，结束时只释放自己持有的槽位。
- * shape 抛出的结果校验错误与操作失败使用同一 failure 序列化。
+ * 取消后跳过迟到结果与错误的序列化；shape 抛出的结果校验错误与操作失败使用同一 failure 序列化。
  */
 function runCancellableRequest<T>(
     active: Map<string, AbortController>,
@@ -266,8 +266,8 @@ function runCancellableRequest<T>(
     controller.signal.addEventListener('abort', handleAbort, {once: true});
     void Promise.resolve()
         .then(() => operation(controller.signal))
-        .then((result) => finish(shape(result)), (error) => finish(failure(error)))
-        .catch((error) => finish(failure(error)));
+        .then((result) => {if (!settled) finish(shape(result));}, (error) => {if (!settled) finish(failure(error));})
+        .catch((error) => {if (!settled) finish(failure(error));});
 }
 
 /** 校验 requestId 后中止在途请求；未登记时由 onMissing 决定是否记住“先取消后启动”。 */

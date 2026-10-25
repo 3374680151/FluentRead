@@ -9,8 +9,8 @@
 import {normalizeLanguageCode} from '@/src/core/language/codes';
 import {identifyTextLanguage} from '@/src/core/language/identify';
 import {resolveTranslationLanguages, type TranslationLanguageOverride} from '@/src/core/translation/languages';
-import {serializeTranslationSlots} from '@/src/core/translation/serialization';
-import {getTranslationGlossarySourceText, requireTranslationProviderConfig} from '@/src/services/translation/requestSnapshot';
+import {rebuildTranslationSlots} from '@/src/core/translation/slotProtocol';
+import {getTranslationGlossarySourceSlots, requireTranslationProviderConfig} from '@/src/services/translation/requestSnapshot';
 import type {TranslationProviderRequest, TranslationProviderRequestContext} from '@/src/services/translation/types';
 import {createHttpStatusError, createProviderCodeError, readJsonResponse} from '@/src/platform/http/errors';
 import {abortErrorFromSignal, cancelUnreadResponseBody, runtimeFetch} from '@/src/platform/http/runtime';
@@ -69,8 +69,8 @@ export async function translateMyMemoryText(text: string, request: MyMemoryReque
     if (!text.trim()) return text;
     const current = requireTranslationProviderConfig(request);
     const languages = resolveTranslationLanguages(request, {sourceLanguage: current.from, targetLanguage: current.to});
-    const pureSource = getTranslationGlossarySourceText(text);
-    const sourceText = Array.isArray(pureSource) ? pureSource.join('\n') : pureSource;
+    const slots = getTranslationGlossarySourceSlots(text);
+    const sourceText = slots ? slots.texts.join('\n') : text;
     const sourceLanguage = languages.sourceLanguage === 'auto'
         ? inferSourceLanguage(sourceText) : languages.sourceLanguage;
     const from = toMyMemoryLanguage(sourceLanguage);
@@ -125,12 +125,12 @@ export async function translateMyMemoryText(text: string, request: MyMemoryReque
         return translated.join('');
     };
 
-    if (Array.isArray(pureSource)) {
+    if (slots) {
         const translations: string[] = [];
-        for (const source of pureSource) translations.push(await translateLines(source));
-        // pureSource 只有在完整槽协议验证成功后才会成为数组。
-        const nonce = text.match(/^___FLUENTREAD_([a-z0-9_-]+)_0_BEGIN___/iu)![1]!;
-        return serializeTranslationSlots(translations, nonce).payload;
+        for (const source of slots.texts) translations.push(await translateLines(source));
+        const result = rebuildTranslationSlots(slots.packet, translations);
+        if (result === null) throw new Error('MyMemory 返回的文本槽结构无效');
+        return result;
     }
     return translateLines(text);
 }

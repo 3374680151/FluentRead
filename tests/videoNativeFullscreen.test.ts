@@ -6,7 +6,7 @@
  */
 import {describe, expect, it, vi} from 'vitest';
 import {parseHTML} from 'linkedom';
-import {buildNativeFullscreenCues, createNativeFullscreenSubtitles, supportsNativeVideoFullscreen, type NativeFullscreenSubtitleState} from '@/src/features/video-subtitle/content/nativeFullscreen';
+import {createNativeFullscreenSubtitles, supportsNativeVideoFullscreen, type NativeFullscreenSubtitleState} from '@/src/features/video-subtitle/content/nativeFullscreen';
 
 function setup() {
   const {document, window} = parseHTML('<html><body><video></video><video></video></body></html>');
@@ -59,6 +59,16 @@ function setup() {
     }};
 }
 
+/** 通过生产桥接创建真实轨道，快照后销毁；不再维护另一份只供测试的 cue 组合实现。 */
+function readNativeFullscreenCues(state: NativeFullscreenSubtitleState) {
+  const bridge = createNativeFullscreenSubtitles(() => state);
+  try {
+    bridge.sync();
+    const track = state.video?.querySelector<HTMLTrackElement>('track[data-fluent-read-native-subtitles="true"]')?.track;
+    return Array.from(track?.cues || []).map(cue => ({startMs: cue.startTime * 1000, durationMs: (cue.endTime - cue.startTime) * 1000, text: (cue as VTTCue).text}));
+  } finally {bridge.destroy();}
+}
+
 describe('native fullscreen subtitles', () => {
   it('切换双语顺序时读音始终紧跟原文，单语和相同译文保留原有语义', () => {
     const {state} = setup();
@@ -66,18 +76,18 @@ describe('native fullscreen subtitles', () => {
     state.cues = [{startMs: 0, durationMs: 2000, text: '<原文>\n原文第二行'}];
     state.translation = () => '译文 & <标记>\n译文第二行';
     state.reading = {enabled: true, source: '<原文>\n原文第二行', text: 'gen & bun'};
-    expect(buildNativeFullscreenCues(state)[0].text).toBe('译文 &amp; &lt;标记&gt;\n译文第二行\n&lt;原文&gt;\n原文第二行\ngen &amp; bun');
+    expect(readNativeFullscreenCues(state)[0].text).toBe('译文 &amp; &lt;标记&gt;\n译文第二行\n&lt;原文&gt;\n原文第二行\ngen &amp; bun');
     state.bilingualOrder = 'original-first';
-    expect(buildNativeFullscreenCues(state)[0].text).toBe('&lt;原文&gt;\n原文第二行\ngen &amp; bun\n译文 &amp; &lt;标记&gt;\n译文第二行');
+    expect(readNativeFullscreenCues(state)[0].text).toBe('&lt;原文&gt;\n原文第二行\ngen &amp; bun\n译文 &amp; &lt;标记&gt;\n译文第二行');
     state.bilingualOrder = 'translation-first';
     state.mode = 'original-only';
-    expect(buildNativeFullscreenCues(state)[0].text).toBe('&lt;原文&gt;\n原文第二行\ngen &amp; bun');
+    expect(readNativeFullscreenCues(state)[0].text).toBe('&lt;原文&gt;\n原文第二行\ngen &amp; bun');
     state.mode = 'translation-only';
-    expect(buildNativeFullscreenCues(state)[0].text).toBe('译文 &amp; &lt;标记&gt;\n译文第二行');
+    expect(readNativeFullscreenCues(state)[0].text).toBe('译文 &amp; &lt;标记&gt;\n译文第二行');
     state.mode = 'bilingual'; state.translation = () => state.cues[0].text;
-    expect(buildNativeFullscreenCues(state)[0].text).toBe('&lt;原文&gt;\n原文第二行\ngen &amp; bun');
+    expect(readNativeFullscreenCues(state)[0].text).toBe('&lt;原文&gt;\n原文第二行\ngen &amp; bun');
     state.translation = () => undefined;
-    expect(buildNativeFullscreenCues(state)[0].text).toBe('&lt;原文&gt;\n原文第二行\ngen &amp; bun');
+    expect(readNativeFullscreenCues(state)[0].text).toBe('&lt;原文&gt;\n原文第二行\ngen &amp; bun');
   });
 
   it('顺序变化使已有原生轨道重新准备，保留当前选择和缓存读音，系统 Off 期间等待重新选择', () => {
@@ -104,11 +114,11 @@ describe('native fullscreen subtitles', () => {
     const {state} = setup();
     state.cues = [{startMs: 0, durationMs: 2000, text: '<原文>'}];
     state.reading = {enabled: true, source: ' <原文> ', text: 'gen & <bun>'};
-    expect(buildNativeFullscreenCues(state)[0].text).toBe('&lt;原文&gt;\ngen &amp; &lt;bun&gt;\n译文');
-    state.mode = 'original-only'; expect(buildNativeFullscreenCues(state)[0].text).toBe('&lt;原文&gt;\ngen &amp; &lt;bun&gt;');
-    state.mode = 'translation-only'; expect(buildNativeFullscreenCues(state)[0].text).toBe('译文');
-    state.mode = 'bilingual'; state.reading.text = ''; expect(buildNativeFullscreenCues(state)[0].text).toBe('&lt;原文&gt;\n译文');
-    state.reading.text = 'genbun'; state.reading.source = 'other'; expect(buildNativeFullscreenCues(state)[0].text).toBe('&lt;原文&gt;\n译文');
+    expect(readNativeFullscreenCues(state)[0].text).toBe('&lt;原文&gt;\ngen &amp; &lt;bun&gt;\n译文');
+    state.mode = 'original-only'; expect(readNativeFullscreenCues(state)[0].text).toBe('&lt;原文&gt;\ngen &amp; &lt;bun&gt;');
+    state.mode = 'translation-only'; expect(readNativeFullscreenCues(state)[0].text).toBe('译文');
+    state.mode = 'bilingual'; state.reading.text = ''; expect(readNativeFullscreenCues(state)[0].text).toBe('&lt;原文&gt;\n译文');
+    state.reading.text = 'genbun'; state.reading.source = 'other'; expect(readNativeFullscreenCues(state)[0].text).toBe('&lt;原文&gt;\n译文');
   });
 
   it('新读音只patch重复原文对应的cue，不重读或重建两千句时间轴，等待态保留已完成读音', () => {
@@ -157,20 +167,20 @@ describe('native fullscreen subtitles', () => {
 
   it('uses the chosen display mode without pretending missing translations exist', () => {
     const {state} = setup();
-    expect(buildNativeFullscreenCues(state)[0].text).toBe('Original\n译文');
-    state.mode = 'translation-only'; expect(buildNativeFullscreenCues(state)[0].text).toBe('译文');
-    state.translation = () => undefined; expect(buildNativeFullscreenCues(state)).toEqual([]);
-    state.mode = 'bilingual'; expect(buildNativeFullscreenCues(state)[0].text).toBe('Original');
+    expect(readNativeFullscreenCues(state)[0].text).toBe('Original\n译文');
+    state.mode = 'translation-only'; expect(readNativeFullscreenCues(state)[0].text).toBe('译文');
+    state.translation = () => undefined; expect(readNativeFullscreenCues(state)).toEqual([]);
+    state.mode = 'bilingual'; expect(readNativeFullscreenCues(state)[0].text).toBe('Original');
     state.mode = 'original-only'; state.translation = () => { throw Error('must not translate'); };
-    expect(buildNativeFullscreenCues(state)[0].text).toBe('Original');
-    state.mode = 'bilingual'; state.translation = () => 'Original'; expect(buildNativeFullscreenCues(state)[0].text).toBe('Original');
+    expect(readNativeFullscreenCues(state)[0].text).toBe('Original');
+    state.mode = 'bilingual'; state.translation = () => 'Original'; expect(readNativeFullscreenCues(state)[0].text).toBe('Original');
   });
 
   it('escapes WebVTT markup, clips a shifted start, and removes invalid or expired cues', () => {
     const {state} = setup();
     state.mode = 'original-only'; state.offsetMs = -1500;
     state.cues = [{startMs: 1000, durationMs: 2000, text: '<b>A & B</b>'}, {startMs: 0, durationMs: 500, text: 'expired'}, {startMs: NaN, durationMs: 3, text: 'invalid'}, {startMs: 2000, durationMs: 1000, text: ' '}];
-    expect(buildNativeFullscreenCues(state)).toEqual([{startMs: 0, durationMs: 1500, text: '&lt;b&gt;A &amp; B&lt;/b&gt;'}]);
+    expect(readNativeFullscreenCues(state)).toEqual([{startMs: 0, durationMs: 1500, text: '&lt;b&gt;A &amp; B&lt;/b&gt;'}]);
   });
 
   it('prepares hidden, waits for system selection, and restores the observed source only when leaving with FluentRead selected', () => {

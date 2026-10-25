@@ -55,6 +55,32 @@ describe('personal correction content lifecycle',()=>{
     f.setCurrent(true);f.event();await flush();f.setCurrent(false);f.event('pointerover','#other');expect(controller.state.candidate).toBeNull();
     f.setCurrent(true);f.event();f.setCurrent(false);f.event('keydown','#other',{code:'KeyE',altKey:true,shiftKey:true});expect(controller.state.candidate).toBeNull();
   });
+  it('observes the same translated element again after its previous pair became stale',async()=>{
+    const f=fixture();f.event();await flush();const controller=f.props().controller;
+    await controller.open(f.pair);f.setCurrent(false);document.querySelector('.nested')!.textContent='First replacement';await flush();
+    expect(controller.state.candidate).toBeNull();expect(controller.state.open).toBe(false);
+    f.setCurrent(true);f.event();await flush();expect(controller.state.candidate).toBe(f.pair);await controller.open(f.pair);
+    f.setCurrent(false);document.querySelector('.nested')!.textContent='Second replacement';await flush();
+    expect(controller.state.candidate).toBeNull();expect(controller.state.open).toBe(false);
+  });
+  it('ignores an old observer callback delivered after another translated pair takes ownership',async()=>{
+    // 受控平台端口递送已断开观察器的迟到回调；不改运行时内部状态，也不声称原生 disconnect 会保留记录。
+    const observers:Array<{callback:MutationCallback;observe:ReturnType<typeof vi.fn>;disconnect:ReturnType<typeof vi.fn>}> = [];
+    class Observer {
+      observe=vi.fn();disconnect=vi.fn();
+      constructor(public callback:MutationCallback){observers.push(this);}
+    }
+    vi.stubGlobal('MutationObserver',Observer);
+    const f=fixture();f.event();await flush();const controller=f.props().controller;
+    const nextElement=document.createElement('span');nextElement.className='fluent-read-bilingual-content next-translation';document.body.append(nextElement);
+    let nextCurrent=true;const nextPair={...f.pair,isCurrent:()=>nextCurrent};
+    f.setCurrent(false);f.ports.readPair.mockReturnValueOnce(nextPair);f.event('pointerover','.next-translation');await flush();
+    expect(observers).toHaveLength(2);expect(observers[0].disconnect).toHaveBeenCalledOnce();await controller.open(nextPair);
+    observers[0].callback([],observers[0] as unknown as MutationObserver);
+    expect(controller.state.candidate).toBe(nextPair);expect(controller.state.open).toBe(true);
+    nextCurrent=false;observers[1].callback([],observers[1] as unknown as MutationObserver);
+    expect(controller.state.candidate).toBeNull();expect(controller.state.open).toBe(false);expect(observers[1].disconnect).toHaveBeenCalledOnce();
+  });
   it('refuses invalid or duplicate owners and late UI creation after cancellation',async()=>{
     const aborted=new AbortController();aborted.abort();mountPersonalCorrections({isInvalid:false} as ContentScriptContext,aborted.signal,{} as any);
     mountPersonalCorrections({isInvalid:true} as ContentScriptContext,new AbortController().signal,{} as any);expect(mocks.shadow).not.toHaveBeenCalled();

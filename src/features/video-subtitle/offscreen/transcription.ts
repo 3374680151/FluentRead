@@ -1,7 +1,7 @@
 /**
  * @file src/features/video-subtitle/offscreen/transcription.ts
  * 文件职责：在 Offscreen Document 中串行调度视频 Whisper Worker、PCM 解码和模型预热。
- * 主要内容：复用共享并行预算及排队任务代次保护，管理单待处理转写、prepare 去重、模型切换、GPU 生命周期失败后的单次 CPU 重建、超时终止、首窗等待的有界预热租期、取消清理与按设备内存安排的空闲释放；透传实际语言检测诊断，预下载时校验本次来源偏好，并把字节及连接状态交给调用方。
+ * 主要内容：复用共享并行预算及排队任务代次保护，管理单待处理转写、prepare 去重、模型切换、GPU 生命周期失败后的单次 CPU 重建、超时终止、首窗等待的有界预热租期、取消清理与按设备内存安排的空闲释放，兼容解码返回后先检查会话归属再读取 PCM；透传实际语言检测诊断，预下载时校验本次来源偏好，并把字节及连接状态交给调用方。
  * 模块边界：只编排 Offscreen/Worker 资源，收到未知载荷先经共享 Worker 协议校验；不解析字幕时间轴，也不管理后台 tab owner。
  */
 import {withLocalInferenceBudget} from '@/src/shared/onnx/resources';
@@ -269,7 +269,11 @@ async function closeDecodeAudioContext(): Promise<void> {
   if (context) await context.close().catch(() => undefined);
 }
 
-async function decodeAudioToWhisperAudio(audio: ArrayBuffer): Promise<Float32Array> {
+async function decodeAudioToWhisperAudio(
+  audio: ArrayBuffer,
+  cancellationVersion: number,
+  streamId: LocalVideoTranscriptionRequest['streamId'],
+): Promise<Float32Array> {
   const AudioContextConstructor = getAudioContextConstructor();
   if (!AudioContextConstructor) throw new Error('当前浏览器没有可用的 Web Audio 解码器');
 
@@ -288,9 +292,17 @@ async function decodeAudioToWhisperAudio(audio: ArrayBuffer): Promise<Float32Arr
         );
       }),
     ]);
+    // close() 不保证原生 decode 已停止；迟到的旧会话不能再复制或重采样整段 PCM。
+    if (cancellationVersion !== transcriptionCancellationVersion || streamId !== activeStreamId) {
+      throw new Error('本地视频 AI 字幕已取消');
+    }
     const channels = Array.from({ length: decoded.numberOfChannels }, (_, index) => decoded.getChannelData(index));
     return resampleToWhisperAudio(channels, decoded.sampleRate);
   } catch (error) {
+    // 取消已负责关闭自己的 context；保留取消错误，不能把它改写为解码失败。
+    if (cancellationVersion !== transcriptionCancellationVersion || streamId !== activeStreamId) {
+      throw new Error('本地视频 AI 字幕已取消');
+    }
     await closeDecodeAudioContext();
     decodeError = new Error(`音频解码失败：${toError(error, '未知解码错误').message}`);
   } finally {
@@ -332,7 +344,7 @@ async function transcribeLocalVideoAudioNow(request: LocalVideoTranscriptionRequ
   // 再在 offscreen 用 AudioContext 解码。旧 audioBase64 仅作为兼容后备。
   const audio = request.audioPcm16Base64
     ? decodePcm16Base64(request.audioPcm16Base64)
-    : await decodeAudioToWhisperAudio(decodeBase64(request.audioBase64!));
+    : await decodeAudioToWhisperAudio(decodeBase64(request.audioBase64!), cancellationVersion, request.streamId);
   // 关闭 AudioContext 不保证未决解码不会迟到；同一 streamId 重启也不能
   // 重新取得旧任务的归属，必须在空音频返回或启动 Worker 前检查取消版本。
   if (cancellationVersion !== transcriptionCancellationVersion || request.streamId !== activeStreamId) {

@@ -8,6 +8,7 @@ const NativeResponse=globalThis.Response;
 const buffer=virtualModelBuffer;
 function response(bytes:number,status=200) {return {ok:status===200,status,arrayBuffer:vi.fn(async()=>buffer(bytes))} as unknown as Response;}
 function digest(bytes:number) {const asset=allAssets.find(asset=>asset.bytes===bytes)!;return Uint8Array.from(asset.sha256.match(/../g)!,part=>parseInt(part,16)).buffer;}
+function deferred<T>() {let resolve!: (value:T) => void, reject!: (error:Error) => void;const promise=new Promise<T>((yes,no)=>{resolve=yes;reject=no;});return {promise,resolve,reject};}
 let preferences:{match:ReturnType<typeof vi.fn>;put:ReturnType<typeof vi.fn>};
 let cache:{match:ReturnType<typeof vi.fn>;put:ReturnType<typeof vi.fn>;delete:ReturnType<typeof vi.fn>};
 beforeEach(async()=>{
@@ -22,6 +23,47 @@ beforeEach(async()=>{
 afterEach(()=>{vi.useRealTimers();vi.unstubAllGlobals();});
 
 describe('漫画模型固定版本和完整性',()=>{
+    it.each(['ocr','inpaint'] as const)('缓存 match 迟到时 %s 释放未读正文，不复制、摘要、删缓存或请求网络',async kind=>{
+        const abort=new AbortController(),entered=deferred<void>(),matched=deferred<Response>(),cancel=vi.fn(async()=>{});
+        const cached=new NativeResponse(new ReadableStream({cancel}));
+        const read=vi.spyOn(cached,'arrayBuffer').mockResolvedValue(buffer(kind==='ocr'?MANGA_OCR_ASSETS[0].bytes:MANGA_INPAINT_ASSET.bytes));
+        cache.match.mockImplementationOnce(()=>{entered.resolve();return matched.promise;});
+        const task=kind==='ocr'?loadMangaOcrAssets(abort.signal):loadMangaInpaintAsset(abort.signal);
+        const check=expect(task).rejects.toMatchObject({name:'AbortError'});
+        await entered.promise;abort.abort();matched.resolve(cached);await check;
+        expect(cancel).toHaveBeenCalledOnce();expect(read).not.toHaveBeenCalled();
+        expect(crypto.subtle.digest).not.toHaveBeenCalled();expect(cache.delete).not.toHaveBeenCalled();
+        expect(cache.put).not.toHaveBeenCalled();expect(fetch).not.toHaveBeenCalled();
+    });
+
+    it.each(['ocr','inpaint'] as const)('缓存正文复制结束后取消的 %s 不再启动摘要或删除有效缓存',async kind=>{
+        const abort=new AbortController(),asset=kind==='ocr'?MANGA_OCR_ASSETS[0]:MANGA_INPAINT_ASSET,cached=response(asset.bytes);
+        vi.mocked(cached.arrayBuffer).mockImplementationOnce(async()=>{abort.abort();return buffer(asset.bytes);});
+        cache.match.mockResolvedValueOnce(cached);
+        await expect(kind==='ocr'?loadMangaOcrAssets(abort.signal):loadMangaInpaintAsset(abort.signal)).rejects.toMatchObject({name:'AbortError'});
+        expect(crypto.subtle.digest).not.toHaveBeenCalled();expect(cache.delete).not.toHaveBeenCalled();
+        expect(fetch).not.toHaveBeenCalled();expect(cache.put).not.toHaveBeenCalled();
+    });
+
+    it.each(['ocr','inpaint'] as const)('原生摘要在 %s 取消后拒绝也不误删缓存',async kind=>{
+        const abort=new AbortController(),entered=deferred<void>(),hashed=deferred<ArrayBuffer>();
+        cache.match.mockResolvedValueOnce(response(kind==='ocr'?MANGA_OCR_ASSETS[0].bytes:MANGA_INPAINT_ASSET.bytes));
+        vi.mocked(crypto.subtle.digest).mockImplementationOnce(()=>{entered.resolve();return hashed.promise;});
+        const task=kind==='ocr'?loadMangaOcrAssets(abort.signal):loadMangaInpaintAsset(abort.signal);
+        const check=expect(task).rejects.toMatchObject({name:'AbortError'});
+        await entered.promise;abort.abort();hashed.reject(new Error('late native digest failure'));await check;
+        expect(cache.delete).not.toHaveBeenCalled();expect(cache.put).not.toHaveBeenCalled();expect(fetch).not.toHaveBeenCalled();
+    });
+
+    it.each(['ocr','inpaint'] as const)('等待打开缓存时 %s 取消不继续匹配文件',async kind=>{
+        const abort=new AbortController(),entered=deferred<void>(),opened=deferred<Cache>();
+        vi.mocked(caches.open).mockImplementationOnce(()=>{entered.resolve();return opened.promise;});
+        const task=kind==='ocr'?loadMangaOcrAssets(abort.signal):loadMangaInpaintAsset(abort.signal);
+        const check=expect(task).rejects.toMatchObject({name:'AbortError'});
+        await entered.promise;abort.abort();opened.resolve(cache as unknown as Cache);await check;
+        expect(cache.match).not.toHaveBeenCalled();expect(fetch).not.toHaveBeenCalled();
+    });
+
     it.each(['network','cache'])('释放 %s 拒绝正文，未结束取消不阻塞自动恢复',async stage=>{
         let rejectCancel!:(reason:unknown)=>void;
         const cancel=vi.fn(()=>new Promise<void>((_resolve,reject)=>{rejectCancel=reject;}));

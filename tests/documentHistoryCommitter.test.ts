@@ -113,11 +113,19 @@ describe('document history durable revision ownership', () => {
         task.revision = 2;
         expect(await writer.save(task, record('same', 'Latest correction'))).toBe(true);
         expect(task.savedRevision).toBe(2);
-        const transactions = vi.spyOn(database, 'transaction');
-        Object.defineProperty(delayed, 'result', {value: database});
+        // 真实 IndexedDB 的两次 open 各有独立连接；旧请求迟到后释放自己的连接，不能借用当前已恢复的连接。
+        const lateDatabase = await new Promise<IDBDatabase>((resolve, reject) => {
+            const request = actualOpen('FluentReadDocumentHistory', 1);
+            request.onsuccess = () => resolve(request.result);
+            request.onerror = () => reject(request.error);
+        });
+        const transactions = vi.spyOn(lateDatabase, 'transaction');
+        const close = vi.spyOn(lateDatabase, 'close');
+        Object.defineProperty(delayed, 'result', {value: lateDatabase});
         delayed.onsuccess!(new Event('success'));
         await flush();
         expect(transactions).not.toHaveBeenCalled();
+        expect(close).toHaveBeenCalledOnce();
         expect((await history.load('same'))?.translations).toEqual(['Latest correction']);
         expect(await writer.save(task, record('same', 'Latest correction'))).toBe(true);
         expect(task.savedRevision).toBe(2);

@@ -7,6 +7,13 @@ import {Config, normalizeConfig} from '@/src/core/config/model';
 import {options, services} from '@/src/core/config/catalog';
 import {prepareConfigForExport, prepareConfigForImport} from '@/src/core/config/transfer';
 import {createFreeFallbackRunner} from '@/src/services/translation/freeFallback';
+import {translateBilibiliFree} from '@/src/providers/translation/bilibili-free';
+import {translateDoubaoWeb, DOUBAO_WEB_HOME} from '@/src/providers/translation/doubao-web';
+import {translateFreeChineseWebText} from '@/src/providers/translation/free-chinese-web';
+import {translateExtraFreeWebText} from '@/src/providers/translation/free-extra-web';
+import {translateOfficialFreeWebText} from '@/src/providers/translation/free-official-web';
+import {translateMyMemoryText} from '@/src/providers/translation/mymemory';
+import {withProviderSnapshot} from './helpers/providerSnapshot';
 
 const providers: FreeWebProvider[] = ['transmart', 'yandexFree', 'volcengineFree'];
 const fetchMock = vi.fn<typeof fetch>();
@@ -24,6 +31,55 @@ function streamResponse(status: number) {
 }
 beforeEach(() => {fetchMock.mockReset().mockImplementation(async () => reply()); setRuntimeFetch(fetchMock);});
 afterEach(() => setRuntimeFetch());
+
+describe('free provider slot packet integrity', () => {
+    const adapters = [
+        {id: 'bilibili', translate: (origin: string) => translateBilibiliFree({origin, sourceLanguage: 'en', targetLanguage: 'zh-Hans'}),
+            response: (text: string) => Response.json({choices: [{finish_reason: 'stop', message: {content: text}}]})},
+        {id: 'doubaoWeb', translate: (origin: string) => translateDoubaoWeb({origin, sourceLanguage: 'en', targetLanguage: 'zh-Hans'}),
+            response: (text: string) => new Response(`event: json\ndata: ${JSON.stringify({code: 0, data: {items: [{index: 0, res: text}]}})}\n\nevent: done\ndata:\n\n`,
+                {headers: {'content-type': 'text/event-stream'}})},
+        {id: 'volcengineFree', translate: (origin: string) => translateFreeWebText('volcengineFree', origin, 'en', 'zh-Hans'),
+            response: (text: string) => Response.json({base_resp: {status_code: 0}, translation: text})},
+        {id: 'youdaoFree', translate: (origin: string) => translateFreeChineseWebText('youdaoFree', origin, 'en', 'zh-Hans'),
+            response: (text: string) => Response.json({fanyi: {type: 'en2zh-chs', tran: text}})},
+        {id: 'reversoFree', translate: (origin: string) => translateExtraFreeWebText('reversoFree', origin, 'en', 'zh-Hans'),
+            response: (text: string) => Response.json({translation: [text]})},
+        {id: 'modernMtFree', translate: (origin: string) => translateOfficialFreeWebText('modernMtFree', origin, 'en', 'zh-Hans'),
+            response: (text: string) => Response.json({status: 200, data: {translation: text}})},
+        {id: 'myMemory', translate: (origin: string) => translateMyMemoryText(origin,
+            withProviderSnapshot({sourceLanguage: 'en', targetLanguage: 'zh-Hans'}, {service: 'myMemory'})),
+            response: (text: string) => Response.json({responseStatus: 200, responseData: {translatedText: text}})},
+    ];
+    function installAdapter(adapter: typeof adapters[number], outputs: readonly string[]) {
+        let ordinal = 0;
+        fetchMock.mockImplementation(async input => String(input) === DOUBAO_WEB_HOME
+            ? new Response(JSON.stringify({ttwid: 'synthetic-guest', web_id: '7390000000000000001'}))
+            : adapter.response(outputs[ordinal++]!));
+    }
+
+    describe.each(adapters)('$id slot packet', adapter => {
+        it.each([undefined, 'custom-slots'])('retains namespace %s with literal inner markers, empty slots and whitespace', async nonce => {
+            const literal = '___FLUENTREAD_literal_0_BEGIN___sample___FLUENTREAD_literal_0_END___';
+            const packet = serializeTranslationSlots([literal, '', ' \n\t', ' Tail '], nonce);
+            installAdapter(adapter, [`译文${literal}`, '尾译']);
+            const output = await adapter.translate(packet.payload);
+            expect(parseTranslationSlots(packet, output)).toEqual([`译文${literal}`, '', ' \n\t', ' 尾译 ']);
+            expect(output.startsWith(packet.starts[0]!)).toBe(true);
+            expect(output.endsWith(packet.ends[3]!)).toBe(true);
+        });
+
+        it.each(['same-begin', 'same-end', 'other-begin', 'other-end', 'crossed'] as const)
+        ('rejects active outer markers in translated content: %s', async kind => {
+            const packet = serializeTranslationSlots(['First', 'Second'], 'fixed-slots');
+            const marker = { 'same-begin': packet.starts[0], 'same-end': packet.ends[0],
+                'other-begin': packet.starts[1], 'other-end': packet.ends[1],
+                crossed: `${packet.starts[1]}crossed${packet.ends[0]}` }[kind];
+            installAdapter(adapter, [`译文${marker}`, '第二条']);
+            await expect(adapter.translate(packet.payload)).rejects.toThrow();
+        });
+    });
+});
 
 describe('free-only web providers', () => {
     it.each(providers)('%s cancels an endless failure without waiting for the cancellation handshake', async provider => {

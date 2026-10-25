@@ -1437,6 +1437,39 @@ describe('SelectionTranslator TTS generation and progress ownership', () => {
 describe('SelectionTranslator word TTS generation and fallback', () => {
     const pronunciation = {text: 'American pronunciation', label: '美式'};
 
+    it.each([
+        ['local-only', 'ready'], ['local-only', 'missing-model'], ['local-first', 'ready'], ['online-only', 'ready'],
+    ] as const)('[word-audio-policy] the actual pronunciation button respects %s with %s', async (mode, outcome) => {
+        const fixture = mountSelection(false, undefined, 'chrome', true), port = fixture.renderPort!;
+        const urls: string[] = [], pause = vi.fn();
+        vi.stubGlobal('Audio', class {
+            currentTime = 0;duration = 1;preload = '';play = vi.fn(async () => undefined);pause = pause;removeAttribute = vi.fn();
+            constructor(src: string) {urls.push(src);}
+        });
+        const response = deferredTts();prepareTts(fixture, [response.promise]);fixture.config.selectionTtsMode = mode;
+        fixture.state.selectedText = 'hello';fixture.state.showTooltip = true;
+        fixture.state.wordCard = {word: 'hello', normalizedWord: 'hello', phonetics: [{text: '/həˈləʊ/', label: '美式', audio: 'https://dictionary.test/hello.mp3'}], meanings: [], sources: []};
+        await Vue.nextTick();
+        const trigger = port.root.querySelector('button[aria-label="播放美式"]');expect(trigger).not.toBeNull();
+        const pending = port.click(trigger!);
+        response.resolve(outcome === 'missing-model' ? {success: false, errorCode: 'local-tts-model-not-downloaded'} : {success: true, transport: 'offscreen'});
+        await pending;await Vue.nextTick();
+        if (mode === 'local-only') {
+            expect.soft(urls).toEqual([]);
+            expect.soft(ttsMessages(fixture, 'selectionTts')).toEqual([expect.objectContaining({text: 'hello', language: 'en-US'})]);
+            expect(ttsMessages(fixture, 'selectionTtsGoogle')).toEqual([]);
+            if (outcome === 'missing-model') expect(port.root.textContent).toContain('selectionTts.localModelNotDownloaded');
+        } else {
+            expect(urls).toEqual(['https://dictionary.test/hello.mp3']);expect(ttsMessages(fixture, 'selectionTts')).toEqual([]);
+        }
+        expect(fixture.lifecycleErrors).not.toHaveBeenCalled();
+        if (outcome === 'ready') {
+            expect(trigger!.getAttribute('aria-label')).toBe('停止播放美式');await port.click(trigger!);await Vue.nextTick();
+            expect(trigger!.getAttribute('aria-label')).toBe('播放美式');
+            if (mode === 'local-only') expect(ttsMessages(fixture, 'selectionTtsStop')).toHaveLength(1);else expect(pause).toHaveBeenCalledOnce();
+        }
+    });
+
     function beginWordTts(fixture: ReturnType<typeof mountSelection>, response: ReturnType<typeof deferredTts>) {
         fixture.state.wordCard = {word: 'hello'};
         prepareTts(fixture, [response.promise]);

@@ -1,7 +1,7 @@
 <!--
  * @file src/features/vocabulary/ui/VocabularyBook.vue
  * 文件职责：组织内容优先的学习收藏列表与主动复习，协调句子听读、解释保存、筛选与文件操作。
- * 主要内容：相同译文保留原文且不重复展示；把复习作为列表主操作，收藏开关与文件动作收进管理菜单；搜索与类型筛选合为一行，每条收藏直接提供学习入口；筛选排序独立于搜索输入，正文索引按需建立并限制文本字符总量，超预算词条继续完整匹配；界面文案订阅共享语言与资源修订，缓存期间首次加载的语言也能自动更新。配置、数据和朗读沿用已有消息协议，后台进度保持播放状态、结束或停止才释放，页面音频失败按在线与浏览器两级有限回退并合并重复错误通知；收藏面板或文档隐藏时延后普通读取并停止到期扫描，恢复可见后串行读取，已接受的保存继续结算；确认开始即占用操作状态，等待、菜单让步及响应后校验生命周期，拒绝迟到请求、文件下载和已卸载界面更新。
+ * 主要内容：相同译文保留原文且不重复展示；把复习作为列表主操作，收藏开关与文件动作收进管理菜单；搜索与类型筛选合为一行，每条收藏直接提供学习入口；筛选排序独立于搜索输入，正文索引按需建立并限制文本字符总量，超预算词条继续完整匹配；界面文案订阅共享语言与资源修订，缓存期间首次加载的语言也能自动更新。配置、数据和朗读沿用已有消息协议，后台进度保持播放状态、结束或停止才释放，页面音频失败按在线与浏览器两级有限回退并合并重复错误通知；音频恢复后复验代次再解码，浏览器语音只接受当前话语的开始事件；收藏面板或文档隐藏时延后普通读取并停止到期扫描，恢复可见后串行读取，已接受的保存继续结算；确认开始即占用操作状态，等待、菜单让步及响应后校验生命周期，拒绝迟到请求、文件下载和已卸载界面更新。
  * 模块边界：UI 不直接访问 Dexie 或上传学习数据；完整备份进入备份与恢复页，收藏文件只包含本领域数据，数据库操作集中在后台 repository/handler，上下文和来源只有用户明确选择时才导出。
  -->
 <template>
@@ -370,6 +370,7 @@ async function playEntryAudioBytes(bytes: Uint8Array, contentType: string, gener
   if (generation !== speechRequestGeneration) return 'stale';
   if (entryAudioContext && entryAudioContext.state !== 'closed') {
     await entryAudioContext.resume();
+    if (generation !== speechRequestGeneration) return 'stale';
     const encoded = new Uint8Array(bytes.byteLength);
     encoded.set(bytes);
     const buffer = await entryAudioContext.decodeAudioData(encoded.buffer as ArrayBuffer);
@@ -437,6 +438,7 @@ function speakEntryWithBrowser(entry: VocabularyEntry, generation = speechReques
     const voices = window.speechSynthesis.getVoices();
     utterance.voice = voices.find(voice => voice.lang.toLowerCase() === utterance.lang.toLowerCase()) ?? null;
     utterance.onstart = () => {
+      if (entryUtterance !== utterance) return;
       speechPhase.value = 'playing';
       if (entrySpeechWatchdog !== null) window.clearTimeout(entrySpeechWatchdog);
       entrySpeechWatchdog = null;

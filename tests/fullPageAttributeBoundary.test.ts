@@ -58,7 +58,6 @@ vi.mock('@/src/features/full-page-translation/content/layout', () => ({
 vi.mock('@/src/features/full-page-translation/ui/modalProgressHint', () => ({syncModalTranslationHint: () => undefined}));
 vi.mock('@/src/features/full-page-translation/content/titleTranslation', () => ({
     startFullPageTitleTranslation: () => undefined, stopFullPageTitleTranslation: () => undefined,
-    isFullPageTitleTranslationActive: () => false,
 }));
 vi.mock('@/src/features/page-notice/public', () => ({showPageNotice: () => undefined}));
 vi.mock('@/src/core/config/customOpenAI', () => ({getCustomOpenAIProviderLabel: () => 'Fixture provider'}));

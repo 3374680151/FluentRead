@@ -19,7 +19,6 @@ vi.mock('@/src/features/full-page-translation/content/translationRequest', () =>
 }));
 
 import {
-    isFullPageTitleTranslationActive,
     startFullPageTitleTranslation,
     stopFullPageTitleTranslation,
 } from '@/src/features/full-page-translation/content/titleTranslation';
@@ -213,11 +212,9 @@ describe('全文翻译的页面标题', () => {
 
         expect(hooks.translateText).toHaveBeenCalledTimes(1);
         expect(currentTitle).toBe('今日要闻');
-        expect(isFullPageTitleTranslationActive()).toBe(true);
 
         stopFullPageTitleTranslation();
         expect(currentTitle).toBe(ORIGINAL);
-        expect(isFullPageTitleTranslationActive()).toBe(false);
     });
 
     it('把标题本身作为上下文，避免再次翻译时把译文喂回模型', async () => {
@@ -400,7 +397,6 @@ describe('全文翻译的页面标题', () => {
     it('未启动时调用恢复是安全的空操作', () => {
         expect(() => stopFullPageTitleTranslation()).not.toThrow();
         expect(currentTitle).toBe(ORIGINAL);
-        expect(isFullPageTitleTranslationActive()).toBe(false);
     });
 
     it('重复启动会先归还上一轮标题，再以当前标题为源', async () => {

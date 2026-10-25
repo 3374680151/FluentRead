@@ -883,13 +883,15 @@ describe('界面 i18n 契约', () => {
       '请选择带 Ctrl、Alt 或 Shift 的组合键',
       '点击文字起点',
       '点击文字终点',
-      '选区过长，请点击较近的终点',
-      '此范围不支持，请换一个终点',
       '未点中文字，请点击起点',
       '未点中文字，请点击终点',
       '起点与终点相同，请换一个位置',
+      '选区过长，请点击较近的终点',
+      '此范围不支持，请换一个终点',
       '额外翻译方案',
     ];
+    expect(runtimeFeedbackRows.filter(row => sources.includes(row[0]))).toEqual([]);
+    for (const source of sources) expect(correctionRows.filter(row => row[0] === source)).toHaveLength(1);
     for (const language of ['en-US', 'ja-JP', 'ko-KR', 'fr-FR', 'ru-RU', 'es-ES'] as const) {
       for (const source of sources) {
         const localized = translateLegacyText(source, language);
@@ -909,16 +911,25 @@ describe('界面 i18n 契约', () => {
       'es-ES': 'Esc para cancelar',
     } as const;
     for (const language of Object.keys(cancelSuffixes) as Array<keyof typeof cancelSuffixes>) {
-      for (const source of ['点击文字起点', '点击文字终点', '选区过长，请点击较近的终点', '此范围不支持，请换一个终点', '未点中文字，请点击起点', '未点中文字，请点击终点', '起点与终点相同，请换一个位置']) {
+      for (const source of ['点击文字起点', '点击文字终点', '未点中文字，请点击起点', '未点中文字，请点击终点',
+        '起点与终点相同，请换一个位置', '选区过长，请点击较近的终点', '此范围不支持，请换一个终点']) {
         const localized = translateLegacyText(`${source} · Esc 取消`, language);
         expect(localized).toBe(`${translateLegacyText(source, language)} · ${cancelSuffixes[language]}`);
         expect(localized).not.toContain(source);
+        const spacedSource = ` \t${source} · Esc 取消\n`;
+        expect(translateLegacyText(spacedSource, language)).toBe(` \t${localized}\n`);
+        expect(translateLegacyText(spacedSource, 'zh-CN')).toBe(spacedSource);
       }
-      for (const count of [0, 1, 12, 125]) {
-        expect(translateLegacyText(`${count} · Esc 取消`, language)).toBe(`${count} · ${cancelSuffixes[language]}`);
+      for (const count of [0, 1, 12, 125, 987654321]) {
+        const source = `${count} · Esc 取消`;
+        const localized = `${count} · ${cancelSuffixes[language]}`;
+        expect(translateLegacyText(source, language)).toBe(localized);
+        expect(translateLegacyText(` \t${source}\n`, language)).toBe(` \t${localized}\n`);
+        expect(translateLegacyText(` \t${source}\n`, 'zh-CN')).toBe(` \t${source}\n`);
       }
     }
     expect(translateLegacyText('点击文字起点 · Esc 取消', 'zh-CN')).toBe('点击文字起点 · Esc 取消');
+    expect(runtimeFeedbackRows.some(row => row[0] === '12 · Esc 取消')).toBe(false);
   });
 
   it('人工校正容易发生语义误判的高频设置文案', () => {

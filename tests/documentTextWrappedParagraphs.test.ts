@@ -42,6 +42,32 @@ describe('hard-wrapped plain-text paragraphs', () => {
         expect(sources(`${wrapped[0]}\n    ${wrapped[1]}`)).toEqual([wrapped[0], wrapped[1]]);
     });
 
+    it.each(['\n', '\r\n', '\r'].flatMap(ending => [
+        ['中', '文'], ['𠀀', '𠀁'], ['𠀀', '文'], ['中', '𠀁'],
+    ].map(([left, right]) => ({ending, left, right}))))('joins complete CJK code points at $left/$right boundaries with $ending line endings', ({ending, left, right}) => {
+        const first = left.repeat(40), second = right.repeat(40), input = first + ending + second;
+        const parsed = parseDocument('code-points.txt', input);
+        expect(parsed.segments.map(segment => segment.source)).toEqual([first + second]);
+        expect(renderDocument(parsed, [], 'translated')).toBe(input);
+    });
+
+    it.each(['\n', '\r\n', '\r'])('removes soft-wrap whitespace beside supplementary Han with %j line endings and preserves the source bytes', ending => {
+        const first = '𠀀'.repeat(40), second = '𠀁'.repeat(40);
+        const input = `  ${first} \t${ending}  ${second}\n`;
+        const parsed = parseDocument('indented-han.txt', input);
+        expect(parsed.segments.map(segment => segment.source)).toEqual([first + second]);
+        expect(renderDocument(parsed, [], 'translated')).toBe(input);
+    });
+
+    it.each([
+        ['中'.repeat(39) + 'a', '𠀁'.repeat(40)],
+        ['𠀀'.repeat(40), 'a' + '中'.repeat(39)],
+        ['中'.repeat(39) + '😀', '𠀁'.repeat(40)],
+        ['𠀀'.repeat(40), '😀' + '中'.repeat(39)],
+    ])('keeps a separator when either immediate boundary code point requires one', (first, second) => {
+        expect(sources(`${first}\n${second}`)).toEqual([`${first} ${second}`]);
+    });
+
     it('does not merge lines that end a sentence, numbered items or anything in Markdown', () => {
         expect(sources('This line is long enough and ends its sentence here.\nThis one starts another sentence of similar length')).toHaveLength(2);
         expect(sources('The first numbered step is long enough to look wrapped\n2) the second step follows on the next line here')).toHaveLength(2);

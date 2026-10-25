@@ -12,7 +12,7 @@ import {
   VocabularyBookRepository,
   advanceVocabularyReviewSession,
   buildAnkiTsv,
-  buildVocabularyCloze,
+  vocabularyReviewCloze,
   buildVocabularyIdentityKey,
   createVocabularyLifecycleGuard,
   createVocabularyReviewSession,
@@ -116,12 +116,14 @@ describe('Anki export', () => {
 });
 
 describe('review and import presentation helpers', () => {
-  it('builds cloze prompts only from complete word occurrences', () => {
-    expect(buildVocabularyCloze('The article discusses art.', 'art')).toBe('The article discusses ____.');
-    expect(buildVocabularyCloze("Don't forget don’t.", "don't")).toBe('____ forget ____.');
-    expect(buildVocabularyCloze('A well-known example stays known.', 'known')).toBe('A well-known example stays ____.');
-    expect(buildVocabularyCloze('A well-known example.', 'well-known')).toBe('A ____ example.');
-    expect(buildVocabularyCloze('No matching answer is present.', 'common')).toBe('');
+  it.each([
+    ['The article discusses art.', 'art', 'The article discusses ____.'],
+    ["Don't forget don’t.", "don't", '____ forget ____.'],
+    ['A well-known example stays known.', 'known', 'A well-known example stays ____.'],
+    ['A well-known example.', 'well-known', 'A ____ example.'],
+    ['No matching answer is present.', 'common', ''],
+  ])('builds real review cloze prompts only from complete occurrences: %s', (text, term, cloze) => {
+    expect(vocabularyReviewCloze({term, contexts: [{text, capturedAt: NOW}]})).toBe(cloze);
   });
 
   it('warns instead of rejecting exports above the former hard size limit', () => {

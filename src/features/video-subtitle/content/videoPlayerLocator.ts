@@ -117,7 +117,7 @@ function hasCurrentXVideoLink(video: HTMLVideoElement, view: Window): boolean {
   return Boolean(status && findXVideoScope(video, view, status));
 }
 
-function playerForVideo(video: HTMLVideoElement, view: Window): HTMLElement {
+export function getVideoPlayerForVideo(video: HTMLVideoElement, view: Window = window): HTMLElement {
   const fullscreen = view.document.fullscreenElement;
   const youtubePlayer = video.closest<HTMLElement>('#movie_player, .html5-video-player');
   // YouTube 可以将 html 设为全屏，再用 fixed 撑满实际播放器；html 此时可能
@@ -190,7 +190,7 @@ function interactionVideo(
     depth += 1, scope = scope.parentElement) {
     const videos = scope.querySelectorAll<HTMLVideoElement>('video');
     if (videos.length > 1) break;
-    if (videos.length === 1 && playerForVideo(videos[0], view).contains(target)) return videos[0];
+    if (videos.length === 1 && getVideoPlayerForVideo(videos[0], view).contains(target)) return videos[0];
   }
 
   const post = target.closest('article');
@@ -249,16 +249,8 @@ export function createVideoPlayerLocator(options: VideoPlayerLocatorOptions = {}
   let selected: VideoPlayerTarget | null = null;
   const listeners = new Set<(target: VideoPlayerTarget | null) => void>();
 
-  const candidates = (): VideoPlayerTarget[] => Array.from(document.querySelectorAll<HTMLVideoElement>('video'))
-    .filter((video) => isVisibleVideo(video, view))
-    .map((video) => {
-      const player = playerForVideo(video, view);
-      const candidate = {video, player, key: videoKey(video), fullscreen: isFullscreenVideo(video, document), interacting: false};
-      return {...candidate, interacting: isInteractionVideo(candidate, document, activeInteraction)};
-    });
-
   const sync = (): VideoPlayerTarget | null => {
-    const next = chooseCandidate(candidates(), document, view, isXPage, lastInteraction, selected);
+    const next = selectVideoPlayerTarget(document, {window: view, isXPage, selected, lastInteraction, activeInteraction});
     const changed = next?.key !== selected?.key || next?.player !== selected?.player
       || next?.fullscreen !== selected?.fullscreen || next?.interacting !== selected?.interacting;
     selected = next;
@@ -282,7 +274,7 @@ export function createVideoPlayerLocator(options: VideoPlayerLocatorOptions = {}
     const video = interactionVideo(target, document, view, selected);
     if (!video || activeInteraction !== video) return;
     const related = (event as MouseEvent).relatedTarget;
-    const player = playerForVideo(video, view);
+    const player = getVideoPlayerForVideo(video, view);
     if (related && player.contains(related as Node)) return;
     activeInteraction = null;
     sync();
@@ -303,7 +295,7 @@ export function createVideoPlayerLocator(options: VideoPlayerLocatorOptions = {}
     const video = interactionVideo(target, document, view, selected);
     if (!video || activeInteraction !== video) return;
     const related = (event as FocusEvent).relatedTarget;
-    const player = playerForVideo(video, view);
+    const player = getVideoPlayerForVideo(video, view);
     if (related && player.contains(related as Node)) return;
     activeInteraction = null;
     sync();
@@ -424,19 +416,17 @@ export function createVideoPlayerLocator(options: VideoPlayerLocatorOptions = {}
 
 export function selectVideoPlayerTarget(
   document: Document,
-  options: {window?: Window; isXPage?: boolean; selected?: VideoPlayerTarget | null} = {},
+  options: {window?: Window; isXPage?: boolean; selected?: VideoPlayerTarget | null;
+    lastInteraction?: HTMLVideoElement | null; activeInteraction?: HTMLVideoElement | null} = {},
 ): VideoPlayerTarget | null {
   const view = options.window || window;
   const isXPage = options.isXPage ?? /(^|\.)x\.com$|(^|\.)twitter\.com$/i.test(view.location.hostname);
   const candidates = Array.from(document.querySelectorAll<HTMLVideoElement>('video'))
     .filter((video) => isVisibleVideo(video, view))
     .map((video) => {
-      const player = playerForVideo(video, view);
-      return {video, player, key: videoKey(video), fullscreen: isFullscreenVideo(video, document), interacting: false};
+      const player = getVideoPlayerForVideo(video, view);
+      const candidate = {video, player, key: videoKey(video), fullscreen: isFullscreenVideo(video, document), interacting: false};
+      return {...candidate, interacting: isInteractionVideo(candidate, document, options.activeInteraction || null)};
     });
-  return chooseCandidate(candidates, document, view, isXPage, null, options.selected || null);
-}
-
-export function getVideoPlayerForVideo(video: HTMLVideoElement, view: Window = window): HTMLElement {
-  return playerForVideo(video, view);
+  return chooseCandidate(candidates, document, view, isXPage, options.lastInteraction || null, options.selected || null);
 }

@@ -358,6 +358,21 @@ describe('Safari 免费池授权过滤', () => {
 });
 
 describe('免费翻译服务', () => {
+    it.each([false, true])('实际 prepare/free-pool/restore 链接受紧邻英文的 emoji 标记且无需换线，批量=%s', async batch => {
+        Object.assign(mockConfig, {from: 'zh-Hans', to: 'en', freeTranslationOrder: batch ? ['transmart'] : ['transmart', 'google']});
+        const {prepareGlossaryRequest} = await import('@/src/services/translation/glossaryProtection');
+        const current = createTranslationProviderConfigSnapshot(providerConfigFixture(mockConfig));
+        const packet = batch
+            ? prepareGlossaryRequest({origin: ['🙂猫', '🚚狗']}, current)
+            : prepareGlossaryRequest({origin: '🙂猫'}, current);
+        webMock.mockImplementation(async (_provider: string, text: string) => text.replaceAll('猫', 'cat').replaceAll('狗', 'dog'));
+        const result = await settle(freeTranslation(withProviderSnapshot(packet.message, mockConfig)));
+        expect(packet.restore(result)).toEqual(batch ? ['🙂cat', '🚚dog'] : '🙂cat');
+        expect(webMock).toHaveBeenCalledTimes(batch ? 2 : 1);
+        expect(googleMock).not.toHaveBeenCalled();
+        expect(googleOwnerMock).not.toHaveBeenCalled();
+        expect((await getFreeTranslationWeightSnapshot(current)).entries.find(entry => entry.providerId === 'transmart')?.status).toBe('ready');
+    });
     it.each([false, true])('broker 自动保护 emoji 后在免费池拒绝丢失标记的候选，批量=%s', async batch => {
         Object.assign(mockConfig, {freeTranslationOrder:['transmart','google'],useCache:true,enableAIContext:false});
         const {createTranslationBroker} = await import('@/src/services/translation/broker');

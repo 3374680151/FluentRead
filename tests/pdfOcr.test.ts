@@ -6,7 +6,7 @@
  */
 import {describe, expect, it, vi} from 'vitest';
 import type {ParsedDocument, PdfDocumentBlock, PdfDocumentPage} from '@/src/features/document-translation/core/document';
-import {pdfPagesNeedingOcr, recognizePdfDocument, type PdfOcrLine} from '@/src/features/document-translation/services/pdfOcr';
+import {pdfPagesNeedingOcr, recognizePdfDocument, remapPdfTranslationState, type PdfOcrLine} from '@/src/features/document-translation/services/pdfOcr';
 
 const block = (segmentIndex: number, overrides: Partial<PdfDocumentBlock> = {}): PdfDocumentBlock => ({segmentIndex, x: 50, y: 60, width: 300, height: 12, fontSize: 10, lineHeight: 12, lineCount: 1, fontFamily: 'serif', fontWeight: 400, textAlign: 'left', ...overrides});
 // 没有版面块的页默认是扫描页；需要空白页时显式传入 scanned: false。
@@ -89,4 +89,57 @@ describe('scanned PDF recognition', () => {
         await expect(recognizePdfDocument(pdf([page(1)]), recognize, {signal: aborted.signal})).rejects.toMatchObject({name: 'AbortError'});
         await expect(recognizePdfDocument(pdf([page(1)]), async () => {throw new Error('engine missing');})).rejects.toThrow('engine missing');
     });
+
+    it('remaps retained translations by native page and block through inserted OCR segments, including repeated source text', async () => {
+        const source = pdf([page(1), page(2, [block(0), block(-1), block(1, {y: 200})]), page(3),
+            page(4, [block(2), block(3, {y: 200})])], ['Repeated passage', 'Repeated passage', 'Repeated passage', 'Untranslated']);
+        const translations = ['First human correction', 'Existing machine translation', 'Second human correction'];
+        const confirmed = [0, 2, 3, 99];
+        const recognized = await recognizePdfDocument(source, async () => [{text: 'Repeated passage', x: 60, y: 100, width: 300, height: 12}]);
+        const before = JSON.stringify({source, recognized, translations, confirmed});
+        expect(remapPdfTranslationState(source, recognized, translations, confirmed)).toEqual({
+            translations: ['', 'First human correction', 'Existing machine translation', '', 'Second human correction', ''],
+            confirmedTranslationIds: [1, 4],
+        });
+        expect(JSON.stringify({source, recognized, translations, confirmed})).toBe(before);
+    });
+
+    it.each(['previous-kind', 'next-kind', 'previous-missing', 'next-missing'] as const)('does not apply PDF IDs to %s documents', kind => {
+        const source = pdf([page(1, [block(0)])], ['source']);
+        const next = structuredClone(source);
+        if (kind === 'previous-kind') source.binary = {kind: 'docx'} as any;
+        if (kind === 'next-kind') next.binary = {kind: 'docx'} as any;
+        if (kind === 'previous-missing') source.binary = undefined;
+        if (kind === 'next-missing') next.binary = undefined;
+        expect(remapPdfTranslationState(source, next, ['human'], [0])).toEqual({translations: [], confirmedTranslationIds: []});
+    });
+
+    it.each([0, 1, 2])('retains native identities with an OCR page before, between or after native pages (index %s)', async position => {
+        const pages = [page(0, [block(0)]), page(0, [block(1)])];
+        pages.splice(position, 0, page(0));
+        pages.forEach((entry, index) => {entry.pageNumber = index + 1;});
+        const source = pdf(pages, ['Same original', 'Same original']);
+        const recognized = await recognizePdfDocument(source, async () => paragraph('Inserted'));
+        const translations = ['First human correction', 'Existing machine translation'];
+        translations.splice(position, 0, '');
+        expect(remapPdfTranslationState(source, recognized, ['First human correction', 'Existing machine translation'], [0]))
+            .toEqual({translations, confirmedTranslationIds: [position === 0 ? 1 : 0]});
+    });
+
+    it.each(['missing-page', 'missing-block', 'preserved-target', 'missing-source', 'missing-target', 'changed-source', 'changed-geometry'] as const)(
+        'does not transfer a correction when the native identity has %s', mismatch => {
+            const source = pdf([page(1, [block(0)])], ['source']);
+            const next = structuredClone(source);
+            const oldPage = (source.binary as any).pages[0];
+            const nextPage = (next.binary as any).pages[0];
+            if (mismatch === 'missing-page') nextPage.pageNumber = 2;
+            if (mismatch === 'missing-block') nextPage.blocks = [];
+            if (mismatch === 'preserved-target') nextPage.blocks[0].segmentIndex = -1;
+            if (mismatch === 'missing-source') oldPage.blocks[0].segmentIndex = 99;
+            if (mismatch === 'missing-target') nextPage.blocks[0].segmentIndex = 99;
+            if (mismatch === 'changed-source') next.segments[0].source = 'different';
+            if (mismatch === 'changed-geometry') nextPage.blocks[0].x += 1;
+            expect(remapPdfTranslationState(source, next, ['human'], [0])).toEqual({translations: [''], confirmedTranslationIds: []});
+        },
+    );
 });

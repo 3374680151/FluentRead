@@ -1,7 +1,7 @@
 /**
  * @file src/features/video-subtitle/content/video-ai/fullCapture.ts
  * 文件职责：执行完整视频 AI 字幕的独立音频读取、分窗识别和最终 cue 整理。
- * 主要内容：支持 HLS PCM 注入、限额流式媒体读取与可取消的 16 kHz 原生解码、可取消元数据等待的隐藏扫描副本、有界串行 Whisper 窗口、完整模式字幕整理和取消清理；解码上下文的关闭握手不阻塞识别完成或扫描回退。
+ * 主要内容：支持 HLS PCM 注入、限额流式媒体读取与可取消的 16 kHz 原生解码、可取消元数据等待的隐藏扫描副本、有界串行 Whisper 窗口、完整模式字幕整理和取消清理；解码返回先复核会话再读取 PCM，解码上下文的关闭握手不阻塞识别完成或扫描回退。
  * 模块边界：不得接管用户可见 video 的播放状态；页面源隔离由调用方通过选项注入。
  */
 import {
@@ -654,6 +654,8 @@ export class VideoAiFullCaptureController {
         decodeContext.decodeAudioData(encoded.buffer as ArrayBuffer),
         interrupted,
       ]);
+      // decode 与取消可在同一 turn 竞争；成功分支已赢得 race 也不代表会话仍有效。
+      if (!this.isCurrentSession(session)) throw new Error(FULL_CANCELLED_ERROR);
       const channels = Array.from(
         { length: decoded.numberOfChannels },
         (_, channel) => decoded.getChannelData(channel),

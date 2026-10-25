@@ -158,7 +158,6 @@ vi.mock('@/src/features/full-page-translation/ui/translationIndicators', () => (
 vi.mock("@/src/features/full-page-translation/content/titleTranslation", () => ({
     startFullPageTitleTranslation: () => undefined,
     stopFullPageTitleTranslation: () => undefined,
-    isFullPageTitleTranslationActive: () => false,
 }));
 vi.mock("@/src/features/full-page-translation/content/renderer", async (importOriginal) => ({
     ...await importOriginal<typeof import("@/src/features/full-page-translation/content/renderer")>(),

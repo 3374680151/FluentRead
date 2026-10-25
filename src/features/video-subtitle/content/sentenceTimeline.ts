@@ -125,16 +125,6 @@ export function buildVideoSentenceTimeline(
   return result;
 }
 
-/** 重叠字幕按最近开始的原文材料选中，字幕间隙不猜测仍在发音的句子。 */
-export function findVideoSentenceAtTime(sentences: readonly VideoSentence[], currentMs: number): VideoSentence | null {
-  let active: VideoSentence | null = null;
-  for (const sentence of sentences) {
-    if (currentMs >= sentence.startMs && currentMs < sentence.endMs
-      && (!active || sentence.startMs >= active.startMs)) active = sentence;
-  }
-  return active;
-}
-
 /**
  * 按调用时的数组顺序和时间范围创建快照；原数组可继续编辑，编辑后应重建索引。
  * 起点二分后按最大终点树寻找最近仍覆盖当前时刻的范围，避免长重叠 cue 导致退化为全表回扫。

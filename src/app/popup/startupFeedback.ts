@@ -2,7 +2,7 @@
  * @file src/app/popup/startupFeedback.ts
  * 文件职责：在配置或界面模块加载缓慢及失败时提供可恢复的轻量启动反馈。
  * 主要内容：以内置七语短文案按浏览器语言展示等待、失败与手动重新打开入口，说明已保存设置仍保留；不展示异常内容，挂载完成或页面关闭后清理计时器和事件。
- * 模块边界：仅操作尚未挂载的 Popup 占位，不读取或重置配置，不自动刷新或重试，不导入业务组件。
+ * 模块边界：仅操作尚未挂载的扩展页占位，供 Popup 与 Options 入口复用；不读取或重置配置，不自动刷新或重试，不导入业务组件。
  */
 type StartupLanguage = 'zh' | 'en' | 'ja' | 'ko' | 'fr' | 'ru' | 'es';
 const startupCopy: Record<StartupLanguage, {waiting: string; failed: string; preferences: string; reopen: string}> = {

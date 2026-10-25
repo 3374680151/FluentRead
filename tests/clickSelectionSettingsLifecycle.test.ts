@@ -60,6 +60,33 @@ async function edit(): Promise<void> {
 }
 
  describe('两点选取设置实际模板与短生命周期', () => {
+    it('划词停用时仍可关闭点选偏好或调整组合键，以解除再次启用冲突', async () => {
+        await mount(Object.assign(config(), {selectionTranslatorMode:'disabled',disableSelectionTranslator:true,selectionClickSelectEnabled:true}));
+        expect(root.querySelector('[aria-label="两点选取"]')?.hasAttribute('disabled')).toBe(false);
+        toggle(false);await settle();expect(props.config.selectionClickSelectEnabled).toBe(false);
+        await edit();handler('.recorder-port','onConfirm')('Alt+J');await settle();expect(props.config.selectionClickSelectHotkey).toBe('Alt+J');
+        expect(props.config.selectionTranslatorMode).toBe('disabled');expect(props.config.disableSelectionTranslator).toBe(true);
+    });
+    it.each(['hover','full-page','section'] as const)('%s 方案已占用时不能反向开启或改键抢占，停用方案后可启用', async action => {
+        const source = Object.assign(config(), {on: false, quickTranslationProfiles: [{id:'reserved',action,enabled:true,hotkey:DEFAULT_CLICK_SELECTION_HOTKEY,
+            service:'',model:'',targetLanguage:'',displayMode:'inherit' as const,fullPageMode:'inherit' as const}]});
+        await mount(source);toggle(true);expect(props.config.selectionClickSelectEnabled).toBe(false);
+        expect(warnings).toHaveBeenCalledWith(expect.stringContaining('额外翻译方案'));
+        await edit();handler('.recorder-port','onConfirm')(DEFAULT_CLICK_SELECTION_HOTKEY);await settle();
+        expect(root.querySelector('.recorder-port')).not.toBeNull();expect(props.config.quickTranslationProfiles[0].enabled).toBe(true);
+        props.config.quickTranslationProfiles[0].enabled=false;handler('.recorder-port','onCancel')();await settle();toggle(true);
+        expect(props.config.selectionClickSelectEnabled).toBe(true);
+    });
+    it('智能高亮快捷键启用时不能反向开启或录制抢占，停用草稿不占用', async () => {
+        const source = config(); source.on = false; source.informationHighlight = {...source.informationHighlight, enabled: false, hotkeyEnabled: true, hotkey: DEFAULT_CLICK_SELECTION_HOTKEY};
+        await mount(source); toggle(true); expect(props.config.selectionClickSelectEnabled).toBe(false);
+        expect(warnings).toHaveBeenCalledWith(expect.stringContaining('智能高亮'));
+        await edit(); handler('.recorder-port', 'onConfirm')(DEFAULT_CLICK_SELECTION_HOTKEY); await settle();
+        expect(root.querySelector('.recorder-port')).not.toBeNull(); expect(props.config.informationHighlight.hotkeyEnabled).toBe(true);
+        props.config.informationHighlight.hotkeyEnabled = false; handler('.recorder-port', 'onCancel')(); await settle(); toggle(true); await settle();
+        expect(props.config.selectionClickSelectEnabled).toBe(true);
+    });
+
     it('默认关闭且紧凑，冲突时仍可编辑按键后开启；拒绝非布尔事件，关闭保留按键', async () => {
         await mount(); expect(root.textContent).toContain('两点选取'); expect(root.querySelector('kbd')?.textContent).toMatch(/(?:Alt|Option)\+Shift\+S/u);
         toggle('true'); expect(props.config.selectionClickSelectEnabled).toBe(false);

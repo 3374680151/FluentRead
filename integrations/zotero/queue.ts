@@ -110,11 +110,12 @@ export class ZoteroTaskQueue {
             void this.persist().catch(() => this.host.notify('无法保存翻译进度，队列已停止。请检查资料目录后继续。'));
         }, 150);
     }
-    async enqueue(attachments?: Array<Pick<AttachmentSource, 'id' | 'libraryID' | 'key' | 'title'>>): Promise<number> {
+    async enqueue(attachments?: Array<Pick<AttachmentSource, 'id' | 'libraryID' | 'key' | 'title'>>,
+        settings: TranslationSettings = this.getSettings()): Promise<number> {
         if (this.stopped) return 0;
+        const snapshot = taskSettings(settings);
         const selected = attachments ?? await this.host.selectedAttachments();
         if (this.stopped) return 0;
-        const snapshot = taskSettings(this.getSettings());
         let added = 0;
         for (const source of selected) {
             if (this.tasks.some(task => task.attachmentID === source.id
@@ -201,11 +202,13 @@ export class ZoteroTaskQueue {
             task.total = document.segments.length;
             // Parallel batches may finish out of order. Dense strings survive JSON checkpoints without null holes.
             task.translations = Array.from({length: task.total}, (_, index) => task.translations[index] || '');
+            task.completed = task.translations.filter(text => text.trim()).length;
             const translations = await this.engine.translate(document, settings, signal, [...task.translations],
                 (id, text) => {
                     if (!current()) return;
+                    const previous = !!task.translations[id]?.trim();
+                    task.completed += Number(!!text.trim()) - Number(previous);
                     task.translations[id] = text;
-                    task.completed = task.translations.filter(text => text?.trim()).length;
                     this.update(task); this.checkpoint();
                 }, progress);
             signal.throwIfAborted(); task.translations = translations;
