@@ -78,7 +78,6 @@ export async function startContentApp(ctx: ContentScriptContext,
     const siteRules = createSiteRuleMatcher(config);
     let currentPageSiteDisabled = siteRules.isExtensionDisabled(window.location.href);
     let unsubscribeContentConfig: (() => void) | null = null;
-    let runtimeMessageListener: ContentRuntimeMessageHandler | null = null;
     const runtimeMessages = browser.runtime.onMessage;
     let featureController: AbortController | null = null;
     let optionalContentFeatures: OptionalContentFeatureRuntime | null = null;
@@ -153,7 +152,7 @@ export async function startContentApp(ctx: ContentScriptContext,
         const resetFullPageKeyboardGesture = hotkeys.installFloatingBallHotkey(activationController.signal);
         mountConfiguredQuickTranslation(config, hotkeys, () => currentPageSiteDisabled, activationController.signal,
             () => { resetHoverKeyboardGesture(); resetFullPageKeyboardGesture(); }, mailFullPageToggle);
-        const pageFeatureRegistry = createContentFeatureRegistry([
+        activePageFeatureRegistry = createContentFeatureRegistry([
             ...createLearningContentFeatures(ctx, config, capabilities),
             {
                 id: 'floating-ball',
@@ -195,8 +194,7 @@ export async function startContentApp(ctx: ContentScriptContext,
                 console.error(`[FluentRead] 内容功能 ${featureId} ${phase} 失败:`, error);
             },
         });
-        activePageFeatureRegistry = pageFeatureRegistry;
-        await pageFeatureRegistry.mountEnabled({
+        await activePageFeatureRegistry.mountEnabled({
             ctx,
             signal: activationController.signal,
             isCurrent: isActivationCurrent,
@@ -231,6 +229,10 @@ export async function startContentApp(ctx: ContentScriptContext,
         reconcileFeatures: () => { void activePageFeatureRegistry?.reconcileEnabled(); },
     }), {signal: pageEventController.signal});
 
+    const runtimeMessageListener: ContentRuntimeMessageHandler = createContentRuntimeMessageHandler(ctx, {
+        ...(import.meta.env.BROWSER === 'userscript' ? {} : {pageTranslationFont}), isSiteDisabled: () => currentPageSiteDisabled, updateSiteDisabled: applySiteDisabledState,
+        isPageSuspended: pageLifecycle.isSuspended, ...(import.meta.env.BROWSER === 'userscript' ? {} : {informationHighlight}),
+    }, capabilities);
     cleanup = (): void => {
         if (cleanedUp) return;
         cleanedUp = true;
@@ -239,15 +241,11 @@ export async function startContentApp(ctx: ContentScriptContext,
         // 扩展重载后 browser.runtime 可能已被撤销；使用注册时的事件端口，
         // 即使旧端口拒绝注销，也必须继续恢复宿主页面和释放配置订阅。
         try {
-            if (runtimeMessageListener) runtimeMessages.removeListener(runtimeMessageListener);
+            runtimeMessages.removeListener(runtimeMessageListener);
         } catch { /* 失效上下文的监听由浏览器释放，页面清理仍由本运行时负责。 */ }
         disposePageFeatures(); if (import.meta.env.BROWSER !== 'userscript') pageTranslationFont?.dispose();
         unsubscribeContentConfig?.(); unsubscribeContentConfig = null;
     };
-    runtimeMessageListener = createContentRuntimeMessageHandler(ctx, {
-        ...(import.meta.env.BROWSER === 'userscript' ? {} : {pageTranslationFont}), isSiteDisabled: () => currentPageSiteDisabled, updateSiteDisabled: applySiteDisabledState,
-        isPageSuspended: pageLifecycle.isSuspended, ...(import.meta.env.BROWSER === 'userscript' ? {} : {informationHighlight}),
-    }, capabilities);
     runtimeMessages.addListener(runtimeMessageListener);
     void reportSiteDisabledState();
     unsubscribeContentConfig = subscribeConfig(createPageTranslationDisplayModeSync(config, (nextConfig) => {

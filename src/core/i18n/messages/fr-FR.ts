@@ -2862,6 +2862,7 @@ export const frFRLegacyText: Readonly<Record<string, string>> = {
     "顶部": "En haut",
     "字幕位置": "Position des sous-titres",
     "原文颜色": "Couleur de l’original",
+    "浏览器默认译文字体": "Police par défaut du navigateur pour les traductions",
     "译文颜色": "Couleur de traduction",
     "外观只影响 FluentRead 字幕，不改变 YouTube/X 原生字幕": "L’apparence ne concerne que les sous-titres FluentRead, sans modifier ceux de YouTube/X.",
     "连接设置": "Paramètres de connexion",

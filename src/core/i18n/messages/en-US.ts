@@ -2865,6 +2865,7 @@ export const enUSLegacyText: Readonly<Record<string, string>> = {
     "顶部": "Top",
     "字幕位置": "Subtitle position",
     "原文颜色": "Original text color",
+    "浏览器默认译文字体": "Browser default translation font",
     "译文颜色": "Translation color",
     "外观只影响 FluentRead 字幕，不改变 YouTube/X 原生字幕": "Appearance affects only FluentRead subtitles, leaving native YouTube/X subtitles unchanged.",
     "连接设置": "Connection settings",

@@ -2863,6 +2863,7 @@ export const koKRLegacyText: Readonly<Record<string, string>> = {
     "顶部": "상단",
     "字幕位置": "자막 위치",
     "原文颜色": "원문 색상",
+    "浏览器默认译文字体": "브라우저 기본 번역문 글꼴",
     "译文颜色": "번역문 색상",
     "外观只影响 FluentRead 字幕，不改变 YouTube/X 原生字幕": "모양은 FluentRead 자막에만 적용되며 YouTube/X 기본 자막은 바꾸지 않습니다.",
     "连接设置": "연결 설정",

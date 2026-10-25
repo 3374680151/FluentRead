@@ -2863,6 +2863,7 @@ export const jaJPLegacyText: Readonly<Record<string, string>> = {
     "顶部": "上部",
     "字幕位置": "字幕の位置",
     "原文颜色": "原文の色",
+    "浏览器默认译文字体": "訳文にブラウザーの既定フォントを使用",
     "译文颜色": "訳文の色",
     "外观只影响 FluentRead 字幕，不改变 YouTube/X 原生字幕": "外観は FluentRead 字幕のみに適用し、YouTube/X の元の字幕は変更しません。",
     "连接设置": "接続設定",
