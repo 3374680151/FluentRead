@@ -140,9 +140,13 @@ Default models suit everyday translation; larger models remain optional. For dis
 Both options are off by default and can be enabled separately:
 
 - **Extra AI context** sends the title, description, parts of the article, chapter definitions, and completed translations as reference. It may improve consistency but increases submitted context, allowance, and waiting time. References remain in the current session, may miss distant content, and do not guarantee correctness.
-- **AI multi-paragraph translation** sends adjacent short passages together to reduce requests. Invalid paragraph matching falls back to individual requests. Hover translation still sends its current paragraph only.
+- **AI multi-paragraph translation** sends directly adjacent passages under the same parent together to reduce requests. It requires an AI service that supports general prompts; combined services are not supported. Hover translation still sends its current paragraph only.
 
-Restore and retranslate after changes. Use a [glossary](/en/guide/glossary) for required terms.
+Once enabled, **Batch limits** default to at most **8 text fragments and 2,000 source characters**, adjustable to **2–32** and **500–12,000** respectively. A batch splits when either limit is reached; a single long paragraph stays intact without truncation. A rich-text paragraph can contain several fragments, so fragments do not equal webpage paragraphs. The collection window is fixed at **32 ms**: later fragments do not extend it, and batches are not guaranteed to fill.
+
+Turning the option off preserves the limits; **Reset** restores only those two values. Larger batches are not always faster and depend more on the model returning every translation. Missing or duplicate markers and incomplete results make the entire batch fall back to individual requests; later passages with the same request settings also use individual requests for the current page session.
+
+Restore the original page and restart full-page translation after changes. Use a [glossary](/en/guide/glossary) for required terms.
 
 ### Custom-service Base URLs
 

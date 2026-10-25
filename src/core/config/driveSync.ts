@@ -151,6 +151,8 @@ const VISIBLE_FIELDS: Record<string, string> = {
     enableAIContext: 'AI 智能上下文',
     glossaryEnabled: '术语库',
     enableAIMultiSegment: 'AI 多段翻译',
+    aiMultiSegmentMaxSegments: 'AI 多段每批最多片段数',
+    aiMultiSegmentMaxCharacters: 'AI 多段每批最多字符数',
     nativeBatchTranslationEnabled: '原生翻译合批',
     bilingualSentenceHighlightEnabled: '双语逐句高亮',
     bilingualSentenceHighlightStyle: '逐句高亮样式',

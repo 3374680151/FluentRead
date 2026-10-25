@@ -2,6 +2,8 @@ import {readFileSync} from 'node:fs';
 import {resolve} from 'node:path';
 import {runInNewContext} from 'node:vm';
 import {inflateWithPako} from '@/userscript/pakoBundled';
+import {decodeUserscriptData} from '@/userscript/dataEncoding';
+import {gzipUserscriptBuildData} from '@/userscript/buildGzip';
 import ts from 'typescript';
 import {describe, expect, it} from 'vitest';
 import {createUserscriptSettingsDataPlugin} from '@/userscript/settingsDataPlugin';
@@ -32,7 +34,7 @@ function initializer(code: string, name: string): string {
 function value(expression: string): unknown {
     const javascript = ts.transpileModule(`globalThis.result = ${expression};`, {compilerOptions: {target: ts.ScriptTarget.ES2018}}).outputText;
     const context = {result: undefined as unknown, Uint8Array, atob,
-        __fluentreadInflateSettingsData: inflateWithPako};
+        __fluentreadInflateSettingsData: inflateWithPako, __fluentreadDecodeSettingsData: decodeUserscriptData};
     runInNewContext(javascript, context, {timeout: 1000});
     return context.result;
 }
@@ -44,6 +46,9 @@ describe('standalone static settings data representation', () => {
         const before = value(initializer(source, name));
         const after = value(initializer(transformed, name));
         expect(JSON.stringify(after)).toBe(JSON.stringify(before));
+        const encoded = JSON.parse(initializer(transformed, name).match(/__fluentreadDecodeSettingsData\(("[^"]+")\)/u)![1]) as string;
+        expect(encoded.startsWith('~85:')).toBe(true);
+        expect(Buffer.from(decodeUserscriptData(encoded))).toEqual(gzipUserscriptBuildData(Buffer.from(JSON.stringify(before))));
         expect(initializer(transformed, name)).not.toContain('eval');
         // Every other byte of the owning source stays in place; functions and declarations remain executable code.
         expect(transformed.replace(initializer(transformed, name), initializer(source, name)).replace('/* @__PURE__ */ ', '').endsWith(source)).toBe(true);
@@ -91,6 +96,7 @@ describe('standalone static settings data representation', () => {
         'const HARNESS_TRANSLATED_PROMPTS = {}, HARNESS_TRANSLATED_PROMPTS = {};',
         'const HARNESS_TRANSLATED_PROMPTS: unknown;',
         'const HARNESS_TRANSLATED_PROMPTS = {}; const __fluentreadInflateSettingsData = 1;',
+        'const HARNESS_TRANSLATED_PROMPTS = {}; const __fluentreadDecodeSettingsData = 1;',
     ])('fails closed when the owned declaration changes: %s', source => {
         expect(() => transform(source)).toThrow('declaration changed');
     });
