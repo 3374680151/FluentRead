@@ -17,16 +17,18 @@ const arg = (name) => {
 }
 const runtimePath = arg('runtime'),
   helperPath = path.resolve(arg('helper'))
+const diagnosticsPath = process.argv.includes('--diagnostics-helper')
+  ? path.resolve(arg('diagnostics-helper'))
+  : path.join(path.dirname(helperPath), 'runtime-diagnostics.cjs')
+const artifactsDir = process.argv.includes('--artifacts-dir')
+  ? path.resolve(arg('artifacts-dir'))
+  : path.join(os.tmpdir(), 'fluentread-docs-captures')
 const { guardBrowserClose } = require('./testing/owned-browser-close.cjs')
 const runtime = createRequire(path.join(runtimePath, 'docs-ui.cjs'))
 const { chromium } = runtime('playwright'),
   sharp = runtime('sharp')
 const helper = require(helperPath)
-const diagnosticsIndex = process.argv.indexOf('--diagnostics-helper')
-const diagnosticsPath = diagnosticsIndex < 0 ? path.join(path.dirname(helperPath), 'runtime-diagnostics.cjs') : process.argv[diagnosticsIndex + 1]
 const diagnostics = require(diagnosticsPath).createRuntimeDiagnostics()
-const artifactIndex = process.argv.indexOf('--artifacts-dir')
-const artifactsDir = path.resolve(artifactIndex < 0 ? path.join(os.tmpdir(), 'fluentread-docs-captures') : process.argv[artifactIndex + 1])
 fs.mkdirSync(artifactsDir, {recursive: true})
 const root = path.resolve(__dirname, '..')
 const report = {
@@ -100,8 +102,8 @@ let launchAttempted = false, browserGuarded = false, hasPrimaryError = false, di
     windowPlacement: launched.windowPlacement,
   })
   const ctx = launched.context
-  await diagnostics.start(ctx)
   diagnosticsStarted = true
+  await diagnostics.start(ctx)
   const worker =
     ctx.serviceWorkers()[0] || (await ctx.waitForEvent('serviceworker', { timeout: 30000 }))
   const origin = worker.url().split('/').slice(0, 3).join('/')
@@ -382,7 +384,9 @@ let launchAttempted = false, browserGuarded = false, hasPrimaryError = false, di
       }
     }
     if (diagnosticsStarted) {
-      await cleanup('diagnostics', async () => { await diagnostics.flush(); diagnostics.write(artifactsDir, report); await diagnostics.stop() })
+      await cleanup('diagnostics flush', () => diagnostics.flush())
+      await cleanup('diagnostics report', () => diagnostics.write(artifactsDir, report))
+      await cleanup('diagnostics', () => diagnostics.stop())
     }
     let browserClosed = false
     await cleanup('browser', async () => {

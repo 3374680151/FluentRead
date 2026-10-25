@@ -18,6 +18,16 @@ type LegacyCorrectionRow = readonly [source: string, enUS: string, jaJP: string,
 
 /** 设置页、弹窗、文档页和各功能面板中的标签、按钮与说明。 */
 export const correctionRows: readonly LegacyCorrectionRow[] = [
+    // 两点选取仍由旧界面指令翻译；动态提示的状态与 Esc 后缀复用现有复合文案拆分，不登记扫描器的数字占位。
+    ['两点选取', 'Two-point selection', '2点選択', '두 지점 선택', 'Sélection en deux clics', 'Выделение двумя щелчками', 'Selección en dos clics'],
+    ['编辑两点选取快捷键', 'Edit two-point selection shortcut', '2点選択のショートカットを編集', '두 지점 선택 단축키 편집', 'Modifier le raccourci de sélection en deux clics', 'Изменить сочетание клавиш для выделения двумя щелчками', 'Editar el atajo de selección en dos clics'],
+    ['开启后按快捷键，再依次点击文字起点和终点，无需按住鼠标；完成自动退出，Esc 取消', 'Once enabled, press the shortcut, then click the start and end of the text without dragging. Selection mode closes when done; Esc cancels.', '有効にしてショートカットを押し、文字列の始点と終点を順にクリックします。ドラッグは不要です。選択後は自動的に終了し、Esc でキャンセルできます。', '사용 설정 후 단축키를 누르고 텍스트의 시작점과 끝점을 차례로 클릭하세요. 드래그할 필요가 없습니다. 선택이 끝나면 자동으로 종료되며 Esc로 취소할 수 있습니다.', 'Une fois activée, appuyez sur le raccourci, puis cliquez sur le début et la fin du texte sans faire glisser. Le mode se ferme après la sélection ; Esc annule.', 'После включения нажмите сочетание клавиш, затем щёлкните начало и конец текста без перетаскивания. После выделения режим закроется; Esc отменяет выбор.', 'Una vez activada, pulsa el atajo y haz clic en el inicio y el final del texto sin arrastrar. El modo se cierra al terminar; Esc cancela.'],
+    ['请选择带 Ctrl、Alt 或 Shift 的组合键', 'Choose a shortcut with Ctrl, Alt, or Shift', 'Ctrl、Alt、Shift のいずれかを含むショートカットを選択してください', 'Ctrl, Alt 또는 Shift가 포함된 단축키를 선택하세요', 'Choisissez un raccourci avec Ctrl, Alt ou Shift', 'Выберите сочетание с Ctrl, Alt или Shift', 'Elige un atajo con Ctrl, Alt o Shift'],
+    ['点击文字起点', 'Click the start of the text', '文字列の始点をクリック', '텍스트 시작점 클릭', 'Cliquez sur le début du texte', 'Щёлкните начало текста', 'Haz clic en el inicio del texto'],
+    ['点击文字终点', 'Click the end of the text', '文字列の終点をクリック', '텍스트 끝점 클릭', 'Cliquez sur la fin du texte', 'Щёлкните конец текста', 'Haz clic en el final del texto'],
+    ['选区过长，请点击较近的终点', 'Selection is too long. Click a closer end point.', '選択範囲が長すぎます。より近い終点をクリックしてください。', '선택 범위가 너무 깁니다. 더 가까운 끝점을 클릭하세요.', 'La sélection est trop longue. Cliquez sur une fin plus proche.', 'Выделение слишком длинное. Щёлкните более близкую конечную точку.', 'La selección es demasiado larga. Haz clic en un punto final más cercano.'],
+    ['此范围不支持，请换一个终点', 'This range is not supported. Choose another end point.', 'この範囲は選択できません。別の終点を選んでください。', '이 범위는 지원되지 않습니다. 다른 끝점을 선택하세요.', 'Cette zone n’est pas prise en charge. Choisissez une autre fin.', 'Этот диапазон не поддерживается. Выберите другую конечную точку.', 'Este rango no es compatible. Elige otro punto final.'],
+    ['Esc 取消', 'Esc to cancel', 'Esc でキャンセル', 'Esc로 취소', 'Esc pour annuler', 'Esc — отмена', 'Esc para cancelar'],
     // 内容挂载器仍发送旧错误字符串；精确别名复用语义资源，避免反馈边界维护第二份译文。
     ['收藏暂时无法读取', reencounterEnUS['reencounter.readFailed'], reencounterJaJP['reencounter.readFailed'], reencounterKoKR['reencounter.readFailed'], reencounterFrFR['reencounter.readFailed'], reencounterRuRU['reencounter.readFailed'], reencounterEsES['reencounter.readFailed']],
     // 个人校订、免费基础讲解与阅读失败恢复的现用界面文案。

@@ -45,6 +45,26 @@ import {translateServiceLabel} from '@/src/core/i18n/serviceLabels';
 registerAllUiLanguageBundles();
 
 describe('界面 i18n 契约', () => {
+  it('两点选取的设置与动态状态提示覆盖六种语言，不把扫描占位登记为固定译文', () => {
+    const states = ['点击文字起点', '点击文字终点', '选区过长，请点击较近的终点', '此范围不支持，请换一个终点'];
+    const settings = ['两点选取', '编辑两点选取快捷键', '开启后按快捷键，再依次点击文字起点和终点，无需按住鼠标；完成自动退出，Esc 取消', '请选择带 Ctrl、Alt 或 Shift 的组合键'];
+    for (const language of ['en-US', 'ja-JP', 'ko-KR', 'fr-FR', 'ru-RU', 'es-ES'] as const) {
+      for (const source of [...states, ...settings, 'Esc 取消']) {
+        const result = translateLegacyText(source, language);
+        expect(result, `${language} ${source}`).not.toBe(source);
+        if (language !== 'ja-JP') expect(result).not.toMatch(/[\u3400-\u9fff]/u);
+      }
+      for (const source of states) {
+        expect(translateLegacyText(`${source} · Esc 取消`, language)).toBe(`${translateLegacyText(source, language)} · ${translateLegacyText('Esc 取消', language)}`);
+      }
+      // 实际状态和审计占位使用同一条复合翻译规则，任意数值都应原样保留。
+      for (const count of [0, 1, 12, 125]) {
+        expect(translateLegacyText(`${count} · Esc 取消`, language)).toBe(`${count} · ${translateLegacyText('Esc 取消', language)}`);
+      }
+    }
+    expect(translateLegacyText('点击文字起点 · Esc 取消', 'en-US')).toBe('Click the start of the text · Esc to cancel');
+  });
+
   it('原型属性名既不是资源键也不是旧文案，不会被替换为原生函数或对象', () => {
     for (const key of ['constructor', 'toString', '__proto__', 'hasOwnProperty']) {
       for (const language of ['zh-CN', 'en-US', 'ja-JP'] as const) {
