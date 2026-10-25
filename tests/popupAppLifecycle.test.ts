@@ -1,7 +1,7 @@
 /**
  * @file tests/popupAppLifecycle.test.ts
  * 文件职责：执行实际 Popup 与站点按钮客户端模板，验证生命周期、页面竞态、缓存事件及焦点归属。
- * 主要内容：保持真实 Vue/KeepAlive、缓存和诊断模板，受控浏览器、持久化及展示端口覆盖延迟回复、失活、消息来源、诊断动作失败、状态切换、抽屉和弹窗；Safari 授权覆盖焦点复查与首次点击、旧许可重验和迟到读取隔离；真实服务选择子组件以布局端口验证键盘恢复时仅修正所属 scroller 的搜索外框；网站和显示模式保存执行真实共享 store，验证同 tick 草稿捕获、关闭交接与在途确认的字段归属。
+ * 主要内容：保持真实 Vue/KeepAlive、缓存和诊断模板，受控浏览器、持久化及展示端口覆盖延迟回复、失活、消息来源、诊断动作失败、状态切换、抽屉和弹窗；Safari 授权覆盖焦点复查与首次点击、旧许可重验和迟到读取隔离；真实服务选择子组件以布局端口验证键盘恢复时仅修正所属 scroller 的搜索外框；网站、显示模式和全局译文字体保存执行真实共享 store，验证同 tick 草稿捕获、关闭交接、外部同步与在途确认的字段归属。
  * 模块边界：Linkedom 保留节点/事件树，动画、Element Plus、外部存储和浏览器为受控端口，普通 UI 用例控制保存端口；真实样式与浏览器流程另行验证。
  */
 import * as runtime from 'vue'
@@ -67,7 +67,7 @@ beforeEach(async()=>{
   win.requestAnimationFrame=vi.fn((callback:FrameRequestCallback)=>{viewportFrames.set(++frame,callback);return frame});win.cancelAnimationFrame=vi.fn((id:number)=>viewportFrames.delete(id))
   for(const [key,value]of Object.entries({document,window:win,HTMLElement:win.HTMLElement,Event:win.Event,Node:win.Node,navigator:{languages:['zh-CN'],onLine:true}}))vi.stubGlobal(key,value)
   config=new Config();config.uiLanguageSetupCompleted=true;config.on=true;config.service='google';config.alwaysTranslateDomains=[];config.disabledExtensionDomains=[]
-  getTab.mockResolvedValue([{id:7,windowId:3,url:'https://example.com/a'}]);send.mockImplementation(async(_id,message)=>message.type==='getPageTranslationFontState'?{status:'success',browserDefault:false,documentToken:'font-fixture-document',pageUrl:'https://example.com/a'}:message.type==='getFullPageTranslationState'?{isTranslated:false,documentToken:'popup-fixture-document'}:{status:'success',isTranslated:message.action==='fullPage',documentToken:'popup-fixture-document'});createTab.mockResolvedValue({id:8});openOptions.mockResolvedValue(undefined);runtimeSend.mockResolvedValue({success:true})
+  getTab.mockResolvedValue([{id:7,windowId:3,url:'https://example.com/a'}]);send.mockImplementation(async(_id,message)=>message.type==='getFullPageTranslationState'?{isTranslated:false,documentToken:'popup-fixture-document'}:{status:'success',isTranslated:message.action==='fullPage',documentToken:'popup-fixture-document'});createTab.mockResolvedValue({id:8});openOptions.mockResolvedValue(undefined);runtimeSend.mockResolvedValue({success:true})
   getSourceTab.mockResolvedValue({id:7,windowId:3,url:'https://example.com/a'})
   fixture={capabilities:runtime.reactive({browser:'chrome',areaTranslation:true,imageTranslation:true}),ready:Promise.resolve(),darkMode:{matches:false,onchange:null}}
   vi.resetModules()
@@ -160,7 +160,7 @@ describe('实际 Popup 缓存模板与页面操作',()=>{
     await mount();expect(state.showLanguageOnboarding).toBe(true);expect(state.onboardingLanguage).toBe(row.expected);expect(getTab).not.toHaveBeenCalled();expect(send).not.toHaveBeenCalled()
     for(let i=0;i<50&&![...events.values()].some(value=>value.onConfirmed);i++){await drain();await new Promise(resolve=>setTimeout(resolve,1))}
     const child=[...events.values()].find(value=>value.onConfirmed)!;expect(child.onConfirmed).toBeTypeOf('function');child.onConfirmed('en-US');await drain()
-    expect(state.showLanguageOnboarding).toBe(false);expect(state.onboardingLanguage).toBe('en-US');expect(getTab).toHaveBeenCalledTimes(3);expect(send).toHaveBeenCalledWith(7,{type:'getPageTranslationFontState'},{frameId:0});expect(send).toHaveBeenCalledWith(7,{type:'getFullPageTranslationState'},{frameId:0})
+    expect(state.showLanguageOnboarding).toBe(false);expect(state.onboardingLanguage).toBe('en-US');expect(getTab).toHaveBeenCalledTimes(1);expect(send).toHaveBeenCalledTimes(1);expect(send).toHaveBeenCalledWith(7,{type:'getFullPageTranslationState'},{frameId:0})
   })
   it('配置水合失败保留初始草稿，编辑不保存且卸载释放媒体监听',async()=>{
     const gate=deferred<void>();fixture.ready=gate.promise;const warn=vi.spyOn(console,'warn').mockImplementation(()=>{})
@@ -259,70 +259,81 @@ describe('实际 Popup 缓存模板与页面操作',()=>{
     const afterAction=f.scroller.scrollTop;await drain();expect(f.scroller.scrollTop).toBe(afterAction)
   })
 
-  it('Aa 直接切换当前页字体并显示确认状态，重开读取真值且不写配置或展开抽屉',async()=>{
-    localized=true;let font=false;send.mockImplementation(async(_id,message)=>{
-      if(message.type==='getPageTranslationFontState'||message.type==='setPageTranslationFont'){
-        if(message.type==='setPageTranslationFont')font=message.browserDefault;
-        return {status:'success',browserDefault:font,documentToken:'page-font-document',pageUrl:'https://example.com/a'};
-      }
-      return {isTranslated:false,documentToken:'popup-fixture-document'};
-    });
-    await mount();expect(send.mock.calls.some(call=>call[1].type==='getPageTranslationFontState')).toBe(true);
+  it('Aa 通过真实共享配置保存全局字体偏好，稳定 aria 与字形同步且不发送页面字体消息',async()=>{
+    localized=true;await mount();const {messages,records}=await attachPersistence();
     const entry=()=>button('page-font-entry');expect(entry().getAttribute('aria-pressed')).toBe('false');
     expect(entry().getAttribute('data-font-state')).toBe('host');expect(entry().getAttribute('aria-label')).toBe('使用浏览器默认字体');
     const old=eventOf(entry());await old();await drain();
     expect(entry().getAttribute('aria-pressed')).toBe('true');expect(entry().classList.contains('is-browser-default')).toBe(true);
-    expect(entry().getAttribute('aria-label')).toBe('使用浏览器默认字体');
-    expect(send).toHaveBeenLastCalledWith(7,{type:'setPageTranslationFont',browserDefault:true,documentToken:'page-font-document',pageUrl:'https://example.com/a'},{frameId:0});
-    const calls=send.mock.calls.length;old();await drain();expect(send).toHaveBeenCalledTimes(calls);
-    await eventOf(entry())();await drain();expect(entry().getAttribute('aria-pressed')).toBe('false');
-    expect(state.drawerVisible).toBe(false);expect(document.querySelector('.drawer-content')).toBeNull();
-    shown.value=false;await drain();font=true;shown.value=true;await drain();expect(entry().getAttribute('aria-pressed')).toBe('true');
-    expect(patches).not.toHaveBeenCalled();expect(commands()).toHaveLength(0);
+    expect(entry().getAttribute('aria-label')).toBe('使用浏览器默认字体');expect(entry().querySelector('svg')?.getAttribute('data-font-style')).toBe('sans');
+    expect(messages).toHaveLength(1);expect(messages[0].config).toEqual({browserDefaultTranslationFont:true});expect(records.get('local:config')).toMatchObject({browserDefaultTranslationFont:true});
+    const saves=patches.mock.calls.length;old();await drain();expect(patches).toHaveBeenCalledTimes(saves);
+    await eventOf(entry())();await drain();expect(entry().getAttribute('aria-pressed')).toBe('false');expect(entry().querySelector('svg')?.getAttribute('data-font-style')).toBe('serif');
+    expect(messages).toHaveLength(2);expect(messages[1].config).toEqual({browserDefaultTranslationFont:false});expect(records.get('local:config')).toMatchObject({browserDefaultTranslationFont:false});
+    expect(state.drawerVisible).toBe(false);expect(document.querySelector('.drawer-content')).toBeNull();expect(commands()).toHaveLength(0);
+    expect(send.mock.calls.some(call=>['getPageTranslationFontState','setPageTranslationFont'].includes(call[1].type))).toBe(false);
   });
-  it('Aa 读取和切换失败不假选中，同按钮重读后下一次点击才切换',async()=>{
-    localized=true;send.mockImplementation(async(_id,message)=>message.type==='getPageTranslationFontState'?{status:'error'}:{isTranslated:false});await mount();const entry=()=>button('page-font-entry');
-    expect(entry().hasAttribute('aria-pressed')).toBe(false);expect(entry().getAttribute('data-font-state')).toBe('error');
-    expect(entry().hasAttribute('disabled')).toBe(false);expect(button('page-font-error').textContent).toContain('未能读取当前页字体，请重试。');
-    send.mockResolvedValueOnce({status:'success',browserDefault:false,documentToken:'font-doc',pageUrl:'https://example.com/a'});
-    await eventOf(entry())();await drain();expect(entry().getAttribute('aria-pressed')).toBe('false');expect(button('page-font-error')).toBeNull();
-    expect(send.mock.calls.some(call=>call[1].type==='setPageTranslationFont')).toBe(false);
-    send.mockRejectedValueOnce(Error('message failed'));await eventOf(entry())();await drain();
-    expect(entry().hasAttribute('aria-pressed')).toBe(false);expect(entry().getAttribute('data-font-state')).toBe('error');
-    expect(button('page-font-error').textContent).toContain('未能确认字体已切换，请重试。');
-    getTab.mockResolvedValue([{id:7,url:'chrome://settings'}]);await eventOf(entry())();await drain();
-    expect(entry().hasAttribute('disabled')).toBe(true);expect(entry().getAttribute('aria-label')).toBe('当前页面不支持调整译文字体。');
+  it('Aa 保存失败保持已确认偏好，同按钮重试真实后台保存后清除错误',async()=>{
+    localized=true;await mount();const {sender,messages,records}=await attachPersistence();
+    vi.mocked(sender).mockRejectedValueOnce(Error('synthetic background persistence failure'));
+    const entry=()=>button('page-font-entry');await eventOf(entry())();await drain();
+    expect(entry().getAttribute('aria-pressed')).toBe('false');expect(entry().getAttribute('data-font-state')).toBe('error');
+    expect(entry().hasAttribute('disabled')).toBe(false);expect(button('page-font-error').textContent).toContain(zhCNMessages['popup.pageFont.changeError']);
+    await eventOf(entry())();await drain();expect(entry().getAttribute('aria-pressed')).toBe('true');expect(button('page-font-error')).toBeNull();
+    expect(messages).toHaveLength(1);expect(messages[0].config).toEqual({browserDefaultTranslationFont:true});expect(records.get('local:config')).toMatchObject({browserDefaultTranslationFont:true});
   });
-  it('Aa 等待、导航及失活同步撤销旧点击，不发送给新页面',async()=>{
-    localized=true;send.mockImplementation(async(_id,message)=>message.type==='getPageTranslationFontState'?{status:'success',browserDefault:false,documentToken:'font-doc',pageUrl:'https://example.com/a'}:{isTranslated:false});
-    await mount();const entry=()=>button('page-font-entry'),old=eventOf(entry());
-    const query=deferred<Array<{id:number;url:string}>>();getTab.mockReturnValueOnce(query.promise);const pending=old();await drain();
-    expect(entry().hasAttribute('disabled')).toBe(true);expect(entry().getAttribute('aria-busy')).toBe('true');old();await drain();
+  it('Aa 接受其他页面的全局配置同步，导航和重开不重置选择也不额外保存',async()=>{
+    await mount();const {store,sender,messages}=await attachPersistence();const saves=patches.mock.calls.length;
+    await store.requestConfigPatch({...store.config,browserDefaultTranslationFont:true},sender);await drain();
+    const entry=()=>button('page-font-entry');expect(entry().getAttribute('aria-pressed')).toBe('true');expect(patches).toHaveBeenCalledTimes(saves);
     getTab.mockResolvedValue([{id:8,windowId:3,url:'https://example.net/b'}]);tabEvent('onActivated',{tabId:8,windowId:3});await drain();
-    query.resolve([{id:8,url:'https://example.net/b'}]);await pending;await drain();expect(send.mock.calls.some(call=>call[1].type==='setPageTranslationFont')).toBe(false);
-    old();await drain();expect(state.drawerVisible).toBe(false);expect(send.mock.calls.some(call=>call[1].type==='setPageTranslationFont')).toBe(false);
-    shown.value=false;await drain();old();await drain();expect(send.mock.calls.some(call=>call[1].type==='setPageTranslationFont')).toBe(false);
+    expect(entry().getAttribute('aria-pressed')).toBe('true');shown.value=false;await drain();shown.value=true;await drain();expect(entry().getAttribute('aria-pressed')).toBe('true');
+    expect(messages).toHaveLength(1);expect(patches).toHaveBeenCalledTimes(saves);expect(send.mock.calls.some(call=>call[1].type==='setPageTranslationFont')).toBe(false);
   });
-  it('其他抽屉和暂停后恢复会撤销 Aa 旧事件，恢复后新按钮仍可切换',async()=>{
-    await mount();const entry=()=>button('page-font-entry'),beforeDrawer=eventOf(entry());
-    await openFeature('hover');beforeDrawer();await drain();expect(send.mock.calls.some(call=>call[1].type==='setPageTranslationFont')).toBe(false);
-    eventOf(document.querySelector('.drawer-header > button')!)();await drain();beforeDrawer();await drain();
-    expect(send.mock.calls.some(call=>call[1].type==='setPageTranslationFont')).toBe(false);
-    const beforePause=eventOf(entry());state.config.on=false;state.config.on=true;await drain();beforePause();await drain();
-    expect(send.mock.calls.some(call=>call[1].type==='setPageTranslationFont')).toBe(false);
-    send.mockResolvedValueOnce({status:'success',browserDefault:true,documentToken:'font-fixture-document',pageUrl:'https://example.com/a'});
-    await eventOf(entry())();await drain();expect(entry().getAttribute('aria-pressed')).toBe('true');
+  it('Aa 保存等待期间导航不撤销全局写入，旧点击与忙碌期间的重复点击不重发',async()=>{
+    await mount();const first=deferred<void>(),{messages,records}=await attachPersistence([first]);
+    const entry=()=>button('page-font-entry'),old=eventOf(entry()),pending=old();await drain();
+    expect(entry().hasAttribute('disabled')).toBe(true);expect(entry().getAttribute('aria-busy')).toBe('true');old();await drain();expect(messages).toHaveLength(1);
+    getTab.mockResolvedValue([{id:8,windowId:3,url:'https://example.net/b'}]);tabEvent('onActivated',{tabId:8,windowId:3});await drain();
+    expect(entry().getAttribute('aria-busy')).toBe('true');first.resolve();await pending;await drain();
+    expect(records.get('local:config')).toMatchObject({browserDefaultTranslationFont:true});expect(entry().getAttribute('aria-pressed')).toBe('true');expect(entry().hasAttribute('disabled')).toBe(false);
   });
-  it('Aa 初次读取等待期间不猜测字体，并在关闭后丢弃迟到状态',async()=>{
-    const read=deferred();send.mockImplementation(async(_id,message)=>message.type==='getPageTranslationFontState'?read.promise:{isTranslated:false});
-    await mount();const entry=button('page-font-entry');expect(entry.hasAttribute('disabled')).toBe(true);expect(entry.hasAttribute('aria-pressed')).toBe(false);
-    const old=eventOf(entry);old();shown.value=false;await drain();read.resolve({status:'success',browserDefault:true,documentToken:'font-doc',pageUrl:'https://example.com/a'});await drain();
-    expect(state.pageFontState.browserDefault).toBeNull();expect(send.mock.calls.some(call=>call[1].type==='setPageTranslationFont')).toBe(false);
+  it('其他抽屉和暂停后恢复会撤销 Aa 旧事件，恢复后新按钮仍可保存全局偏好',async()=>{
+    await mount();const {messages,records}=await attachPersistence();const entry=()=>button('page-font-entry'),beforeDrawer=eventOf(entry());
+    await openFeature('hover');beforeDrawer();await drain();expect(messages).toHaveLength(0);
+    eventOf(document.querySelector('.drawer-header > button')!)();await drain();beforeDrawer();await drain();expect(messages).toHaveLength(0);
+    const beforePause=eventOf(entry());state.config.on=false;state.config.on=true;await drain();beforePause();await drain();expect(messages).toHaveLength(0);
+    await eventOf(entry())();await drain();expect(entry().getAttribute('aria-pressed')).toBe('true');expect(records.get('local:config')).toMatchObject({browserDefaultTranslationFont:true});
   });
-  it.each(['pdf','thunderbird','unsupported'])('%s 页面不展示无效的常驻字体入口',async kind=>{
+  it.each(['pagehide','unmount'] as const)('Aa 点击后立即 %s 仍把全局偏好交给后台，重开采用持久值',async reason=>{
+    await mount();const first=deferred<void>(),{messages,batches,records,store}=await attachPersistence([first]);
+    eventOf(button('page-font-entry'))();expect(state.config.browserDefaultTranslationFont).toBe(true);
+    if(reason==='pagehide')win.dispatchEvent(new win.Event('pagehide'));else app.unmount();
+    expect(batches).toHaveLength(1);expect(batches[0].patches.map(patch=>patch.config)).toEqual([{browserDefaultTranslationFont:true}]);
+    expect(records.get('local:config')).toMatchObject({browserDefaultTranslationFont:true});expect(state.pageFontState.busy).toBe(false);
+    first.resolve();await store.waitForConfigPersistenceQueue();await drain();expect(messages).toHaveLength(1);
+    if(reason==='pagehide'){win.dispatchEvent(new win.Event('pageshow'));await drain();}
+    else {Object.assign(config,normalizeConfig(records.get('local:config')));await mount();}
+    expect(button('page-font-entry').getAttribute('aria-pressed')).toBe('true');expect(button('page-font-entry').getAttribute('data-font-state')).toBe('browser-default');
+  });
+  it('Aa 保存捕获同 tick 其他草稿，等待期间的新字体选择胜出且旧 ACK 不反选',async()=>{
+    await mount();const first=deferred<void>(),second=deferred<void>(),{messages,records,store}=await attachPersistence([first,second]);
+    state.config.to='ja';const pending=eventOf(button('page-font-entry'))();await drain();
+    expect(messages).toHaveLength(1);expect(messages[0].config).toMatchObject({to:'ja',browserDefaultTranslationFont:true});
+    state.config.browserDefaultTranslationFont=false;await drain();first.resolve();await pending;await drain();
+    expect(messages).toHaveLength(2);expect(messages[1].config).toEqual({browserDefaultTranslationFont:false});expect(button('page-font-entry').getAttribute('aria-pressed')).toBe('false');
+    second.resolve();await store.waitForConfigPersistenceQueue();await drain();expect(records.get('local:config')).toMatchObject({to:'ja',browserDefaultTranslationFont:false});
+    expect(button('page-font-entry').getAttribute('aria-pressed')).toBe('false');
+  });
+  it('Aa 初始选择直接采用已水合全局配置，不等待网页内容脚本',async()=>{
+    config.browserDefaultTranslationFont=true;send.mockRejectedValue(Error('no page receiver'));await mount();
+    const entry=button('page-font-entry');expect(entry.getAttribute('aria-pressed')).toBe('true');expect(entry.hasAttribute('disabled')).toBe(false);
+    expect(send.mock.calls.some(call=>['getPageTranslationFontState','setPageTranslationFont'].includes(call[1].type))).toBe(false);
+  });
+  it.each(['pdf','thunderbird','unsupported'])('%s 页面不展示字体快捷入口，也不发送页内字体消息',async kind=>{
     if(kind==='thunderbird')fixture.capabilities.browser='thunderbird';
     else getTab.mockResolvedValue([{id:7,url:kind==='pdf'?'https://example.com/article.pdf':'chrome://settings'}]);
-    await mount();expect(button('page-font-entry')).toBeNull();expect(send.mock.calls.some(call=>call[1].type==='getPageTranslationFontState')).toBe(false);
+    await mount();expect(button('page-font-entry')).toBeNull();expect(send.mock.calls.some(call=>['getPageTranslationFontState','setPageTranslationFont'].includes(call[1].type))).toBe(false);
   });
   it('真实服务搜索在键盘 viewport 变化时保留输入，清除、返回与关闭仍属当前抽屉',async()=>{
     executeServicePicker=true;await mount();eventOf(document.querySelector('.provider-summary')!)()

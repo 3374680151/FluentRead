@@ -524,6 +524,7 @@ const FIELD_DEFINITIONS: Record<string, FieldDefinition> = {
 
     display: {group: 'general', label: '翻译模式', format: (value) => formatEnum(value, DISPLAY_LABELS)},
     style: {group: 'general', label: '译文样式', format: (value) => formatEnum(value, STYLE_LABELS)},
+    browserDefaultTranslationFont: {group: 'general', label: '浏览器默认译文字体', format: formatBoolean},
     translationAppearance: {group: 'general', label: '译文外观', mapping: {
         itemLabel: (key) => TRANSLATION_APPEARANCE_FIELD_LABELS.get(key) ?? key,
         format: formatTranslationAppearanceValue,

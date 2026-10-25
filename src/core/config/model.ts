@@ -367,6 +367,7 @@ export class Config {
     hoverShortcutBeforeDisable: string; // 关闭默认悬停开关前的选择，重开恢复；不参与运行时触发
     style: number;
     translationAppearance: TranslationAppearance; // 双语译文的颜色、线条、底色、字号、字重、字体与不透明度微调
+    browserDefaultTranslationFont: boolean; // 所有网页的双语和仅译文统一使用浏览器默认字体，不改写原有外观配置
     translationStyleProfiles: TranslationStyleProfile[]; // 用户保存的可命名译文样式快照
     activeTranslationStyleProfileId: string; // 当前选中的样式快照；外观可继续编辑，保存时再更新快照
     display: number = 1;
@@ -570,6 +571,7 @@ export class Config {
         this.excludedLanguages = [];
         this.style = defaultOption.style;
         this.translationAppearance = normalizeTranslationAppearance(DEFAULT_TRANSLATION_APPEARANCE); // 默认沿用各样式自带配色
+        this.browserDefaultTranslationFont = false;
         this.translationStyleProfiles = [];
         this.activeTranslationStyleProfileId = '';
         this.display = defaultOption.display;
@@ -1102,6 +1104,7 @@ export function normalizeConfig(value: unknown): Config {
         && normalized.bilingualSentenceHighlightProfiles.some(profile => profile.id === source.activeSentenceHighlightProfileId)
         ? source.activeSentenceHighlightProfileId : '';
     normalized.translationAppearance = normalizeTranslationAppearance(source.translationAppearance);
+    normalized.browserDefaultTranslationFont = source.browserDefaultTranslationFont === true;
     normalized.translationStyleProfiles = normalizeTranslationStyleProfiles(source.translationStyleProfiles);
     normalized.activeTranslationStyleProfileId = typeof source.activeTranslationStyleProfileId === 'string'
         && normalized.translationStyleProfiles.some((profile) => profile.id === source.activeTranslationStyleProfileId)

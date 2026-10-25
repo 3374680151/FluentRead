@@ -1,7 +1,7 @@
 /**
  * @file tests/pageTranslationFont.test.ts
- * 文件职责：验证当前页字体恢复的文档隔离、独立样式树覆盖与带文档身份的消息协议。
- * 主要内容：使用真实 DOM 根与渲染器检查已有及后续双语和闭合仅译文样式，验证撤销不改原文或全局配置，并覆盖过期、停用和伪造消息。
+ * 文件职责：验证当前页字体恢复的文档隔离、独立样式树覆盖与带文档身份的只读诊断查询。
+ * 主要内容：使用真实 DOM 根与渲染器检查已有及后续双语和闭合仅译文样式，验证撤销不改原文或全局配置，并覆盖停用、伪造查询和旧单页写命令的拒绝。
  * 模块边界：供应商网络与扩展平台只提供受控端口；实际字体计算由隔离真实浏览器验收，不把 DOM 样式文本断言当成浏览器排版证明。
  */
 import {afterEach, describe, expect, it, vi} from 'vitest';
@@ -184,25 +184,23 @@ describe('当前页译文字体消息身份与生命周期门禁', () => {
         return {pageTranslationFont, ctx, state, response, handle};
     }
 
-    it('查询返回当前完整地址和文档token，切换只接受相同文档地址且返回实际状态', () => {
+    it('查询返回全局偏好已应用的实际状态和文档身份，不接受旧单页写命令', () => {
         const {pageTranslationFont, handle, response} = setup();
         expect(handle({type: 'unrelated'})).toBeUndefined();
         expect(handle({type: 'getPageTranslationFontState'})).toBe(true);
         const snapshot = {status: 'success', browserDefault: false, documentToken: mocks.token, pageUrl: 'https://example.com/article#section'};
         expect(response).toHaveBeenLastCalledWith(snapshot);
-        handle({type: 'setPageTranslationFont', ...snapshot, browserDefault: true});
+        pageTranslationFont.set(true);
+        handle({type: 'getPageTranslationFontState'});
         expect(response).toHaveBeenLastCalledWith({...snapshot, browserDefault: true});
+        response.mockClear();
+        for (const oldCommand of [
+            {type: 'setPageTranslationFont', ...snapshot, browserDefault: false},
+            {type: 'setPageTranslationFont', browserDefault: 'yes'},
+        ]) expect(handle(oldCommand)).toBeUndefined();
+        expect(response).not.toHaveBeenCalled();
         expect(pageTranslationFont.read()).toBe(true);
-        for (const outdated of [{documentToken: 'previous-document'}, {pageUrl: 'https://example.com/article'}, {pageUrl: 'https://example.com/previous'}]) {
-            handle({type: 'setPageTranslationFont', ...snapshot, browserDefault: false, ...outdated});
-            expect(response).toHaveBeenLastCalledWith({status: 'stale'});
-            expect(pageTranslationFont.read()).toBe(true);
-        }
-        handle({type: 'setPageTranslationFont', ...snapshot, browserDefault: false});
-        expect(pageTranslationFont.read()).toBe(false);
         pageTranslationFont.dispose();
-        handle({type: 'setPageTranslationFont', ...snapshot, browserDefault: true});
-        expect(response).toHaveBeenLastCalledWith({status: 'unavailable'});
     });
 
     it('拒绝其他扩展、缺失sender、失效和停用上下文、缺失控制器及非法参数', () => {
@@ -211,8 +209,6 @@ describe('当前页译文字体消息身份与生命周期门禁', () => {
         for (const sender of [null, {}, {id: 'other-extension'}]) {
             handle(get, sender); expect(response).toHaveBeenLastCalledWith({status: 'unavailable'});
         }
-        handle({type: 'setPageTranslationFont', browserDefault: 'yes'});
-        expect(response).toHaveBeenLastCalledWith({status: 'unavailable'});
         ctx.isInvalid = true; handle(get); expect(response).toHaveBeenLastCalledWith({status: 'unavailable'}); ctx.isInvalid = false;
         mocks.config.on = false; handle(get); expect(response).toHaveBeenLastCalledWith({status: 'unavailable'}); mocks.config.on = true;
         state.isPageSuspended = () => true; handle(get); expect(response).toHaveBeenLastCalledWith({status: 'unavailable'}); state.isPageSuspended = () => false;

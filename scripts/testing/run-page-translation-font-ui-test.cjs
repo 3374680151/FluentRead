@@ -2,8 +2,8 @@
 'use strict';
 /**
  * @file scripts/testing/run-page-translation-font-ui-test.cjs
- * 当前页译文字体专项：用临时、后台可见且不抢焦点的 Edge 和本地确定性服务，
- * 从主面板真实 Aa 开关验证浏览器默认字体、双语/仅译文、隔离和页面生命周期，
+ * 全局译文字体专项：用临时、后台可见且不抢焦点的 Edge 和本地确定性服务，
+ * 从主面板真实 Aa 开关验证浏览器默认字体、双语/仅译文、跨页同步及持久化，
  * 同时检查图标两态保持尺寸和位置、译文字号不变，以及统一提示的悬停、聚焦与 Escape 关闭。
  * 仅使用 getPageTranslationFontState 读取状态；字体写入必须通过真实按钮。
  */
@@ -24,13 +24,13 @@ const TEXT = {
   primary: 'Reading an article should not require deciphering a decorative website font. This paragraph is the existing translation.',
   secondary: 'A newly translated paragraph should use the same selected reading font without another settings visit.',
   emphasis: 'Emphasized ordinary text keeps its meaning and remains readable.',
-  dynamic: 'Content arriving after full page translation should immediately use the current page font choice.',
+  dynamic: 'Content arriving after full page translation should immediately use the saved global font choice.',
 };
 const TRANSLATED = {
   primary: '阅读文章不该需要辨认装饰性的网页字体。这一段用于验证已有译文。',
   secondary: '后来翻译的段落应当使用相同的阅读字体，无需再次访问设置。',
   emphasis: '强调的普通文字保留其含义，并且仍然清晰可读。',
-  dynamic: '全文翻译后出现的新内容应当立即使用当前页选择的字体。',
+  dynamic: '全文翻译后出现的新内容应当立即使用已保存的全局字体。',
 };
 
 async function startFixture() {
@@ -56,13 +56,13 @@ async function startFixture() {
       return;
     }
     response.setHeader('Content-Type', 'text/html; charset=utf-8');
-    response.end(`<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Current page translation font fixture</title>
+    response.end(`<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Global translation font fixture</title>
       <style>
         body{margin:0;padding:48px 7vw;color:#243044;background:#fff;font:18px/1.8 cursive!important}
         main{max-width:1000px;margin:auto}h1{font-size:28px}p{margin:30px 0;font-family:monospace!important}
         strong,a{font-family:fantasy!important}code{font-family:monospace!important;color:#7c2d12;background:#fff7ed}
         math{font-family:serif!important}a{color:#1d4ed8}footer{font-size:14px}
-      </style></head><body><main><h1 translate="no">当前页译文字体确定性夹具</h1>
+      </style></head><body><main><h1 translate="no">全局译文字体确定性夹具</h1>
       <p id="primary">${TEXT.primary} <strong id="source-emphasis">${TEXT.emphasis}</strong>
         <code id="source-code">const untouched = 42;</code>
         <math id="source-math" xmlns="http://www.w3.org/1998/Math/MathML"><mrow><mi>x</mi><mo>+</mo><mn>2</mn></mrow></math>
@@ -163,9 +163,9 @@ async function main() {
     const service = 'custom:page-font-fixture';
     diagnostics.setPhase('fixture-configuration');
     await patchConfig({uiLanguage: 'zh-CN', uiLanguageSetupCompleted: true, on: true, theme: 'light', interfaceSkin: 'default',
-      display: 1, style: 1, translationAppearance: DEFAULT_APPEARANCE, service, from: 'en', to: 'zh-Hans', useCache: false,
+      display: 1, style: 1, translationAppearance: DEFAULT_APPEARANCE, browserDefaultTranslationFont: false, service, from: 'en', to: 'zh-Hans', useCache: false,
       autoTranslate: false, bilingualSentenceHighlightEnabled: false, translationBeforeOriginal: false,
-      customOpenAIProviders: [{id: service, name: '当前页字体夹具', endpoint: `${fixture.url}/v1/chat/completions`, models: ['fixture']}],
+      customOpenAIProviders: [{id: service, name: '全局字体夹具', endpoint: `${fixture.url}/v1/chat/completions`, models: ['fixture']}],
       token: {[service]: 'synthetic-local-fixture-not-a-secret'}, model: {[service]: 'fixture'},
       user_role: {[service]: 'SOURCE_BEGIN{{origin}}SOURCE_END'}, enableAIContext: false, enableAIMultiSegment: false,
       glossaryEnabled: false, hotkey: 'Control', floatingBallHotkey: 'Alt+T', mouseHoverTranslationDelay: 0,
@@ -177,6 +177,7 @@ async function main() {
     const tabId = await worker.evaluate(async url => (await chrome.tabs.query({})).find(tab => tab.url === url)?.id, page.url());
     const otherTabId = await worker.evaluate(async url => (await chrome.tabs.query({})).find(tab => tab.url === url)?.id, other.url());
     assert(Number.isInteger(tabId) && Number.isInteger(otherTabId));
+    const globalTabs = new Set([tabId, otherTabId]);
     const popupUrl = id => `${extensionOrigin}/popup.html?sourceTabId=${id}`;
     diagnostics.setPhase('popup-automatic-font-read');
     await popup.goto(popupUrl(tabId), {waitUntil: 'domcontentloaded'});
@@ -203,7 +204,8 @@ async function main() {
     await assertFontButton(false);
     assert.notEqual((await readConfig()).popupQuickFeatureVisibility?.appearance, true, '专项不得为了找到入口而开启隐藏的外观快捷卡');
     assert.equal(await popup.locator('[data-popup-quick-feature="appearance"]').count(), 0, '新配置的外观快捷卡应保持默认隐藏');
-    report.checks.push('default configuration exposes the permanent Aa toggle, automatically reads the current font, and leaves the optional appearance quick card hidden');
+    assert.equal((await readConfig()).browserDefaultTranslationFont, false, '新配置的全局字体偏好应默认关闭');
+    report.checks.push('default configuration exposes the permanent Aa toggle, reads the saved global preference, and leaves the optional appearance quick card hidden');
     const readState = id => popup.evaluate(async tab => chrome.tabs.sendMessage(tab, {type: 'getPageTranslationFontState'}, {frameId: 0}), id);
     const untilState = async (id, enabled) => {
       for (let attempt = 0; attempt < 160; attempt++) {
@@ -218,7 +220,8 @@ async function main() {
       const displayBefore = (await readConfig()).display;
       const button = popup.getByTestId('page-font-entry');
       if (await button.getAttribute('aria-pressed') !== String(enabled)) await button.click();
-      await untilState(tabId, enabled);
+      await untilConfig(config => config.browserDefaultTranslationFont === enabled);
+      for (const id of globalTabs) await untilState(id, enabled);
       await assertFontButton(enabled);
       assert.equal((await readConfig()).display, displayBefore, '字体按钮不得更改双语/仅译文模式');
       await popup.getByTestId('page-translation').hover();
@@ -239,10 +242,10 @@ async function main() {
         await shot(popup, 'tooltip-failure');
         throw error;
       }
-      const action = enabled ? '恢复网页字体' : '使用浏览器默认字体';
+      const action = enabled ? '恢复原有字体' : '使用浏览器默认字体';
       assert.equal(await tooltip.locator(':scope > span').innerText(), action, '字体提示应直接说明点击后的操作');
       assert.equal(await button.getAttribute('aria-label'), '使用浏览器默认字体', '字体开关应保持稳定功能名，由 aria-pressed 表达当前状态');
-      assert.equal(await tooltip.locator('small').innerText(), '仅本页译文，刷新或跳转后恢复', '字体提示应简洁说明作用范围');
+      assert.equal(await tooltip.locator('small').innerText(), '所有网页生效，自动保存', '字体提示应说明全局作用范围与自动保存');
       assert.equal(await tooltip.locator('xpath=ancestor::*[contains(concat(" ", normalize-space(@class), " "), " translation-tool-tooltip ")]').count(), 1, '字体提示应使用统一浮层');
       await shot(popup, `06-aa-tooltip-${enabled ? 'browser-default' : 'host'}-${keyboard ? 'keyboard' : 'hover'}`);
       await popup.keyboard.press('Escape');
@@ -321,6 +324,9 @@ async function main() {
     diagnostics.setPhase('bilingual-font-toggle-and-tooltip');
     await hover(page, 'primary'); await waitBilingual('primary');
     await waitFont(bilingual('primary'), original.primary);
+    await hover(other, 'primary'); await waitBilingual('primary', other);
+    const otherTranslation = other.locator('#primary > .fluent-read-bilingual-content');
+    await waitFont(otherTranslation, original.primary);
     const baselineState = await untilState(tabId, false);
     const translatedCode = bilingual('primary').locator('code');
     const translatedMath = bilingual('primary').locator('math');
@@ -339,6 +345,7 @@ async function main() {
     await inspectFontTooltip(false, true);
     await chooseFont(true);
     await waitFont(bilingual('primary'), browserDefault);
+    await waitFont(otherTranslation, browserDefault);
     await waitFont(bilingual('primary').locator('strong'), browserDefault);
     assert.equal(await fontOf(translatedCode), protectedBefore.code, '译文内代码字体被改写');
     assert.equal(await fontOf(translatedMath), protectedBefore.math, '译文内公式字体被改写');
@@ -350,15 +357,16 @@ async function main() {
     await shot(popup, '02-aa-main-browser-default');
     await inspectFontTooltip(true);
     await inspectFontTooltip(true, true);
-    report.checks.push('hover and keyboard focus reveal the direct font action and concise page-only hint in both states; Escape dismisses the font tooltip');
+    report.checks.push('hover and keyboard focus reveal the direct font action and concise all-pages autosave hint in both states; Escape dismisses the font tooltip');
     await hover(page, 'secondary'); await waitBilingual('secondary');
     await waitFont(bilingual('secondary'), browserDefault);
-    report.checks.push('the real Aa toggle updates existing and later bilingual translations directly without a drawer, including ordinary inline text; original, code and formula fonts remain unchanged');
+    report.checks.push('the real Aa toggle saves the global preference and updates existing translations in both already-open tabs plus later bilingual translations without a drawer; original, code and formula fonts remain unchanged');
 
     // 关闭恢复网页/全局外观；再开启覆盖全局自定义 CSS；任何字体操作都不能请求翻译。
     diagnostics.setPhase('custom-appearance-font-restoration');
     count = fixture.requests.length;
     await chooseFont(false); await waitFont(bilingual('primary'), original.primary);
+    await waitFont(otherTranslation, original.primary);
     await waitFont(bilingual('primary').locator('strong'), original.emphasis);
     const bilingualSizesRestored = await bilingualSizes();
     assert.deepEqual(bilingualSizesRestored, bilingualSizesBefore, '恢复网页字体不得改变双语译文字号');
@@ -373,44 +381,75 @@ async function main() {
     await noNewRequests(count, 'global custom font override and restoration');
     await patchConfig({translationAppearance: DEFAULT_APPEARANCE});
     await waitFont(bilingual('primary'), browserDefault);
-    report.checks.push('switching back restores host and global custom font CSS; temporary choice does not rewrite global appearance or request translation');
+    report.checks.push('switching back restores host and configured appearance fonts across open tabs; saved font preference does not rewrite appearance presets or request translation');
 
-    // Popup 重开保持当前文档状态，其他标签页独立。
-    diagnostics.setPhase('popup-reopen-and-tab-isolation');
+    // Popup 重开、不同标签页、新页面和快速关闭都沿用已保存的全局选择。
+    diagnostics.setPhase('popup-reopen-global-sync-and-quick-close');
     await popup.close();
     popup = await createPage(popupUrl(tabId), {width: 360, height: 600});
     await assertFontButton(true);
     await waitFont(bilingual('primary'), browserDefault);
-    await hover(other, 'primary'); await waitBilingual('primary', other);
-    assert.equal(await fontOf(other.locator('#primary > .fluent-read-bilingual-content')), original.primary);
-    await untilState(otherTabId, false);
+    await waitFont(otherTranslation, browserDefault);
+    await untilState(otherTabId, true);
     await popup.goto(popupUrl(otherTabId), {waitUntil: 'domcontentloaded'});
-    await assertFontButton(false);
+    await assertFontButton(true);
     await popup.goto(popupUrl(tabId), {waitUntil: 'domcontentloaded'});
     await assertFontButton(true);
-    report.checks.push('reopened popup reads the active document choice; another tab retains its own host font');
+    report.persistenceCases = [];
+    for (const enabled of [false, true]) {
+      const before = (await readConfig()).browserDefaultTranslationFont;
+      const persistenceCase = {name: 'real Aa click then immediate popup close and reopen', before, requested: enabled, passed: false};
+      report.persistenceCases.push(persistenceCase);
+      await popup.getByTestId('page-font-entry').click();
+      await popup.close();
+      popup = await createPage(popupUrl(tabId), {width: 360, height: 600});
+      const stored = await untilConfig(config => config.browserDefaultTranslationFont === enabled);
+      await assertFontButton(enabled);
+      for (const id of globalTabs) await untilState(id, enabled);
+      await waitFont(otherTranslation, enabled ? browserDefault : original.primary);
+      Object.assign(persistenceCase, {stored: stored.browserDefaultTranslationFont,
+        reopened: await popup.getByTestId('page-font-entry').getAttribute('aria-pressed'), passed: true});
+    }
+    report.quickClose = true;
+    const freshPage = await createPage(`${fixture.url}/new-page`);
+    await freshPage.locator('#fluent-read-page-styles').waitFor({state: 'attached'});
+    const freshTabId = await worker.evaluate(async url => (await chrome.tabs.query({})).find(tab => tab.url === url)?.id, freshPage.url());
+    assert(Number.isInteger(freshTabId)); globalTabs.add(freshTabId);
+    await untilState(freshTabId, true);
+    await hover(freshPage, 'primary'); await waitBilingual('primary', freshPage);
+    const freshTranslation = freshPage.locator('#primary > .fluent-read-bilingual-content');
+    await waitFont(freshTranslation, browserDefault);
+    count = fixture.requests.length;
+    await chooseFont(false);
+    for (const translated of [bilingual('primary'), otherTranslation, freshTranslation]) await waitFont(translated, original.primary);
+    await chooseFont(true);
+    for (const translated of [bilingual('primary'), otherTranslation, freshTranslation]) await waitFont(translated, browserDefault);
+    await noNewRequests(count, 'global font updates across existing and newly opened tabs');
+    report.crossPageSync = {existingTabs: 2, newTabs: 1, enabledAndDisabled: true, passed: true};
+    report.checks.push('reopened popup and another tab show the same saved choice; immediate close after real Aa clicks persists both values; newly opened pages inherit it and every tab follows both global toggle directions');
 
-    // 刷新与 SPA URL 改变都回到网页/全局字体；刷新产生新的 document token。
+    // 刷新与 SPA URL 改变继续沿用全局选择；刷新只更换文档 token。
     diagnostics.setPhase('reload-and-spa-lifecycle');
     await page.reload({waitUntil: 'domcontentloaded'});
     await page.locator('#fluent-read-page-styles').waitFor({state: 'attached'});
-    const afterRefresh = await untilState(tabId, false);
+    const afterRefresh = await untilState(tabId, true);
     assert.notEqual(afterRefresh.documentToken, baselineState.documentToken, '刷新应更换文档 token');
-    await popup.reload({waitUntil: 'domcontentloaded'}); await assertFontButton(false);
+    await popup.reload({waitUntil: 'domcontentloaded'}); await assertFontButton(true);
     await hover(page, 'primary'); await waitBilingual('primary');
-    await waitFont(bilingual('primary'), original.primary);
-    await chooseFont(true); await waitFont(bilingual('primary'), browserDefault);
+    await waitFont(bilingual('primary'), browserDefault);
     count = fixture.requests.length;
     await page.evaluate(() => history.pushState({}, '', '/article/spa'));
-    const afterSpa = await untilState(tabId, false);
+    const afterSpa = await untilState(tabId, true);
     assert.equal(afterSpa.pageUrl, page.url());
-    if (await bilingual('primary').count()) await waitFont(bilingual('primary'), original.primary);
-    await noNewRequests(count, 'SPA font reset');
+    if (await bilingual('primary').count()) await waitFont(bilingual('primary'), browserDefault);
+    await untilConfig(config => config.browserDefaultTranslationFont === true);
+    await noNewRequests(count, 'SPA retains global font');
     report.metrics.lifecycle = {initial: baselineState, afterRefresh, afterSpa};
-    report.checks.push('refresh resets the temporary choice with a new document token; SPA URL navigation also resets it without a translation request');
+    report.checks.push('refresh changes the document token while retaining the saved global font; SPA URL navigation also retains it without a translation request');
 
     // 仅译文采用闭合 ShadowRoot：CDP 直接读取真实渲染节点的计算样式，不注入替代 DOM。
     diagnostics.setPhase('translation-only-font-toggle');
+    await chooseFont(false);
     await patchConfig({display: 0});
     await page.reload({waitUntil: 'domcontentloaded'});
     await page.locator('#fluent-read-page-styles').waitFor({state: 'attached'});
@@ -476,10 +515,19 @@ async function main() {
     report.metrics.single = {hostFonts: singleHostFonts, restoredFonts: singleRestored, repeatedFonts: await singleFonts('primary'),
       fontSizes: {host: singleHostSizes, browserDefault: singleBrowserSizes, restored: singleRestoredSizes}};
     report.checks.push('existing, later and repeated single translations use browser default inside real closed roots; turning it off restores each slot; restore returns original DOM');
+    await page.reload({waitUntil: 'domcontentloaded'});
+    await page.locator('#fluent-read-page-styles').waitFor({state: 'attached'});
+    await untilState(tabId, true);
+    await popup.reload({waitUntil: 'domcontentloaded'}); await assertFontButton(true);
+    await hover(page, 'primary');
+    await page.locator('#primary .fluent-read-single-slot').first().waitFor({state: 'attached'});
+    await waitSingleFont('primary', browserDefault);
+    report.checks.push('translation-only pages also retain the global preference after reload and apply it to newly rendered closed translation roots');
     await session.detach();
 
     // 从真实全文按钮进入；字体覆盖不依赖悬浮入口，全文会话的后续 DOM 也使用当前选择。
     diagnostics.setPhase('full-page-dynamic-translation-and-restore');
+    await chooseFont(false);
     await patchConfig({display: 1});
     await page.reload({waitUntil: 'domcontentloaded'});
     await page.locator('#fluent-read-page-styles').waitFor({state: 'attached'});
@@ -544,7 +592,7 @@ async function main() {
     await inspectDisplayModeTooltip('translation-only', true);
     await popup.getByTestId('popup-display-mode').click();
     await untilConfig(config => config.display === 1);
-    assert.equal(await popup.getByTestId('page-font-entry').getAttribute('data-font-state'), fontStateBeforeMode, '显示模式切换不得更改当前页字体选择');
+    assert.equal(await popup.getByTestId('page-font-entry').getAttribute('data-font-state'), fontStateBeforeMode, '显示模式切换不得更改全局字体选择');
     await patchConfig({service: 'google'});
     await inspectDisplayModeTooltip('bilingual', false, true);
     assert.equal((await readConfig()).display, 1, 'Google 禁用状态不得修改显示模式');
