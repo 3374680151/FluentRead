@@ -90,6 +90,80 @@ afterEach(async () => {
 });
 
 describe('Zotero Vue workspace user flows', () => {
+    it.each(['settings-save', 'attachment-read'])('keeps accepted selection settings across %s and later draft edits', async stage => {
+        const saving = deferred<void>(), reading = deferred<AttachmentSource>();
+        if (stage === 'settings-save') vi.mocked(host.saveSettings).mockReturnValueOnce(saving.promise);
+        else vi.mocked(host.readAttachment).mockReturnValueOnce(reading.promise);
+        await attach({selection: {attachmentID: 12, text: 'Accepted source', page: 2}});
+        await select('译文', 'ja');
+        click(namedButton('翻译选中文字')); await settle();
+        expect(host.saveSettings).toHaveBeenCalledWith(expect.objectContaining({targetLanguage: 'ja'}));
+        if (stage === 'attachment-read') expect(host.readAttachment).toHaveBeenCalledOnce();
+        await select('译文', 'fr');
+        saving.resolve(); reading.resolve(source()); await settle();
+        expect(fixture.engine!.selection).toHaveBeenCalledWith('Accepted source', expect.objectContaining({targetLanguage: 'ja'}), expect.any(AbortSignal));
+        expect(doc.querySelector<HTMLSelectElement>('select[aria-label="译文"]')?.value).toBe('fr');
+        click(namedButton('保存为双语笔记')); await settle();
+        expect(vi.mocked(host.saveNote).mock.calls[0][1].settings.targetLanguage).toBe('ja');
+    });
+
+    it('captures document settings before attachment selection and persistence both yield', async () => {
+        const selecting = deferred<AttachmentSource[]>(), saving = deferred<void>();
+        vi.mocked(host.selectedAttachments).mockReturnValueOnce(selecting.promise);
+        vi.mocked(host.saveSettings).mockReturnValueOnce(saving.promise);
+        await attach(); await select('译文', 'ja');
+        click(namedButton('翻译所选文献')); await settle();
+        await select('译文', 'fr'); selecting.resolve([source()]); await settle();
+        await select('译文', 'de'); saving.resolve(); await settle();
+        await vi.waitFor(() => expect(host.saveOutput).toHaveBeenCalledOnce());
+        expect(host.saveSettings).toHaveBeenCalledWith(expect.objectContaining({targetLanguage: 'ja'}));
+        expect(vi.mocked(fixture.engine!.translate).mock.calls[0][1].targetLanguage).toBe('ja');
+        expect(doc.querySelector<HTMLSelectElement>('select[aria-label="译文"]')?.value).toBe('de');
+    });
+
+    it('keeps a document action snapshot when a later settings save commits first', async () => {
+        const saving = deferred<void>();
+        vi.mocked(host.saveSettings).mockReturnValueOnce(saving.promise);
+        await attach(); await select('译文', 'ja');
+        click(namedButton('翻译所选文献')); await settle();
+        await select('译文', 'fr'); click(namedButton('翻译设置')); await settle();
+        click(namedButton('保存设置')); await settle();
+        saving.resolve(); await settle();
+        await vi.waitFor(() => expect(host.saveOutput).toHaveBeenCalledOnce());
+        expect(vi.mocked(host.saveSettings).mock.calls.map(([value]) => value.targetLanguage)).toEqual(['ja', 'fr']);
+        expect(vi.mocked(fixture.engine!.translate).mock.calls[0][1].targetLanguage).toBe('ja');
+        expect(vi.mocked(host.saveOutput).mock.calls[0][1].settings.targetLanguage).toBe('ja');
+    });
+
+    it.each(['draft', 'failed-save'])('uses committed service credentials for later queued documents after a newer %s', async action => {
+        const committed = {...defaultSettings, autoOpen: false, service: 'compatible' as const,
+            endpoint: 'https://one.test/v1/chat/completions', model: 'original-model', apiKey: 'synthetic-committed-key'};
+        vi.mocked(host.loadSettings).mockResolvedValue(committed);
+        vi.mocked(host.selectedAttachments).mockResolvedValue([source(), {...source(), id: 13, key: 'SECOND'}]);
+        vi.mocked(host.readAttachment).mockImplementation(async id => ({...source(), id, key: id === 12 ? 'PDFKEY' : 'SECOND'}));
+        const exporting = deferred<Uint8Array>();
+        vi.mocked(fixture.engine!.export).mockReturnValueOnce(exporting.promise);
+        await attach(); click(namedButton('翻译所选文献')); await settle();
+        await vi.waitFor(() => expect(fixture.engine!.export).toHaveBeenCalledOnce());
+        click(namedButton('翻译设置')); await settle();
+        input('模型服务地址', 'https://two.test/v1'); input('API 密钥（仅保存在本机）', 'synthetic-unsaved-key'); await settle();
+        if (action === 'failed-save') {
+            vi.mocked(host.saveSettings).mockRejectedValueOnce(new Error('Controlled persistence failure'));
+            click(namedButton('保存设置')); await settle();
+        }
+        exporting.resolve(new Uint8Array([37, 80, 68, 70])); await settle();
+        await vi.waitFor(() => {
+            const latest = vi.mocked(host.saveTasks).mock.calls.at(-1)?.[0] ?? [];
+            expect(latest).toHaveLength(2);
+            expect(latest.every(task => task.state === 'completed' || task.state === 'failed')).toBe(true);
+        });
+        expect(vi.mocked(host.saveTasks).mock.calls.at(-1)![0].map(task => task.state)).toEqual(['completed', 'completed']);
+        expect(vi.mocked(fixture.engine!.translate).mock.calls.map(call => call[1])).toEqual([
+            expect.objectContaining({endpoint: committed.endpoint, apiKey: committed.apiKey}),
+            expect.objectContaining({endpoint: committed.endpoint, apiKey: committed.apiKey}),
+        ]);
+    });
+
     it('renders an empty workspace and requires a deliberate translation action', async () => {
         await attach();
         expect(doc.querySelector('h1')?.textContent).toBe('流畅阅读');

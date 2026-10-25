@@ -1,7 +1,7 @@
 <!--
  * @file src/features/settings/ui/TranslationCacheSettings.vue
  * 文件职责：在高级选项原有位置提供紧凑的翻译缓存管理卡，展示用量、开关、清空和可调整的容量与条数上限。
- * 主要内容：从后台读取统计，折叠展示上限编辑，通过字段级补丁保存；清理与后续统计共用一次有界等待预算，面板失活、缓存停用或卸载结束自己的等待，重新激活刷新统计并保留限额草稿，旧清理或保存回复不触发新会话查询；区分未确认、页面仍同步和真正清理完成；保存终态同步忙时暂缓的父级上限更新，保留无外部更新的失败草稿，提供重试及离页保护。
+ * 主要内容：从后台读取统计，折叠展示上限编辑，通过字段级补丁保存；清理与后续统计共用一次有界等待预算，面板失活、缓存停用或卸载结束自己的等待，重新激活刷新统计并保留限额草稿，旧清理或保存回复不触发新会话查询；区分未确认、页面仍同步和真正清理完成；保存终态或失活时结清忙时暂缓的父级上限更新，保留无外部更新的失败草稿，提供重试及离页保护。
  * 模块边界：界面不访问 IndexedDB、不决定淘汰顺序，不直接修改父组件配置；缓存管理经 services/translation，持久化及跨页同步经 services/config。
  -->
 <template>
@@ -126,6 +126,7 @@ watch(cacheContext.active, active => {
   loading.value = false;
   clearing.value = false;
   saving.value = false;
+  syncPendingLimits();
 }, {flush: 'sync'});
 
 const limitsValid = computed(() => Number.isInteger(draftMiB.value)
@@ -149,6 +150,13 @@ watch(() => [props.config.translationCacheMaxBytes, props.config.translationCach
   draftMiB.value = props.config.translationCacheMaxBytes / MIB;
   draftEntries.value = props.config.translationCacheMaxEntries;
 });
+
+function syncPendingLimits(): void {
+  if (!pendingLimitsRefresh) return;
+  pendingLimitsRefresh = false;
+  draftMiB.value = props.config.translationCacheMaxBytes / MIB;
+  draftEntries.value = props.config.translationCacheMaxEntries;
+}
 
 function formatCount(value: number): string {
   return new Intl.NumberFormat(language.value).format(value);
@@ -239,11 +247,7 @@ async function persistPatch(patch: Partial<Config>): Promise<void> {
       saving.value = false;
       // 输入在保存期间禁用；被暂缓的父级权威更新应在终态同步一次。
       // 没有外部更新时保留失败的用户草稿，便于原值重试。
-      if (pendingLimitsRefresh) {
-        pendingLimitsRefresh = false;
-        draftMiB.value = props.config.translationCacheMaxBytes / MIB;
-        draftEntries.value = props.config.translationCacheMaxEntries;
-      }
+      syncPendingLimits();
     }
   }
 }

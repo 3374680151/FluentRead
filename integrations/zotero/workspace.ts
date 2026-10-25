@@ -44,9 +44,10 @@ if (!options?.host || !container) {
 async function startWorkspace(initial: WorkspaceOptions, mount: HTMLElement): Promise<void> {
     const host = initial.host;
     const settings = ref<TranslationSettings>(await host.loadSettings());
+    let persistedSettings = {...settings.value};
     if (windowClosed || ownWindow.closed) return;
     const engine = createZoteroEngine({pdfFontLoader: host.fontCache ? createZoteroFontLoader(host.fontCache) : undefined});
-    const queue = new ZoteroTaskQueue(host, engine, () => ({...settings.value}));
+    const queue = new ZoteroTaskQueue(host, engine, () => ({...persistedSettings}));
     const revision = ref(0);
     const notice = ref(''); const errorNotice = ref(false); const showSettings = ref(false);
     const busy = ref(false); const selection = ref<SelectionRequest | null>(initial.selection || null);
@@ -70,25 +71,33 @@ async function startWorkspace(initial: WorkspaceOptions, mount: HTMLElement): Pr
             announce(message.slice(0, 600), true);
         }
     };
-    const saveSettings = async () => {
-        if (settings.value.service === 'compatible') {
-            normalizeCompatibleEndpoint(settings.value.endpoint);
-            if (!settings.value.model.trim() || /[\u0000-\u001f]/u.test(settings.value.model)) throw new Error('请填写有效的模型名称');
+    const saveSettings = async (draft = {...settings.value}): Promise<TranslationSettings> => {
+        if (draft.service === 'compatible') {
+            normalizeCompatibleEndpoint(draft.endpoint);
+            if (!draft.model.trim() || /[\u0000-\u001f]/u.test(draft.model)) throw new Error('请填写有效的模型名称');
         }
-        parseZoteroGlossary(settings.value.glossary);
-        const snapshot = normalizeSettings(settings.value);
-        settings.value = snapshot;
-        const saving = settingsWrites.catch(() => undefined).then(() => host.saveSettings(snapshot));
+        parseZoteroGlossary(draft.glossary);
+        const snapshot = normalizeSettings(draft);
+        // A queued action must not replace edits made after it was accepted or share its snapshot with the form.
+        if ((Object.keys(draft) as Array<keyof TranslationSettings>).every(key => settings.value[key] === draft[key])) {
+            settings.value = {...snapshot};
+        }
+        const saving = settingsWrites.catch(() => undefined).then(async () => {
+            await host.saveSettings(snapshot);
+            persistedSettings = {...snapshot};
+        });
         settingsWrites = saving; await saving;
+        return snapshot;
     };
-    const enqueue = async (attachments?: SelectedAttachments) => {
+    const enqueue = async (attachments?: SelectedAttachments, draft = {...settings.value}) => {
         if (busy.value || disposed) return;
         busy.value = true;
         try {
-            const selected = attachments ?? await host.selectedAttachments();
-            await saveSettings();
+            const [selected, snapshot] = await Promise.all([
+                attachments ?? host.selectedAttachments(), saveSettings(draft),
+            ]);
             if (disposed) return;
-            const count = await queue.enqueue(selected);
+            const count = await queue.enqueue(selected, snapshot);
             if (count) announce(`已加入 ${count} 个 PDF，将按顺序翻译`);
         } finally {busy.value = false;}
     };
@@ -96,7 +105,8 @@ async function startWorkspace(initial: WorkspaceOptions, mount: HTMLElement): Pr
         Object.assign(settings.value, {[key]: value});
     };
     const requestEnqueue = (attachments?: SelectedAttachments) => {
-        const next = enqueueRequests.catch(() => undefined).then(() => enqueue(attachments));
+        const draft = {...settings.value};
+        const next = enqueueRequests.catch(() => undefined).then(() => enqueue(attachments, draft));
         enqueueRequests = next; return next;
     };
     const receive = (next: Partial<WorkspaceOptions>) => {
@@ -120,13 +130,12 @@ async function startWorkspace(initial: WorkspaceOptions, mount: HTMLElement): Pr
         selectionSource = undefined;
         announce('');
         try {
-            await saveSettings(); controller.signal.throwIfAborted();
+            const snapshot = await saveSettings(); controller.signal.throwIfAborted();
             const source = await host.readAttachment(captured.attachmentID, controller.signal, 'selection');
             controller.signal.throwIfAborted();
             // Retain source identity, not a second PDF buffer, for the later explicit note commit.
             source.bytes = new Uint8Array();
             if (!disposed && generation === selectionGeneration) selectionSource = source;
-            const snapshot = {...settings.value};
             selectionSettings = taskSettings(snapshot);
             const translated = await engine.selection(text, snapshot, controller.signal);
             if (!disposed && generation === selectionGeneration) selectionResult.value = translated;

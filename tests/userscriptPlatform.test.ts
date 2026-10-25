@@ -21,7 +21,7 @@ const mocks = vi.hoisted(() => ({
     lookupWord: vi.fn(),
     preparePatch: vi.fn(), prepareSave: vi.fn(), parseStored: vi.fn(), watch: vi.fn(), vision: vi.fn(),
     watched: [] as {key: string; callback: (value: unknown) => void; stop: ReturnType<typeof vi.fn>}[],
-    usage: {getDashboard: vi.fn(), clear: vi.fn()}, vocabulary: {list: vi.fn(), clear: vi.fn(), upsert: vi.fn()},
+    usage: {getDashboard: vi.fn(), clear: vi.fn()}, vocabulary: {list: vi.fn(), clear: vi.fn(), upsert: vi.fn(), updateNote: vi.fn()},
 }));
 
 vi.mock('@/src/services/config/store', () => ({
@@ -311,6 +311,66 @@ describe('userscript 平台消息适配', () => {
             expect(await handler(message)).toMatchObject({success:false,error:{code:'storage-error',message:'storage port failed'}});
             expect(errorLog).toHaveBeenCalledWith('[FluentRead userscript] 单词本操作失败',expect.objectContaining({message:'storage port failed'}));
         }finally{handler.dispose();errorLog.mockRestore();}
+    });
+
+    it.each([
+        ['GM_info', 'isIncognito'], ['GM_info', 'isPrivate'], ['GM', 'isIncognito'], ['GM', 'isPrivate'],
+    ] as const)('full vocabulary uses trusted %s.%s for both private write guards at dispatch time', async (namespace, flag) => {
+        Object.assign(mocks.config, {vocabularyBookEnabled: true});
+        mocks.vocabulary.upsert.mockResolvedValue({id: 'entry-1'});
+        mocks.vocabulary.updateNote.mockResolvedValue({id: 'entry-1'});
+        const info = {[flag]: false};
+        vi.stubGlobal('GM_info', namespace === 'GM_info' ? info : undefined);
+        vi.stubGlobal('GM', namespace === 'GM' ? {info} : undefined);
+        const handler = createFullPlatformMessageHandler(vi.fn());
+        const changed = vi.fn(); browser.runtime.onMessage.addListener(changed);
+        const log = vi.spyOn(console, 'error');
+        const messages = [
+            {type: 'fluentReadVocabularyBook', action: 'upsert', input: {sourceLanguage: 'en', targetLanguage: 'zh', term: 'sample', translation: '示例'}},
+            {type: 'fluentReadVocabularyBook', action: 'updateNote', entryId: 'entry-1', note: 'note'},
+        ];
+        try {
+            info[flag] = true;
+            for (const message of messages) {
+                expect(await handler({...message, sender: {tab: {incognito: false}}, incognito: false}))
+                    .toMatchObject({success: false, error: {code: 'invalid-input', message: expect.stringContaining('无痕窗口')}});
+            }
+            expect(mocks.vocabulary.upsert).not.toHaveBeenCalled();
+            expect(mocks.vocabulary.updateNote).not.toHaveBeenCalled();
+            expect(changed).not.toHaveBeenCalled(); expect(log).not.toHaveBeenCalled();
+            expect(await handler({type: 'fluentReadVocabularyBook', action: 'list'})).toMatchObject({success: true});
+            info[flag] = false;
+            for (const message of messages) {
+                expect(await handler({...message, sender: {tab: {incognito: true}}, incognito: true})).toMatchObject({success: true});
+            }
+            expect(mocks.vocabulary.upsert).toHaveBeenCalledOnce();
+            expect(mocks.vocabulary.updateNote).toHaveBeenCalledOnce();
+            expect(changed).toHaveBeenCalledTimes(2);
+        } finally {handler.dispose();browser.runtime.onMessage.removeListener(changed);log.mockRestore();vi.unstubAllGlobals();}
+    });
+
+    it('full vocabulary ordinary writes keep working without manager metadata and ignore forged private payload', async () => {
+        vi.stubGlobal('GM_info', undefined); vi.stubGlobal('GM', undefined);
+        Object.assign(mocks.config, {vocabularyBookEnabled: true});
+        mocks.vocabulary.upsert.mockResolvedValue({id: 'entry-1'});mocks.vocabulary.updateNote.mockResolvedValue({id: 'entry-1'});
+        const handler = createFullPlatformMessageHandler(vi.fn());
+        try {
+            expect(await handler({type: 'fluentReadVocabularyBook', action: 'upsert', input: {sourceLanguage: 'en', targetLanguage: 'zh', term: 'sample', translation: '示例'}, sender: {tab: {incognito: true}}})).toMatchObject({success: true});
+            expect(await handler({type: 'fluentReadVocabularyBook', action: 'updateNote', entryId: 'entry-1', note: 'note', incognito: true})).toMatchObject({success: true});
+            expect(mocks.vocabulary.upsert).toHaveBeenCalledOnce();expect(mocks.vocabulary.updateNote).toHaveBeenCalledOnce();
+        } finally {handler.dispose();vi.unstubAllGlobals();}
+    });
+
+    it('full management leaves usage and credential authority untrusted when the current page has no location', async () => {
+        vi.stubGlobal('location', undefined);
+        const handler = createFullPlatformMessageHandler(vi.fn());
+        try {
+            expect(await handler({type: 'modelUsage', action: 'query'})).toMatchObject({success: false});
+            expect(await handler({type: 'persistConfig', mode: 'patch', clientId: 'no-location', sequence: 1, config: {to: 'de'}, expected: {to: 'en'}, sender: {url: 'https://fixture.test/#fluentread-userscript-settings'}})).toMatchObject({success: true});
+            expect(await handler({type: 'persistConfigBatch', clientId: 'no-location-batch', patches: [{sequence: 1, config: {to: 'de'}, expected: {to: 'en'}}]})).toMatchObject({success: true});
+            expect(mocks.usage.getDashboard).not.toHaveBeenCalled();expect(mocks.saveConfig).toHaveBeenCalledTimes(2);
+            expect(mocks.preparePatch.mock.calls.map(call => call[3])).toEqual([false, false]);
+        } finally {handler.dispose();vi.unstubAllGlobals();}
     });
 
     it('full disposal releases every GM subscription once even when both unsubscribe functions fail and reenter',async()=>{

@@ -1,7 +1,7 @@
 /**
  * @file src/features/reading-assistant/selectionContext.ts
  * 文件职责：在用户点击理解时，从原选区所在的最小正文块捕获有限上下文，并提取可明确展开的整句。
- * 主要内容：排除表单、交互控件、隐藏内容、代码及扩展译文，按选区位置裁剪段落，避免双击相同单词时关联错误句子。
+ * 主要内容：排除表单、交互控件、隐藏内容、代码及扩展译文，在节点与原始字符总预算内迭代读取段落，按选区位置裁剪上下文，避免双击相同单词时关联错误句子。
  * 模块边界：不扫描整页、不读取网址、标题或存储，也不发送模型请求；只返回当前操作使用的纯文本快照。
  */
 import {summarizeSelectionContext} from '@/src/features/selection-translation/core/public';
@@ -36,22 +36,28 @@ export function captureReadingSelection(range: Range, text: string, contextLimit
     let raw = '';
     let selectedOffset = -1;
     let visited = 0;
-    const visit = (node: Node): void => {
-        if (++visited > 2000) return;
+    const pending: Node[] = [paragraph];
+    while (pending.length) {
+        const node = pending.pop()!;
+        visited++;
         if (node.nodeType === 1) {
             const element = node as HTMLElement;
             const view = element.ownerDocument.defaultView;
             const style = typeof view?.getComputedStyle === 'function' ? view.getComputedStyle(element) : element.style;
-            if (element.matches(EXCLUDED) || style.display === 'none' || style.visibility === 'hidden') return;
-            for (const child of Array.from(node.childNodes)) visit(child);
-            return;
+            if (element.matches(EXCLUDED) || style.display === 'none' || style.visibility === 'hidden') continue;
+            const children = node.childNodes;
+            // 入栈前计入已访问、待访问与直接子节点，不能先展开任意宽的 NodeList 再逐个放弃。
+            if (visited + pending.length + children.length > 2000) return fallback;
+            pending.push(...Array.from(children).reverse());
+            continue;
         }
-        if (node.nodeType !== 3) return;
+        if (node.nodeType !== 3) continue;
+        const value = node.textContent || '';
+        if (raw.length + value.length > 64_000) return fallback;
         if (node === range.startContainer) selectedOffset = raw.length + range.startOffset;
-        raw += node.textContent;
-    };
-    visit(paragraph);
-    if (visited > 2000 || selectedOffset < 0) return fallback;
+        raw += value;
+    }
+    if (selectedOffset < 0) return fallback;
     const normalized = normalize(raw);
     const offset = raw.slice(0, selectedOffset).replace(/\s+/gu, ' ').trimStart().length;
     if (normalized.slice(offset, offset + selected.length) !== selected) return fallback;

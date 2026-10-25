@@ -14,6 +14,7 @@ import {createVocabularyBookChangedMessage, createVocabularyBookHandler} from '@
 import {VOCABULARY_BOOK_MESSAGE} from '@/src/features/vocabulary/protocol';
 import {vocabularyBook} from '@/src/features/vocabulary/repository';
 import {isUserscriptSettingsUrl} from './settingsPage';
+import {isUserscriptPrivateContext} from './api';
 
 /** 完整设置的权威快照、CAS、批量持久化和本地管理消息；通用翻译/取消/缓存契约共用 compact 适配器。 */
 export function createPlatformMessageHandler(openSettings: (section?: string) => void) {
@@ -67,7 +68,7 @@ export function createPlatformMessageHandler(openSettings: (section?: string) =>
         }
 
         if (message.type === VOCABULARY_BOOK_MESSAGE) {
-            return vocabularyBookHandler.handle(message, {sender: {tab: {incognito: false}}});
+            return vocabularyBookHandler.handle(message, {sender: {tab: {incognito: isUserscriptPrivateContext()}}});
         }
 
         if (message.type === CONFIG_PERSIST_MESSAGE) {
