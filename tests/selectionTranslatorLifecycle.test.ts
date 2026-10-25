@@ -1,6 +1,6 @@
 /**
  * @file tests/selectionTranslatorLifecycle.test.ts
- * 文件职责：执行划词组件的实际挂载与卸载回调，验证扩展消息端口撤销、Safari 自有追问焦点的有限键盘/旋转平移窗口与主动滚动收卡边界。
+ * 文件职责：执行划词组件的实际挂载与卸载回调，验证两点选取入口可用性、开放 Shadow DOM 编辑边界及完成首帧与延迟滚动的竞态、扩展消息端口撤销、Safari 自有追问焦点的有限键盘/旋转平移窗口与主动滚动收卡边界。
  * 主要内容：覆盖注销清理、原生右键菜单选区恢复与重复翻译复用、免费讲解明确启用及保存确认、用户 AI 偏好保护、关闭/换区/卸载后的迟到保存隔离、朗读生成与降级、取消、迟到响应、进度隔离和富文本 trim 后的 UTF-16 跟读偏移、顶栏菜单外点/焦点关闭边界、导航空白拖动、按配置与显式反向请求确定翻译语言和窗口尺寸变化清理、鉴权配置动作归属；可选真实 SFC 模板模式验证两处错误入口与极矮视口下同一卡片的滚动退化及关闭，并组合实际 selection runtime 验证 Safari 已消费选区的 host 恢复、正文失效及离开清理。
  * 模块边界：默认从正常 Vite 管线导入真实 SFC setup 并使用原有空渲染；材料捕获使用真实代次冻结与完成逻辑，只替换来源提取和后台客户端；入口可选原始客户端模板和独立 Linkedom 节点树；不再运行匿名编译的组件副本；组合模式将真实组件交给原始 runtime 的平台挂载端口，浏览器、子组件与语言是受控 ports，不声称 CSS、原生焦点或真实浏览器验证。
  */
@@ -14,6 +14,8 @@ import {Config} from '@/src/core/config/model';
 import * as selectionCore from '@/src/features/selection-translation/core';
 import * as translationErrors from '@/src/services/translation/errors';
 import * as harness from '@/src/core/config/harness';
+import * as clickSelectionConfig from '@/src/core/config/clickSelection';
+import * as clickSelectionRuntime from '@/src/features/selection-translation/content/clickSelection';
 import {services} from '@/src/core/config/catalog';
 import * as vocabularyProtocol from '@/src/features/vocabulary/protocol';
 import * as visualViewport from '@/src/platform/dom/visualViewport';
@@ -240,6 +242,175 @@ function mountSelection(privateContext = false, selectionAdapter?: Record<string
         captureMaterialSelection, beginMaterialCapture, completeMaterialCapture, materialGeneration: materialPorts.generation, materialCapture: materialPorts.capture,
         lifecycleErrors, renderPort, unmount: () => { currentApp?.unmount(); app = undefined; }};
 }
+
+describe('two-click selection entry availability', () => {
+    it.each(['disabled', 'document adapter'] as const)('skips shortcut conflict work for %s across unrelated config notifications', async reason => {
+        const conflict = vi.spyOn(clickSelectionConfig, 'findClickSelectionHotkeyConflict');
+        const fixture = mountSelection(false, reason === 'document adapter' ? {acceptsRange: () => true} : undefined);
+        fixture.config.selectionClickSelectEnabled = reason === 'document adapter';
+        fixture.notifyConfig(); await Vue.nextTick();
+        fixture.config.theme = 'dark'; fixture.notifyConfig(); await Vue.nextTick();
+        fixture.config.selectionClickSelectHotkey = 'Alt+J'; fixture.notifyConfig(); await Vue.nextTick();
+        expect(conflict).not.toHaveBeenCalled();
+        expect(fixture.state.clickSelectionState).toBe('idle');
+        expect(fixture.lifecycleErrors).not.toHaveBeenCalled();
+    });
+
+    it('cancels a running session when its shortcut becomes occupied or its feature is disabled', async () => {
+        const fixture = mountSelection();
+        fixture.config.selectionClickSelectEnabled = true; fixture.notifyConfig(); await Vue.nextTick();
+        fixture.state.clickSelection.toggle(); expect(fixture.state.clickSelectionState).toBe('start');
+        fixture.config.floatingBallHotkey = 'custom';
+        fixture.config.customFloatingBallHotkey = fixture.config.selectionClickSelectHotkey;
+        fixture.notifyConfig(); await Vue.nextTick();
+        expect(fixture.state.clickSelectionState).toBe('idle');
+        fixture.config.customFloatingBallHotkey = 'Alt+J'; fixture.notifyConfig(); await Vue.nextTick();
+        fixture.state.clickSelection.toggle(); expect(fixture.state.clickSelectionState).toBe('start');
+        fixture.config.selectionClickSelectEnabled = false; fixture.notifyConfig(); await Vue.nextTick();
+        expect(fixture.state.clickSelectionState).toBe('idle');
+        expect(fixture.lifecycleErrors).not.toHaveBeenCalled();
+    });
+
+    it.each(['input', 'textarea', 'select', 'contenteditable'] as const)('preserves the startup shortcut inside an open-shadow %s', async kind => {
+        const fixture = mountSelection(false, undefined, 'chrome', true), port = fixture.renderPort!;
+        vi.stubGlobal('Node', port.domWindow.Node); vi.stubGlobal('Element', port.domWindow.Element);
+        const host = port.document.createElement('custom-editor'), shadow = host.attachShadow({mode: 'open'});
+        const editor = port.document.createElement(kind === 'contenteditable' ? 'div' : kind);
+        if (kind === 'contenteditable') editor.setAttribute('contenteditable', 'true');
+        const origin = kind === 'contenteditable' ? editor.appendChild(port.document.createElement('span')) : editor;
+        shadow.appendChild(editor); port.root.appendChild(host);
+        fixture.config.selectionClickSelectEnabled = true; fixture.notifyConfig(); await Vue.nextTick();
+        const event = {isTrusted: true, target: host, key: 's', code: 'KeyS', altKey: true, shiftKey: true, ctrlKey: false, metaKey: false,
+            composedPath: () => [origin, editor, shadow, host], preventDefault: vi.fn(), stopPropagation: vi.fn()};
+        for (const handler of fixture.listeners.get('document:keydown')!) handler(event);
+        await Vue.nextTick();
+        expect(fixture.state.clickSelectionState).toBe('idle');
+        expect(event.preventDefault).not.toHaveBeenCalled(); expect(event.stopPropagation).not.toHaveBeenCalled();
+        expect(fixture.lifecycleErrors).not.toHaveBeenCalled();
+    });
+
+    it('still starts from non-editable shadow text and a document event without a composed path', async () => {
+        const fixture = mountSelection(false, undefined, 'chrome', true), port = fixture.renderPort!;
+        vi.stubGlobal('Node', port.domWindow.Node); vi.stubGlobal('Element', port.domWindow.Element);
+        const host = port.document.createElement('reading-text'), shadow = host.attachShadow({mode: 'open'});
+        const text = shadow.appendChild(port.document.createElement('p'));
+        fixture.config.selectionClickSelectEnabled = true; fixture.notifyConfig(); await Vue.nextTick();
+        const key = (path: boolean) => ({isTrusted: true, target: host, key: 's', code: 'KeyS', altKey: true, shiftKey: true, ctrlKey: false, metaKey: false,
+            ...(path ? {composedPath: () => [text, shadow, host]} : {}), preventDefault: vi.fn(), stopPropagation: vi.fn()});
+        for (const path of [true, false]) {
+            const event = key(path);
+            for (const handler of fixture.listeners.get('document:keydown')!) handler(event);
+            await Vue.nextTick();
+            expect(fixture.state.clickSelectionState).toBe(path ? 'start' : 'idle');
+            expect(event.preventDefault).toHaveBeenCalledOnce(); expect(event.stopPropagation).toHaveBeenCalledOnce();
+        }
+        expect(fixture.lifecycleErrors).not.toHaveBeenCalled();
+    });
+});
+
+describe('completed two-click selection first-frame scroll ordering', () => {
+    async function prepare() {
+        const factory = clickSelectionRuntime.createClickSelectionController;
+        let complete!: () => void;
+        vi.spyOn(clickSelectionRuntime, 'createClickSelectionController').mockImplementation(options => {
+            complete = options.onComplete;
+            return factory(options);
+        });
+        const fixture = mountSelection(false, undefined, 'chrome', true, true), port = fixture.renderPort!;
+        vi.stubGlobal('Node', port.domWindow.Node); vi.stubGlobal('Element', port.domWindow.Element);
+        vi.spyOn(performance, 'now').mockImplementation(() => Date.now());
+        fixture.mountActual();
+        const paragraph = port.document.createElement('p');
+        paragraph.textContent = 'Good ideas deserve careful attention.'; port.root.appendChild(paragraph);
+        const source = paragraph.firstChild!, text = paragraph.textContent;
+        const rect = {left: 20, right: 310, top: 150, bottom: 174, width: 290, height: 24};
+        const range = Vue.markRaw({startContainer: source, endContainer: source, commonAncestorContainer: source,
+            startOffset: 0, endOffset: text.length, collapsed: false, getClientRects: () => [rect],
+            getBoundingClientRect: () => rect, cloneRange: () => range, toString: () => text});
+        const selection = {rangeCount: 1, isCollapsed: false, anchorNode: source, anchorOffset: 0,
+            getRangeAt: () => range, toString: () => text, containsNode: () => false};
+        Object.assign(fixture.window, {getSelection: () => selection});
+        Object.assign(fixture.config, {selectionClickSelectEnabled: true, selectionTranslatorTrigger: 'icon', selectionTranslatorDelay: 0});
+        fixture.notifyConfig(); await Vue.nextTick(); await Promise.resolve(); await Vue.nextTick();
+        const send = (prefix: string, type: string, properties: Record<string, unknown> = {}) => {
+            const event = {isTrusted: true, target: fixture.document, preventDefault: vi.fn(), stopPropagation: vi.fn(), ...properties};
+            for (const handler of fixture.listeners.get(`${prefix}:${type}`) ?? []) handler(event);
+            return event;
+        };
+        return {...fixture, complete, send, text, paragraph};
+    }
+
+    it('retains the completed selection read when a queued page scroll arrives before its first frame', async () => {
+        const fixture = await prepare();
+        fixture.complete();
+        expect(fixture.state.readSelectionSnapshot()?.text).toBe(fixture.text);
+        expect(fixture.state.snapshot).toBeNull(); expect(fixture.state.selectionFrame).not.toBeNull();
+        const scheduled = fixture.state.selectionFrame;
+        fixture.send('window', 'scroll');
+        expect(fixture.window.cancelAnimationFrame).not.toHaveBeenCalledWith(scheduled);
+        await vi.advanceTimersByTimeAsync(50); await Vue.nextTick();
+        expect(fixture.state.snapshot?.text).toBe(fixture.text);
+        expect(fixture.state.showIndicator).toBe(true);
+        expect(fixture.lifecycleErrors).not.toHaveBeenCalled();
+    });
+
+    it('restores ordinary scroll dismissal immediately after the first completed-selection read', async () => {
+        const fixture = await prepare(); fixture.complete();
+        await vi.advanceTimersByTimeAsync(16); await Vue.nextTick();
+        expect(fixture.state.snapshot?.text).toBe(fixture.text);
+        fixture.send('window', 'scroll');
+        await vi.advanceTimersByTimeAsync(50); await Vue.nextTick();
+        expect(fixture.state.snapshot).toBeNull(); expect(fixture.state.showIndicator).toBe(false);
+        expect(fixture.lifecycleErrors).not.toHaveBeenCalled();
+    });
+
+    it.each(['Escape', 'editing input', 'shadow editing input', 'new pointer', 'explicit hide', 'suppression', 'unmount'] as const)(
+        'does not reveal a cancelled first read after %s', async reason => {
+            const fixture = await prepare(); fixture.complete();
+            expect(fixture.state.selectionFrame).not.toBeNull();
+            if (reason === 'Escape') fixture.send('document', 'keydown', {target: fixture.paragraph, key: 'Escape'});
+            if (reason === 'editing input' || reason === 'shadow editing input') {
+                const input = fixture.renderPort!.document.createElement('input');
+                let target: Element = input, path: EventTarget[] = [input];
+                if (reason === 'shadow editing input') {
+                    const host = fixture.renderPort!.document.createElement('editable-host'), shadow = host.attachShadow({mode: 'open'});
+                    shadow.appendChild(input); target = host; path = [input, shadow, host];
+                }
+                fixture.send('document', 'keydown', {target, key: 'a', composedPath: () => path});
+            }
+            if (reason === 'new pointer') {
+                fixture.send('document', 'pointerdown', {target: fixture.paragraph, pointerType: 'mouse', button: 0});
+                expect(fixture.state.selectionFrame).toBeNull();
+                fixture.send('document', 'pointercancel', {target: fixture.paragraph, pointerType: 'mouse'});
+            }
+            if (reason === 'explicit hide') fixture.state.hideAll();
+            if (reason === 'suppression') fixture.state.suppressSelectionRead();
+            if (reason === 'unmount') fixture.unmount();
+            await vi.advanceTimersByTimeAsync(500); await Vue.nextTick();
+            expect(fixture.state.snapshot).toBeNull(); expect(fixture.state.showIndicator).toBe(false);
+            if (reason === 'unmount') expect([...fixture.listeners.values()].every(listeners => listeners.size === 0)).toBe(true);
+            else {
+                // 后续普通选区的首帧继续遵循原有滚动收起规则，取消不能遗留豁免状态。
+                fixture.state.scheduleSelectionRead(); const nextFrame = fixture.state.selectionFrame;
+                expect(nextFrame).not.toBeNull(); fixture.send('window', 'scroll');
+                expect(fixture.window.cancelAnimationFrame).toHaveBeenCalledWith(nextFrame);
+                await vi.advanceTimersByTimeAsync(50); await Vue.nextTick();
+                expect(fixture.state.showIndicator).toBe(false);
+            }
+            expect(fixture.lifecycleErrors).not.toHaveBeenCalled();
+        },
+    );
+
+    it('keeps ordinary pending selection reads subject to immediate scroll dismissal', async () => {
+        const fixture = await prepare(); fixture.state.scheduleSelectionRead();
+        const scheduled = fixture.state.selectionFrame; expect(scheduled).not.toBeNull();
+        fixture.send('window', 'scroll');
+        expect(fixture.window.cancelAnimationFrame).toHaveBeenCalledWith(scheduled);
+        await vi.advanceTimersByTimeAsync(50); await Vue.nextTick();
+        expect(fixture.state.snapshot).toBeNull(); expect(fixture.state.showIndicator).toBe(false);
+        expect(fixture.lifecycleErrors).not.toHaveBeenCalled();
+    });
+});
 
 describe('native PDF result window follows shared card dismissal', () => {
     it.each(['Control', 'contextMenu'])('closes the result owner when the real shared card hides after switching to %s', async trigger => {

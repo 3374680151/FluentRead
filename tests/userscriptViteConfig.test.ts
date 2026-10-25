@@ -335,6 +335,87 @@ describe('userscript bundled library notices', () => {
                 .toThrow('Unsafe bundled library license comment: unsafe');
         } finally {rmSync(fixture, {recursive: true, force: true});}
     });
+
+    it('standalone shares only complete canonical MIT terms across real bundled dependencies and nested notices', async () => {
+        vi.stubEnv('FLUENTREAD_USERSCRIPT_STANDALONE', '1');
+        vi.stubEnv('FLUENTREAD_USERSCRIPT_GREASYFORK_SOURCE', '0');
+        try {
+            vi.resetModules();
+            const {bundledLibraryNotices: standaloneNotices} = await import('@/userscript/vite.config');
+            const root = process.cwd();
+            const require = createRequire(resolve(root, 'package.json'));
+            const packages = [
+                realpathSync(resolve(root, 'node_modules/@ctrl/tinycolor')),
+                realpathSync(resolve(root, 'node_modules/pako')),
+                realpathSync(resolve(root, 'node_modules/.pnpm/lodash-es@4.17.21/node_modules/lodash-es')),
+                realpathSync(resolve(root, 'node_modules/.pnpm/node-fetch-native@1.6.7/node_modules/node-fetch-native')),
+            ].map(packageRoot => {
+                const manifest = JSON.parse(readFileSync(resolve(packageRoot, 'package.json'), 'utf8'));
+                const file = readdirSync(packageRoot).find(name => /^LICEN[CS]E(?:[.-].*)?$/iu.test(name))!;
+                return {moduleId: require.resolve(resolve(packageRoot, 'package.json')),
+                    heading: `${manifest.name} ${manifest.version} — ${manifest.license}`,
+                    body: readFileSync(resolve(packageRoot, file), 'utf8').trim()};
+            });
+            const license = readFileSync(resolve(root, 'public/third-party-notices/tinycolor-MIT.txt'), 'utf8');
+            const terms = license.slice(license.indexOf('Permission is hereby granted')).trim();
+            const result = standaloneNotices(packages.map(item => item.moduleId));
+            const marker = '[Shared MIT terms below]';
+            const normalize = (text: string) => text.replace(/\s+/gu, ' ').trim();
+            const restored = normalize(result.replaceAll(marker, terms));
+            for (const notice of packages) {
+                expect(result.split(notice.heading)).toHaveLength(2);
+                expect(restored).toContain(normalize(notice.body));
+            }
+            // node-fetch-native 的四段完整 MIT 与 lodash 后附说明均来自真实依赖许可。
+            expect(result.split(marker)).toHaveLength(8);
+            expect(result.split(terms)).toHaveLength(2);
+            expect(result.lastIndexOf(terms)).toBeGreaterThan(result.lastIndexOf('Copyright'));
+            const completeNotices = packages.map(item => `/*\n${item.heading}\n${item.body}\n*/`).join('\n');
+            expect(Buffer.byteLength(completeNotices) - Buffer.byteLength(result)).toBeGreaterThan(5_000);
+            expect(standaloneNotices(packages.map(item => item.moduleId).reverse())).toBe(result);
+        } finally {vi.unstubAllEnvs();vi.resetModules();}
+    });
+
+    it('standalone preserves copyright, sources, surrounding clauses, different terms and non-MIT notices', async () => {
+        const fixture = mkdtempSync(resolve(tmpdir(), 'fluentread-shared-mit-notices-'));
+        vi.stubEnv('FLUENTREAD_USERSCRIPT_STANDALONE', '1');
+        vi.stubEnv('FLUENTREAD_USERSCRIPT_GREASYFORK_SOURCE', '0');
+        try {
+            vi.resetModules();
+            const {bundledLibraryNotices: standaloneNotices} = await import('@/userscript/vite.config');
+            const license = readFileSync(resolve(process.cwd(), 'public/third-party-notices/tinycolor-MIT.txt'), 'utf8');
+            const terms = license.slice(license.indexOf('Permission is hereby granted')).trim();
+            const firstPrefix = 'Copyright (c) First owner\nSource: https://example.com/first\n\n';
+            const firstSuffix = '\n\nAdditional attribution must remain with this package.';
+            const secondPrefix = 'Copyright (c) Second owner\r\nSource: https://example.com/second\r\n\r\n';
+            const bodies = [
+                firstPrefix + terms + firstSuffix,
+                secondPrefix + terms.replace(/\s+/gu, '\r\n  '),
+                'Copyright (c) Different terms\n\n' + terms.replace('free of charge', 'subject to a fee'),
+                'Apache License, Version 2.0\nCopyright (c) Another owner\nAll non-MIT terms remain unchanged.',
+            ];
+            const ids = bodies.map((body, index) => {
+                const directory = resolve(fixture, `node_modules/.pnpm/mit-${index}@1.0.0/node_modules/mit-${index}`);
+                mkdirSync(directory, {recursive: true});
+                writeFileSync(resolve(directory, 'package.json'), JSON.stringify({name: `mit-${index}`, version: '1.0.0', license: index === 3 ? 'Apache-2.0' : 'MIT'}));
+                writeFileSync(resolve(directory, 'LICENSE'), body);
+                return resolve(directory, 'index.js');
+            });
+            const result = standaloneNotices([...ids, ids[0]]);
+            expect(result).toContain(firstPrefix + '[Shared MIT terms below]' + firstSuffix);
+            expect(result).toContain(secondPrefix + '[Shared MIT terms below]');
+            expect(result).toContain(bodies[2]);
+            expect(result).toContain(bodies[3]);
+            expect(result.split('mit-0 1.0.0 — MIT')).toHaveLength(2);
+            expect(result.split('[Shared MIT terms below]')).toHaveLength(3);
+            expect(result.split(terms)).toHaveLength(2);
+            expect(standaloneNotices([ids[0]])).toBe(`/*\nmit-0 1.0.0 — MIT\n${bodies[0]}\n*/`);
+            expect(standaloneNotices([ids[2], ids[3]])).not.toContain('Shared MIT');
+            expect(standaloneNotices([])).toBe('');
+            writeFileSync(resolve(ids[0], '../LICENSE'), 'Copyright (c) Owner\n*/\nUntrusted code');
+            expect(() => standaloneNotices([ids[0]])).toThrow('Unsafe bundled library license comment: mit-0');
+        } finally {rmSync(fixture, {recursive: true, force: true});vi.unstubAllEnvs();vi.resetModules();}
+    });
 });
 
 describe('userscript inline CSS compression', () => {

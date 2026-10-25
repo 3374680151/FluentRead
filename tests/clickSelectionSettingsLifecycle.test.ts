@@ -1,7 +1,7 @@
 /**
  * @file tests/clickSelectionSettingsLifecycle.test.ts
  * 文件职责：执行两点选取设置的真实客户端模板，验证启停与录制操作的配置归属。
- * 主要内容：覆盖快捷键占用、录制确认/取消、清除回默认值、隐藏及缓存停用、配置替换和旧弹窗回调失效。
+ * 主要内容：覆盖快捷键占用及开启后被其他入口占用的紧凑错误提示与直接修复、录制确认/取消、清除回默认值、隐藏及缓存停用、配置替换和旧弹窗回调失效。
  * 模块边界：只替换 Element Plus 展示控件及共享录制器端口，不替代两点选取设置组件、配置规则或 Vue 生命周期。
  */
 import {parseHTML} from 'linkedom';
@@ -111,6 +111,29 @@ async function edit(): Promise<void> {
         expect(warnings).toHaveBeenCalledWith(expect.stringContaining('段落复制')); expect(props.config.selectionClickSelectHotkey).toBe(DEFAULT_CLICK_SELECTION_HOTKEY);
         expect(root.querySelector('.recorder-port')).not.toBeNull(); props.config.paragraphCopyEnabled = false;
         handler('.recorder-port', 'onConfirm')('Alt+J'); await settle(); expect(props.config.selectionClickSelectHotkey).toBe('Alt+J');
+    });
+
+    it('其他入口后续占用时在原行说明冲突，直接改键后恢复且不切换开关', async () => {
+        await mount(Object.assign(config(), {selectionClickSelectEnabled: true}));
+        const button = () => root.querySelector('[aria-label="编辑两点选取快捷键"]')!;
+        const row = () => root.querySelector('section')!;
+        expect(row().getAttribute('description')).toContain('依次点击文字起点和终点');
+        expect(button().getAttribute('type')).toBe('default');
+        props.config.sectionTranslationHotkeyEnabled = true;
+        props.config.sectionTranslationHotkey = 'custom';
+        props.config.customSectionTranslationHotkey = DEFAULT_CLICK_SELECTION_HOTKEY;
+        await settle();
+        expect(button().getAttribute('type')).toBe('danger');
+        expect(button().getAttribute('title')).toContain('局部翻译');
+        expect(row().getAttribute('description')).toBe(button().getAttribute('title'));
+        expect(root.querySelectorAll('section')).toHaveLength(1);
+        expect(props.config.selectionClickSelectEnabled).toBe(true);
+        await edit(); handler('.recorder-port', 'onConfirm')('Alt+J'); await settle();
+        expect(button().getAttribute('type')).toBe('default');
+        expect(button().getAttribute('title')).toBe('编辑两点选取快捷键');
+        expect(row().getAttribute('description')).toContain('依次点击文字起点和终点');
+        expect(props.config.selectionClickSelectEnabled).toBe(true);
+        expect(props.config.customSectionTranslationHotkey).toBe(DEFAULT_CLICK_SELECTION_HOTKEY);
     });
 
     it.each(['hidden', 'cached', 'config', 'enabled', 'mode', 'hotkey', 'unmount'])('%s 使旧开关/按键按钮/弹窗回调作废，恢复后不能复活', async reason => {
