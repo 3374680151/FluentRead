@@ -4,7 +4,48 @@ const image=(w:number,h:number)=>new Uint8ClampedArray(w*h*4);
 function rect(p:Uint8ClampedArray,w:number,x:number,y:number,width:number,height:number,color=[255,255,255,255]){for(let yy=y;yy<y+height;yy++)for(let xx=x;xx<x+width;xx++)p.set(color,(yy*w+xx)*4);}
 const text=(value:string,x:number,y:number,width=40,height=12)=>({text:value,confidence:.99,box:{x,y,width,height}});
 const box=(x:number,y:number,w=80,h=80)=>({x0:x,y0:y,x1:x+w,y1:y+h});
+// 独立的逐像素四邻域 BFS 作为扫描行实现的拓扑 oracle，保留面积、排序和阈值语义。
+function referenceBubbles(pixels:Uint8ClampedArray,width:number,height:number){
+    const white=Array.from({length:width*height},(_,index)=>{
+        const p=index*4;return pixels[p]>235&&pixels[p+1]>235&&pixels[p+2]>235&&pixels[p+3]>=128;
+    }),found:Array<{bbox:ReturnType<typeof box>;area:number}>=[];
+    for(let start=0;start<white.length;start++){
+        if(!white[start])continue;
+        const queue=[start];white[start]=false;let left=width,right=0,top=height,bottom=0;
+        for(let head=0;head<queue.length;head++){
+            const index=queue[head],x=index%width,y=Math.floor(index/width);
+            left=Math.min(left,x);right=Math.max(right,x);top=Math.min(top,y);bottom=Math.max(bottom,y);
+            for(const neighbor of [x>0?index-1:-1,x+1<width?index+1:-1,y>0?index-width:-1,y+1<height?index+width:-1]){
+                if(neighbor>=0&&white[neighbor]){white[neighbor]=false;queue.push(neighbor);}
+            }
+        }
+        const w=right-left+1,h=bottom-top+1,area=queue.length;
+        if(left===0||top===0||right===width-1||bottom===height-1||w<30||h<30||area<1000||area/(w*h)<.45||area>width*height*.15)continue;
+        found.push({bbox:box(left,top,w,h),area});
+    }
+    return found.sort((a,b)=>b.area-a.area).slice(0,24).map(entry=>entry.bbox);
+}
 describe('漫画局部气泡识别边界',()=>{
+    it('扫描行保持孔洞、桥接、对角分离及随机像素的四邻域面积和排序',()=>{
+        let state=0x1068;const next=()=>{state=(Math.imul(state,1664525)+1013904223)>>>0;return state;};
+        for(let sample=0;sample<40;sample++){
+            const width=240,height=220,p=image(width,height);
+            for(let index=0;index<6;index++){
+                const x=10+index%3*75,y=10+Math.floor(index/3)*100;
+                rect(p,width,x,y,40+next()%20,40+next()%20);
+                for(let noise=0;noise<35;noise++)rect(p,width,x+next()%50,y+next()%50,1,1,[0,0,0,255]);
+            }
+            // 细桥和孔洞会改变连通性与面积，不能用包围框替代四邻域。
+            rect(p,width,45,30,50,1);rect(p,width,20,20,8,14,[0,0,0,255]);
+            if(sample%2)rect(p,width,0,0,width,3);
+            expect(findMangaBubbles(p,width,height)).toEqual(referenceBubbles(p,width,height));
+        }
+        const p=image(260,220);
+        for(let y=1;y<219;y++)for(let x=1;x<259;x++)if(y%2||x%2)p.set([255,255,255,255],(y*260+x)*4);
+        expect(findMangaBubbles(p,260,220)).toEqual(referenceBubbles(p,260,220));
+        const diagonal=image(200,200);rect(diagonal,200,10,10,40,40);rect(diagonal,200,50,50,40,40);
+        expect(findMangaBubbles(diagonal,200,200)).toEqual(referenceBubbles(diagonal,200,200));
+    });
     it('普通截图 Paddle 保留源行供严格段落分组，局部放大结果替换重复检测', () => {
         const page = {results: [text('wrong small', 25, 30), text('Title', 160, 180, 90, 16), text('Body line', 160, 200, 200, 12)],
             bubbles: [{bbox: box(10, 10), results: [text('First', 20, 20), text('second', 20, 34)]}]};
@@ -15,6 +56,7 @@ describe('漫画局部气泡识别边界',()=>{
     });
     it('拒绝无效尺寸和像素预算，定位封闭浅色气泡而非页面背景',()=>{
         for(const [w,h] of [[0,100],[1.5,100],[100,NaN],[4097,4097],[200,200]])expect(findMangaBubbles(image(1,1),w,h)).toEqual([]);
+        for(const [w,h] of [[1,1],[1,31],[31,1]])expect(findMangaBubbles(image(w,h).fill(255),w,h)).toEqual([]);
         const p=image(300,300);rect(p,300,30,40,40,40);rect(p,300,170,150,60,40);rect(p,300,0,0,20,300);
         expect(findMangaBubbles(p,300,300)).toEqual([box(170,150,60,40),box(30,40,40,40)]);
     });
@@ -35,6 +77,42 @@ describe('漫画局部气泡识别边界',()=>{
         const page={results:[text('small incorrect',25,32),text('Outside caption',160,180)],bubbles:[{bbox:box(10,10),results:[text('Hello',20,20),text('world',20,36)]}]};
         expect(collectMangaRegions(page,'en',400,400).map(r=>r.text)).toEqual(['Hello world','Outside caption']);
         expect(collectMangaRegions({results:page.results},'en',400,400)).toHaveLength(2);
+    });
+    it('嵌套浅色面板的同一行只翻译一次，保留不同位置相同对白与局部漏行',()=>{
+        // 真实 repeated-dialogue-distinct-panels 1000×1500 的源框回放。
+        const together=text('WE WILL GO TOGETHER',209.880859375,1168.0378486055777,525.55078125,34.201195219123505);
+        const inner=text('WE WILL GO TOGETHER',208.275390625,1170.189723320158,527.474609375,31.857707509881422);
+        const first=text('WAIT FOR ME',326.43880208333337,168.3723849372385,311.04427083333337,37.05439330543933);
+        const second={...first,box:{...first.box,y:first.box.y+480}};
+        const page={results:[together,first,second],bubbles:[
+            {bbox:box(30,1006,941,465),results:[together]}, {bbox:box(55,1055,891,291),results:[inner]},
+            {bbox:box(105,85,791,246),results:[first]}, {bbox:box(105,565,791,246),results:[second]}]};
+        for(const profile of ['manga','image'] as const){
+            const result=collectMangaRegions(page,'en',1000,1500,profile);
+            expect(result.map(line=>line.text)).toEqual(['WAIT FOR ME','WAIT FOR ME','WE WILL GO TOGETHER']);
+            expect(result[2].bbox.y0).toBe(inner.box.y);
+        }
+        const firstLine=text('First complete line',70,80,150,12),lastLine=text('Last fallback line',70,97,150,12);
+        const nested={results:[firstLine,lastLine],bubbles:[{bbox:box(10,10,300,300),results:[firstLine]},
+            {bbox:box(50,60,200,100),results:[firstLine]}]};
+        expect(collectMangaRegions(nested,'en',400,400).map(line=>line.text)).toEqual(['First complete line Last fallback line']);
+        // 同一候选的可靠行不互相去重，较小碎片也不能替换整条原文。
+        const distinct={results:[],bubbles:[{bbox:box(10,10,200,120),results:[firstLine,lastLine]},
+            {bbox:box(50,60,180,80),results:[text('short',70,80,25,12)]}]};
+        expect(collectMangaRegions(distinct,'en',400,400,'image').map(line=>line.text)).toEqual(['First complete line','short','Last fallback line']);
+    });
+    it('外层局部补回内层漏行时归入最紧气泡，同一对白完整合段且邻近对白独立',()=>{
+        const first=text('First complete line',70,80,150,12),last=text('Last recovered line',70,97,150,12);
+        const neighbor=text('Another speaker',270,80,130,12);
+        const page={results:[first,last,neighbor],bubbles:[
+            {bbox:box(10,10,420,220),results:[first,last,neighbor]},
+            {bbox:box(50,60,200,100),results:[first]},
+            {bbox:box(260,60,150,100),results:[neighbor]},
+        ]};
+        const result=collectMangaRegions(page,'en',500,400);
+        expect(result.map(line=>line.text)).toEqual(['Another speaker','First complete line Last recovered line']);
+        expect(result[1].sourceBoxes).toEqual([{x0:70,y0:80,x1:220,y1:92},{x0:70,y0:97,x1:220,y1:109}]);
+        expect(collectMangaRegions(page,'en',500,400,'image').map(line=>line.text)).toEqual(['First complete line','Another speaker','Last recovered line']);
     });
     it('独立气泡中略宽行距的英文保持整句，原始修补框不扩张，整页仍不跨框合并',()=>{
         const lines=[text('I ALREADY HAD',40,40,92,8),text('THE BIRD OPEN',40,55,92,7),text("IT, IT'S FINE.",51,69,70,8)];

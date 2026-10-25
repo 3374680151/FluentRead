@@ -1,7 +1,7 @@
 /**
  * @file src/features/image-translation/services/mangaOcr.ts
  * 文件职责：在扩展独立 Worker 中按需运行 PaddleOCR 漫画识别，并隔离排队、取消、失败和空闲释放。
- * 主要内容：延迟导入浏览器 OCR 和本地 ONNX WASM，用频繁读取的画布完成 OCR 预处理，透明像素仅在识别画布上按前景亮度合成对比底色，读取已校验模型并融合 ONNX 执行图，硬件可用时加速识别，GPU 故障有界切换 CPU；SVG 复用已解码原图异步转为无损 PNG 后进入 Worker，取消或失败释放自有画布且保留借用原图；大图以有重叠的原像素瓦片识别并按物理行去重，整页原文与放大的独立气泡共同参与可靠性回退，普通图片保留物理行供严格段落策略使用；滚动取消保留轻量模型端口，Worker owner 有界收尾，GPU 挂起重建一次 CPU 后端，空闲三分钟释放会话，统一清理 OCR 与修补会话。
+ * 主要内容：延迟导入浏览器 OCR 和本地 ONNX WASM，用频繁读取的画布完成 OCR 预处理，透明像素仅在识别画布上按前景亮度合成对比底色，读取已校验模型并融合 ONNX 执行图，硬件可用时加速识别，GPU 故障有界切换 CPU；SVG 复用已解码原图异步转为无损 PNG 后进入 Worker，取消或失败释放自有画布且保留借用原图；大图以有重叠的原像素瓦片识别并按物理行去重，整页原文与放大的独立气泡共同参与可靠性回退，每页共享至多四个低置信竖列的单项复识别预算，只有置信度提升且原框完全吻合才替换原文，普通图片保留物理行供严格段落策略使用；滚动取消保留轻量模型端口，Worker owner 有界收尾，GPU 挂起重建一次 CPU 后端，空闲三分钟释放会话，统一清理 OCR 与修补会话。
  * 模块边界：不访问宿主 DOM、不翻译文本、不处理译图；仅漫画及显式选择 PaddleOCR 的单张图片使用本模型；通用识别与圈选继续由 Tesseract 负责。
  */
 import {localWasmThreads, paceLocalInference} from '@/src/shared/onnx/resources';
@@ -93,12 +93,29 @@ export async function createBrowserMangaOcr(signal?: AbortSignal, progress?: Pro
     class MangaService extends PaddleOcrService {
         private checks:Array<()=>void>=[];
         private inferenceFailure: {error: unknown} | undefined;
+        private remainingRetries=4;
+        beginMangaPage(): void {this.remainingRetries=4;}
         private checkInferenceFailure(): void {
             if(this.inferenceFailure)throw this.inferenceFailure.error;
         }
         async recognizeManga(canvas:HTMLCanvasElement | OffscreenCanvas,options:{flatten:true;noCache:true;strategy:'per-box'}) {
             this.inferenceFailure=undefined;
-            try {return await this.recognize(canvas,options);}
+            try {
+                const page=await this.recognize(canvas,options);
+                // 批量裁切会把不同宽度补齐；只对已有低置信竖列有界复识别，不再运行检测或新增框。
+                const weak=page.results.filter(item=>item.confidence<.9&&item.box.height>item.box.width*1.8)
+                    .sort((a,b)=>a.confidence-b.confidence).slice(0,this.remainingRetries);
+                if(!weak.length)return page;
+                assertMangaOcrActive(activeSignal);
+                this.remainingRetries-=weak.length;
+                const retried=await this.recognitor!.run(canvas,weak.map(item=>item.box),
+                    this.options.recognition!.charactersDictionary,'per-box',{...options,recBatchSize:1});
+                assertMangaOcrActive(activeSignal);
+                const replacements=new Map(weak.map(item=>[item, retried.find(candidate=>
+                    candidate.box.x===item.box.x&&candidate.box.y===item.box.y&&candidate.box.width===item.box.width
+                    &&candidate.box.height===item.box.height&&candidate.confidence>=item.confidence+.05)]));
+                return {...page,results:page.results.map(item=>replacements.get(item)??item)};
+            }
             finally {
                 this.checks.forEach(check=>check());
                 // SDK 的识别阶段可能记录错误后返回空数组；CPU 也必须向调用方报告首因，允许正常重试。
@@ -119,7 +136,7 @@ export async function createBrowserMangaOcr(signal?: AbortSignal, progress?: Pro
                 if(session){
                     const run=session.run.bind(session),invoke=run as (...args:Parameters<typeof run>)=>ReturnType<typeof run>;
                     session.run=(async(...args:Parameters<typeof run>)=>{
-                        try{return await paceLocalInference(()=>invoke(...args));}
+                        try{return await paceLocalInference(()=>{assertMangaOcrActive(activeSignal);return invoke(...args);});}
                         catch(error){this.inferenceFailure??={error};throw error;}
                     }) as typeof session.run;
                 }
@@ -135,6 +152,7 @@ export async function createBrowserMangaOcr(signal?: AbortSignal, progress?: Pro
             recognize: async (image, options) => {
                 activeSignal=options.signal;
                 assertMangaOcrActive(options.signal);
+                service.beginMangaPage();
                 const bitmap=options.decodedImage ?? await createImageBitmap(new Blob([await (await fetch(image)).arrayBuffer()]));
                 const canvas=createOcrCanvas();
                 try {

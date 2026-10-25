@@ -1,13 +1,13 @@
 vi.mock('@/src/shared/onnx/resources', async original => ({...await original<any>(), paceLocalInference: mocks.pace}));
 import {afterEach, beforeEach, describe, expect, it, vi} from 'vitest';
-const mocks = vi.hoisted(() => ({assets:vi.fn(),remove:vi.fn(),initialize:vi.fn(),recognize:vi.fn(),destroy:vi.fn(),options:vi.fn(),
+const mocks = vi.hoisted(() => ({assets:vi.fn(),remove:vi.fn(),initialize:vi.fn(),recognize:vi.fn(),retryRecognition:vi.fn(),destroy:vi.fn(),options:vi.fn(),
     gpu:vi.fn(),cpuCreate:vi.fn(),sessions:[] as any[],inpaintDispose:vi.fn(),bitmapClose:vi.fn(),contexts:[] as any[],canvases:[] as any[],
     workerPrepare:vi.fn(),workerRequest:vi.fn(),workerRelease:vi.fn(),workerDispose:vi.fn(),encode:vi.fn(),pace:vi.fn((operation:()=>Promise<unknown>)=>operation()),
     wasm:{numThreads:0,wasmPaths:undefined as unknown,proxy:true}}));
 vi.mock('@/src/features/image-translation/services/mangaOcrAssets', async importOriginal => ({...await importOriginal<any>(),loadMangaOcrAssets:mocks.assets,removeMangaOcrAssets:mocks.remove}));
 vi.mock('onnxruntime-web/webgpu',()=>({env:{wasm:mocks.wasm},InferenceSession:{create:mocks.cpuCreate}}));
 vi.mock('@/src/shared/onnx/webgpu',()=>({probeWebGpu:mocks.gpu}));
-vi.mock('ppu-paddle-ocr/web',()=>({PaddleOcrService:class{constructor(options:unknown){mocks.options(options)}detectionSession=mocks.sessions[0];recognitionSession=mocks.sessions[1];async initialize(){return mocks.initialize();}recognize=mocks.recognize;destroy=mocks.destroy;}}));
+vi.mock('ppu-paddle-ocr/web',()=>({PaddleOcrService:class{constructor(public options:any){mocks.options(options)}recognitor={run:mocks.retryRecognition};detectionSession=mocks.sessions[0];recognitionSession=mocks.sessions[1];async initialize(){return mocks.initialize();}recognize=mocks.recognize;destroy=mocks.destroy;}}));
 vi.mock('@/src/features/image-translation/services/mangaInpainting',()=>({mangaInpaintingRuntime:{dispose:mocks.inpaintDispose}}));
 vi.mock('@/src/features/image-translation/services/mangaInferenceClient',async original=>({...await original<any>(),mangaInferenceClient:{prepare:mocks.workerPrepare,request:mocks.workerRequest,release:mocks.workerRelease,dispose:mocks.workerDispose}}));
 vi.mock('@/src/features/image-translation/services/imageEncoding',()=>({encodeImageCanvas:mocks.encode}));
@@ -18,7 +18,7 @@ const response = {results:[{text:'Hello world',confidence:0.99,box:{x:10,y:10,wi
 const deferred = <T,>() => {let resolve!:(v:T)=>void,reject!:(e:unknown)=>void;const promise=new Promise<T>((a,b)=>{resolve=a;reject=b});return {promise,resolve,reject}};
 const tick = async () => {for(let i=0;i<6;i++)await Promise.resolve()};
 beforeEach(()=>{vi.useFakeTimers();vi.clearAllMocks();mocks.contexts=[];mocks.canvases=[];mocks.sessions=[];mocks.gpu.mockResolvedValue({available:false,info:''});mocks.assets.mockResolvedValue({charactersDictionary:new ArrayBuffer(4)});mocks.initialize.mockResolvedValue(undefined);mocks.destroy.mockResolvedValue(undefined);mocks.remove.mockResolvedValue(undefined);mocks.inpaintDispose.mockResolvedValue(undefined);mocks.recognize.mockResolvedValue(response);vi.stubGlobal('GPUDevice',class{get adapterInfo(){return {};}});vi.stubGlobal('chrome',{runtime:{getURL:(p:string)=>'chrome-extension://test'+p}});vi.stubGlobal('fetch',vi.fn(async()=>new Response(new Uint8Array([1,2,3]))));
-    mocks.workerPrepare.mockReset().mockResolvedValue(undefined);mocks.workerRequest.mockReset().mockResolvedValue(response);mocks.workerRelease.mockReset().mockResolvedValue(undefined);mocks.encode.mockReset().mockResolvedValue('data:image/png;base64,rasterized');
+    mocks.retryRecognition.mockReset().mockResolvedValue([]);mocks.workerPrepare.mockReset().mockResolvedValue(undefined);mocks.workerRequest.mockReset().mockResolvedValue(response);mocks.workerRelease.mockReset().mockResolvedValue(undefined);mocks.encode.mockReset().mockResolvedValue('data:image/png;base64,rasterized');
     vi.stubGlobal('createImageBitmap',vi.fn(async()=>({width:200,height:200,close:mocks.bitmapClose})));
     vi.stubGlobal('document',{createElement:vi.fn(()=>{const ctx={drawImage:vi.fn(),fillRect:vi.fn(),putImageData:vi.fn(),getImageData:vi.fn(()=>({data:opaquePixels()}))};const canvas={width:0,height:0,getContext:vi.fn(()=>ctx)};mocks.contexts.push(ctx);mocks.canvases.push(canvas);return canvas;})});
 });
@@ -143,6 +143,129 @@ describe('漫画原像素瓦片几何',()=>{
 });
 
 describe('漫画本地神经 OCR 会话',()=>{
+    it('只复识别低置信竖列的已有框，优先最弱四列，保持原顺序与坐标且不增加框',async()=>{
+        const vertical=(text:string,confidence:number,x:number)=>({text,confidence,box:{x,y:20,width:12,height:60}});
+        const source=[vertical('strong column',.92,10),
+            {text:'horizontal',confidence:.7,box:{x:20,y:100,width:100,height:20}},
+            {text:'aspect boundary',confidence:.7,box:{x:150,y:100,width:20,height:36}},
+            vertical('fourth priority',.82,40),vertical('first priority',.65,65),
+            vertical('fifth priority',.88,90),vertical('second priority',.7,115),vertical('third priority',.8,140)];
+        const page={results:source},snapshot=JSON.stringify(page),dictionary=['未','来','の','駅'];
+        mocks.recognize.mockResolvedValueOnce(page);
+        mocks.initialize.mockImplementationOnce(async()=>{mocks.options.mock.calls[0][0].recognition.charactersDictionary=dictionary;});
+        mocks.retryRecognition.mockImplementationOnce(async(canvas,boxes,dict,strategy,options)=>{
+            expect(canvas).toBe(mocks.canvases[0]);expect(canvas).toMatchObject({width:200,height:200});
+            expect(boxes).toEqual([source[4].box,source[6].box,source[7].box,source[3].box]);
+            expect(dict).toBe(dictionary);expect(strategy).toBe('per-box');
+            expect(options).toEqual({flatten:true,noCache:true,strategy:'per-box',recBatchSize:1});
+            return [...boxes.map((box:typeof source[0]['box'])=>({text:'improved '+box.x,confidence:.98,box:{...box}})),
+                {text:'new artwork false positive',confidence:1,box:{x:3,y:3,width:20,height:60}}];
+        });
+        const port=await createBrowserMangaOcr(),result=await port.recognize('image',{flatten:true,noCache:true,strategy:'per-box'});
+        expect(result.results.map(item=>item.text)).toEqual(['strong column','horizontal','aspect boundary',
+            'improved 40','improved 65','fifth priority','improved 115','improved 140']);
+        expect(result.results.map(item=>item.box)).toEqual(source.map(item=>item.box));
+        expect(JSON.stringify(page)).toBe(snapshot);expect(mocks.retryRecognition).toHaveBeenCalledOnce();
+        expect(mocks.recognize).toHaveBeenCalledOnce();await port.destroy();
+    });
+
+    it('复识别必须四个坐标完全相等且置信度至少提升0.05，空结果和不足增益保留原文',async()=>{
+        const source={text:'未来の职',confidence:.75,box:{x:30,y:20,width:20,height:100}},snapshot=JSON.stringify(source);
+        const port=await createBrowserMangaOcr();
+        for(const change of [{x:31},{y:21},{width:21},{height:101}]){
+            mocks.recognize.mockResolvedValueOnce({results:[source]});
+            mocks.retryRecognition.mockResolvedValueOnce([{text:'wrong geometry',confidence:.99,box:{...source.box,...change}}]);
+            expect((await port.recognize('geometry',{flatten:true,noCache:true,strategy:'per-box'})).results).toEqual([source]);
+        }
+        for(const confidence of [.74,.75,.799]){
+            mocks.recognize.mockResolvedValueOnce({results:[source]});
+            mocks.retryRecognition.mockResolvedValueOnce([{text:'insufficient improvement',confidence,box:{...source.box}}]);
+            expect((await port.recognize('confidence',{flatten:true,noCache:true,strategy:'per-box'})).results).toEqual([source]);
+        }
+        mocks.recognize.mockResolvedValueOnce({results:[source]});mocks.retryRecognition.mockResolvedValueOnce([]);
+        expect((await port.recognize('empty retry',{flatten:true,noCache:true,strategy:'per-box'})).results).toEqual([source]);
+        mocks.recognize.mockResolvedValueOnce({results:[source]});
+        mocks.retryRecognition.mockResolvedValueOnce([{text:'未来の駅',confidence:.8,box:{...source.box}}]);
+        expect((await port.recognize('accepted boundary',{flatten:true,noCache:true,strategy:'per-box'})).results)
+            .toEqual([{text:'未来の駅',confidence:.8,box:source.box}]);
+        expect(JSON.stringify(source)).toBe(snapshot);await port.destroy();
+    });
+
+    it('瓦片和局部气泡共用每页四框复识别预算，新的一页重新获得预算',async()=>{
+        const pagePixels=new Uint8ClampedArray(2400*200*4);for(let index=3;index<pagePixels.length;index+=4)pagePixels[index]=255;
+        for(let y=40;y<90;y++)for(let x=30;x<80;x++)pagePixels.fill(255,(y*2400+x)*4,(y*2400+x)*4+4);
+        const factory=vi.mocked(document.createElement).getMockImplementation()!;
+        vi.mocked(document.createElement).mockImplementation(()=>{
+            const canvas=factory('canvas');mocks.contexts.at(-1).getImageData.mockReturnValue({data:pagePixels});return canvas;
+        });
+        const columns=(count:number,prefix:string)=>Array.from({length:count},(_,index)=>({text:prefix+index,confidence:.7+index/100,
+            box:{x:100+index*30,y:20,width:15,height:100}}));
+        const first=columns(3,'tile one '),second=columns(3,'tile two '),bubble=columns(2,'bubble ');
+        mocks.recognize.mockResolvedValueOnce({results:first}).mockResolvedValueOnce({results:second}).mockResolvedValueOnce({results:bubble});
+        const source={naturalWidth:2400,naturalHeight:200,src:'long source'} as HTMLImageElement,port=await createBrowserMangaOcr();
+        await port.recognize(source.src,{flatten:true,noCache:true,strategy:'per-box',decodedImage:source});
+        expect(mocks.recognize).toHaveBeenCalledTimes(3);
+        expect(mocks.retryRecognition.mock.calls.map(call=>call[1])).toEqual([first.map(item=>item.box),[second[0].box]]);
+        expect(mocks.retryRecognition.mock.calls.flatMap(call=>call[1])).toHaveLength(4);
+        mocks.recognize.mockResolvedValueOnce({results:first}).mockResolvedValueOnce({results:second}).mockResolvedValueOnce({results:bubble});
+        await port.recognize(source.src,{flatten:true,noCache:true,strategy:'per-box',decodedImage:source});
+        expect(mocks.retryRecognition.mock.calls.map(call=>call[1].length)).toEqual([3,1,3,1]);
+        expect(mocks.canvases.every(canvas=>canvas.width===0&&canvas.height===0)).toBe(true);await port.destroy();
+    });
+
+    it.each(['before-retry','during-retry'])('竖列复识别取消不提交迟到改字且释放画布与位图：%s',async stage=>{
+        const controller=new AbortController(),source={text:'original column',confidence:.75,box:{x:20,y:20,width:20,height:100}};
+        mocks.recognize.mockImplementationOnce(async()=>{if(stage==='before-retry')controller.abort();return {results:[source]};});
+        mocks.retryRecognition.mockImplementationOnce(async()=>{controller.abort();return [{...source,text:'late correction',confidence:.99}];});
+        const port=await createBrowserMangaOcr();
+        await expect(port.recognize('image',{flatten:true,noCache:true,strategy:'per-box',signal:controller.signal})).rejects.toMatchObject({name:'AbortError'});
+        expect(mocks.retryRecognition).toHaveBeenCalledTimes(stage==='before-retry'?0:1);
+        expect(mocks.canvases.every(canvas=>canvas.width===0&&canvas.height===0)).toBe(true);
+        expect(mocks.bitmapClose).toHaveBeenCalledOnce();await port.destroy();
+    });
+
+    it.each(['thrown','sdk-swallowed'])('竖列复识别错误保留首因，不能把推理失败当作没有修正：%s',async stage=>{
+        const original={text:'original column',confidence:.75,box:{x:20,y:20,width:20,height:100}},failure=new Error('column retry inference failed');
+        const session={run:vi.fn().mockRejectedValue(failure),release:vi.fn()};
+        mocks.sessions=[undefined,session];mocks.recognize.mockResolvedValueOnce({results:[original]});
+        mocks.retryRecognition.mockImplementationOnce(async()=>{
+            if(stage==='thrown')throw failure;
+            try{await session.run();}catch{}return [];
+        });
+        const port=await createBrowserMangaOcr();
+        await expect(port.recognize('image',{flatten:true,noCache:true,strategy:'per-box'})).rejects.toBe(failure);
+        expect(mocks.canvases.every(canvas=>canvas.width===0&&canvas.height===0)).toBe(true);expect(mocks.bitmapClose).toHaveBeenCalledOnce();
+        mocks.recognize.mockResolvedValueOnce({results:[original]});mocks.retryRecognition.mockResolvedValueOnce([]);
+        expect((await port.recognize('next page',{flatten:true,noCache:true,strategy:'per-box'})).results).toEqual([original]);
+        await port.destroy();
+    });
+
+    it.each(['between-runs','pacer-wait'])('CPU 四个弱框在首个复识别完成后取消，后续框不进入底层推理：%s',async stage=>{
+        const controller=new AbortController(),nativeRun=vi.fn().mockResolvedValue({output:'first column'});
+        const session={run:nativeRun,release:vi.fn()},columns=Array.from({length:4},(_,index)=>({
+            text:'original column '+index,confidence:.7+index/100,box:{x:20+index*35,y:20,width:20,height:100}}));
+        mocks.sessions=[undefined,session];mocks.recognize.mockResolvedValueOnce({results:columns});
+        if(stage==='pacer-wait')mocks.pace.mockImplementationOnce(operation=>operation())
+            .mockImplementationOnce(operation=>{controller.abort();return operation();});
+        mocks.retryRecognition.mockImplementationOnce(async(_canvas,boxes)=>{
+            // 复现 SDK 的单项批次与吞错行为；每个弱框都必须经过真实会话包装。
+            try {
+                for(const box of boxes){
+                    await session.run(box);
+                    if(stage==='between-runs'&&nativeRun.mock.calls.length===1)controller.abort();
+                }
+            }catch{}return [];
+        });
+        const port=await createBrowserMangaOcr();
+        await expect(port.recognize('image',{flatten:true,noCache:true,strategy:'per-box',signal:controller.signal}))
+            .rejects.toMatchObject({name:'AbortError'});
+        expect(mocks.retryRecognition.mock.calls[0][1]).toEqual(columns.map(item=>item.box));
+        expect(nativeRun).toHaveBeenCalledOnce();expect(nativeRun).toHaveBeenCalledWith(columns[0].box);
+        expect(mocks.pace).toHaveBeenCalledTimes(2);
+        expect(mocks.canvases.every(canvas=>canvas.width===0&&canvas.height===0)).toBe(true);
+        expect(mocks.bitmapClose).toHaveBeenCalledOnce();await port.destroy();
+    });
+
     it('长图使用原像素瓦片识别，跨边界完整行取代裁切片段并保留整图坐标',async()=>{
         const source={naturalWidth:2400,naturalHeight:200,src:'long-image'} as HTMLImageElement;
         mocks.recognize.mockResolvedValueOnce({results:[{text:'truncated',confidence:.99,box:{x:1450,y:40,width:86,height:24}}]})

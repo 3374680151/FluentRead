@@ -622,6 +622,7 @@
       "tests/mangaOnnxBuild.test.ts",
       "tests/mangaPatchResult.test.ts",
       "tests/mangaQuality.test.ts",
+      "tests/mangaQualityCorpus.test.ts",
       "tests/mangaReader.test.ts",
       "tests/mangaSessionFallback.test.ts",
       "tests/mangaSites.test.ts",

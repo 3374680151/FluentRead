@@ -1260,9 +1260,9 @@ CI 或本地报告必须分别说明：确定性回归、隔离浏览器回归�
 
 默认目录从测试 helper 所属仓库的 `git common-dir` 定位，因此从其他工作目录启动也复用同一缓存；源码快照无法定位 Git 时才回退到调用目录的 `.cache/image-translation-models/`。环境变量指定的相对路径以调用目录为准。
 
-运行 `python3 scripts/testing/generate-manga-quality-fixtures.py --output-dir <证据目录>/corpus` 生成六类原创确定性场景：多气泡与单行旁白、日文竖排、横排日文混排、跨瓦片边界的长条漫、反白对白及纹理背景。需要 Pillow 和脚本参数指定的英文字体、日文字体；manifest 记录版本、字体及图片散列、27 个原文锚点和保护像素。相同字体与 Pillow 版本可逐字节重建图片。
+运行 `python3 scripts/testing/generate-manga-quality-fixtures.py --output-dir <证据目录>/corpus` 生成十四类原创确定性场景：多气泡与单行旁白、日文竖排、横排日文混排、跨瓦片边界的长条漫、反白对白、纹理背景，以及双页相邻气泡、竖排注音、倾斜文字、窄条小字、双轴瓦片、彩色背景、合法重复对白和完全无字页。需要 Pillow 和脚本参数指定的英文字体、日文字体；manifest 记录版本、字体及图片散列、53 个原文锚点、8 个无字区域与保护像素。原六类图片和 27 个锚点保留；相同字体与 Pillow 版本可逐字节重建图片。
 
-为下面的漫画浏览器专项传入 `--quality-manifest <证据目录>/corpus/manifest.json`，逐图运行真实 OCR，以明确的原文锚点及出现次数核验识别，检查保护像素、恢复原图和缓存重显；每张图片的原语言来自 manifest。缺失或重复锚点会保留到逐景报告，全部场景完成后统一失败；像素、阅读顺序和缓存等结构错误立即失败。翻译 transport 受控，因此这些结果不代表在线翻译模型的语言质量。原有 `--pipeline-inputs <图片列表> --pipeline-rounds 2` 仍用于区分冷启动与热运行，不把首次下载耗时混成推理性能。
+为下面的漫画浏览器专项传入 `--quality-manifest <证据目录>/corpus/manifest.json`，逐图运行真实 OCR，以明确的原文锚点及出现次数核验识别，检查实际物理行是否进入无字区域、原文字符是否超出真值库存、保护像素、恢复原图和缓存重显；无字页须保持零识别文字、零文字翻译请求且不遮盖原图。每张图片的原语言来自 manifest。锚点、阅读顺序和误报失败保留到逐景报告，全部场景完成后统一失败；像素和缓存等结构错误立即失败。字符库存只检测多余字符，不能替代缺字、顺序及位置检查。翻译 transport 受控，因此这些结果不代表在线翻译模型的语言质量。原有 `--pipeline-inputs <图片列表> --pipeline-rounds 2` 仍用于区分冷启动与热运行，不把首次下载耗时混成推理性能。
 
 ```bash
 node scripts/testing/run-manga-translation-test.cjs \
@@ -1274,6 +1274,10 @@ node scripts/testing/run-manga-translation-test.cjs \
 ```
 
 下列单图专项仍保留其独立入口与原有范围。
+
+漫画脚本的 `--error-recovery` 在真实 OCR 后注入限定的文字传输失败，验证紧凑边缘提示、可信单页重试、键盘展开错误详情、关闭提示、暂停清理、原画像素与缓存重显。默认使用 IMG；分别加 `--error-recovery-surface canvas`、`background` 或 `segments` 验证已适配的公开 DOM 形态，全部使用受控页面和生产适配器，不访问站点接口。此模式不能与真实站点或质量矩阵合用。失败响应和布局度量保留到报告，不能让不可见控件的脚本点击冒充用户可操作。
+
+`node scripts/testing/benchmark-manga-preprocessing.cjs --before-ref <commit> --out-dir <新证据目录>` 比较同机的气泡检测与修补张量准备。脚本先核对输出和散列，再交替采样前后实现，记录源码、硬件、原始耗时及显式辅助数组分配。它不下载模型，也不证明整页 OCR、翻译服务或其他项目的整体速度；查看病态连接图案等各项结果，不能只报告有收益的样本。
 
 ```bash
 node scripts/testing/run-image-translation-flow-test.cjs \

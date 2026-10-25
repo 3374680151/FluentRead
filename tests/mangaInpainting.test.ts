@@ -7,6 +7,7 @@ vi.mock('@/src/features/image-translation/services/mangaRendering',()=>({mangaRe
 vi.mock('onnxruntime-web/webgpu',()=>({env:{wasm:mocks.wasm},InferenceSession:{create:mocks.create},Tensor:class{constructor(...args:unknown[]){mocks.tensor(...args)}dispose=mocks.tensorDispose;}}));
 vi.mock('@/src/features/image-translation/services/mangaInferenceClient',async original=>({...await original<any>(),mangaInferenceClient:{prepare:mocks.workerPrepare,request:mocks.workerRequest,release:mocks.workerRelease}}));
 import {applyMangaPatch,createBrowserMangaInpainter,createMangaInpaintingRuntime,createMangaPatch,mangaInpaintingRuntime} from '@/src/features/image-translation/services/mangaInpainting';
+import {mangaMaskBoxes} from '@/src/features/image-translation/mangaPatchResult';
 const region={text:'Hello world',fontSize:20,bbox:{x0:30,y0:30,x1:90,y1:70}};
 const pixels=()=>new Uint8ClampedArray(128*128*4).fill(255);
 const zero=(patch:{width:number;height:number})=>new Float32Array(patch.width*patch.height*3);
@@ -135,6 +136,32 @@ describe('漫画局部神经修补',()=>{
         expect(createMangaPatch(pixels(),128,128,{...region,bbox:{x0:0,y0:0,x1:4,y1:4}}).patch.width).toBe(64);
         const edge={...region,fontSize:1,bbox:{x0:0,y0:0,x1:4,y1:4}},edgeMapping=createMangaPatch(pixels(),128,128,edge);
         applyMangaPatch(pixels(),128,edge,edgeMapping,zero(edgeMapping.patch));
+    });
+    it('按行段生成的蒙版在上下采样、分数框、重叠框和补丁外框中与源坐标逐像素包含相同',()=>{
+        for (const [width,height] of [[19,31],[127,139],[613,977],[1200,200]]) {
+            const input = new Uint8ClampedArray(width*height*4);
+            for (let index=0;index<input.length;index++) input[index]=(index*37+11)%256;
+            for (const sourceBoxes of [undefined, [],
+                [{x0:3.2,y0:5.8,x1:width-4.1,y1:height-3.6}],
+                Array.from({length:40},(_,index)=>({x0:index%3*width/4,y0:index*height/40,
+                    x1:width*(.65+(index%3)/10),y1:Math.min(height,(index+2)*height/40)})),
+                [{x0:-20,y0:-20,x1:2,y1:2},{x0:width+10,y0:0,x1:width+30,y1:height},
+                    {x0:0,y0:height+10,x1:width,y1:height+30}, {x0:width/3,y0:height/3,x1:width/2,y1:height/2}]]) {
+                const candidate={...region,fontSize:13.5,bbox:{x0:width/5+.3,y0:height/6+.7,x1:width*.8-.2,y1:height*.9-.4},sourceBoxes};
+                const mapping=createMangaPatch(input,width,height,candidate), {patch,left,top,sourceWidth,sourceHeight}=mapping;
+                const boxes=mangaMaskBoxes(candidate,width,height), count=patch.width*patch.height;
+                const expectedImage=new Float32Array(count*3), expectedMask=new Float32Array(count);
+                for(let y=0;y<patch.height;y++)for(let x=0;x<patch.width;x++){
+                    const sx=left+Math.min(sourceWidth-1,Math.floor(x*sourceWidth/patch.width));
+                    const sy=top+Math.min(sourceHeight-1,Math.floor(y*sourceHeight/patch.height));
+                    const index=y*patch.width+x, source=(sy*width+sx)*4;
+                    for(let channel=0;channel<3;channel++) expectedImage[channel*count+index]=input[source+channel]/255;
+                    expectedMask[index]=Number(boxes.some(box=>sx>=box.x0&&sx<box.x1&&sy>=box.y0&&sy<box.y1));
+                }
+                expect(Buffer.from(patch.image.buffer).equals(Buffer.from(expectedImage.buffer))).toBe(true);
+                expect(Buffer.from(patch.mask.buffer).equals(Buffer.from(expectedMask.buffer))).toBe(true);
+            }
+        }
     });
     it('只回写原始行的 RGB，图外和行间画面与 alpha 完全不变',()=>{
         const input=pixels(),result=new Uint8ClampedArray(input),r={...region,sourceBoxes:[{x0:30,y0:30,x1:60,y1:50}]},mapping=createMangaPatch(input,128,128,r);

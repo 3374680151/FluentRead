@@ -11,9 +11,8 @@ const assert = require('node:assert/strict');
 const {createHash} = require('node:crypto');
 const {execFileSync} = require('node:child_process');
 const {ensureImageTranslationModelFiles, defaultImageTranslationModelCacheDirectory, readImageTranslationModelManifest} = require('./image-model-cache.cjs');
+const {normalizeOcrAnchor,validateQualityFixtureExpectations,evaluateQualityFixture} = require('./manga-quality-corpus.cjs');
 function arg(name, fallback) {const index = process.argv.indexOf(`--${name}`); return index < 0 ? fallback : process.argv[index + 1];}
-function normalizeOcrAnchor(value) {return value.normalize('NFKC').toLocaleUpperCase('en-US').replace(/[^\p{L}\p{N}]/gu,'');}
-function countAnchorOccurrences(text, anchor) {if(!anchor)return 0;let count=0;for(let index=text.indexOf(anchor);index>=0;index=text.indexOf(anchor,index+1))count++;return count;}
 let extensionDir = path.resolve(arg('extension-dir', '.output/chrome-mv3'));
 let diagnosticFixture;
 const artifacts = path.resolve(arg('artifacts-dir', '/private/tmp/fluentread-manga-browser'));
@@ -48,6 +47,10 @@ const scrollIntentTest=process.argv.includes('--scroll-intent');
 const cacheNavigationTest=process.argv.includes('--cache-navigation');
 const tieredCacheTest=process.argv.includes('--tiered-cache');
 const pageFeedbackTest=process.argv.includes('--page-feedback');
+const errorRecoveryTest=process.argv.includes('--error-recovery');
+const errorRecoverySurface=arg('error-recovery-surface','image');
+assert.ok(['image','canvas','background','segments'].includes(errorRecoverySurface),'Recovery surface must be image, canvas, background or segments');
+if(process.argv.includes('--error-recovery-surface'))assert.ok(errorRecoveryTest,'--error-recovery-surface requires --error-recovery');
 const prefetchPages=Number(arg('prefetch-pages','0'));
 const explicitPipelineInputs=arg('pipeline-inputs',null)?.split(',').map(file=>path.resolve(file));
 const qualityManifestPath=arg('quality-manifest',null);
@@ -67,20 +70,14 @@ if(qualityManifest){
         assert.equal(createHash('sha256').update(bytes).digest('hex'),fixture.sha256,`Fixture SHA-256: ${fixture.name}`);
         assert.ok(['en','ja','ko','ru','auto'].includes(fixture.sourceLanguage),'Quality scenes specify a supported OCR language');
         assert.ok([fixture.width,fixture.height].every(value=>Number.isInteger(value)&&value>0&&value<=8192)&&fixture.width*fixture.height<=16_777_216,'Quality scene dimensions match the runtime 8192-side / 16MP limits');
-        assert.ok(Array.isArray(fixture.expectedAnchors)&&fixture.expectedAnchors.length&&fixture.expectedAnchors.every(anchor=>typeof anchor==='string'&&anchor.trim()),'Quality scenes declare actual OCR anchor checks');
-        assert.ok(fixture.expectedAnchors.every(anchor=>normalizeOcrAnchor(anchor)),'Normalized OCR anchors are nonempty');
-        if(fixture.anchorOccurrences){
-            assert.ok(typeof fixture.anchorOccurrences==='object'&&!Array.isArray(fixture.anchorOccurrences)&&Object.keys(fixture.anchorOccurrences).length===fixture.expectedAnchors.length,'Each declared OCR anchor has an explicit occurrence count');
-            for(const anchor of fixture.expectedAnchors){
-                const count=fixture.anchorOccurrences[anchor];
-                assert.ok(Number.isInteger(count)&&count>=1&&count<=50,'Declared anchor occurrence counts are bounded positive integers');
-                assert.equal(countAnchorOccurrences(normalizeOcrAnchor(fixture.expectedSource.join(' ')),normalizeOcrAnchor(anchor)),count,'Occurrence metadata agrees with source text, including overlapping matches');
-            }
-        }
+        validateQualityFixtureExpectations(fixture);
         assert.ok(Array.isArray(fixture.protectedProbes)&&fixture.protectedProbes.length&&fixture.protectedProbes.every(probe=>Number.isInteger(probe.x)&&probe.x>=0&&probe.x<fixture.width&&Number.isInteger(probe.y)&&probe.y>=0&&probe.y<fixture.height&&Array.isArray(probe.rgb)&&probe.rgb.length===3&&probe.rgb.every(value=>Number.isInteger(value)&&value>=0&&value<=255)),'Quality scenes declare protected source pixels');
     }
 }
 const pipelineInputs=qualityFixtures?.map(fixture=>fixture.input)||explicitPipelineInputs;
+if(errorRecoveryTest)assert.ok(!liveSite&&!liveTranslation&&!readerSmoke&&!canvasReaderTest&&!backgroundReaderTest&&!segmentReaderTest&&!pipelineInputs
+    &&!readAheadTest&&!scrollStabilityTest&&!scrollIntentTest&&!cacheNavigationTest&&!tieredCacheTest&&!pageFeedbackTest&&prefetchPages===0,
+    'Error recovery uses only its controlled fixture with prefetch disabled, without live/pipeline/other reader modes');
 const pipelineRounds=Number(arg('pipeline-rounds',qualityManifest?'1':'3'));
 if(pipelineInputs)assert.ok(Number.isInteger(pipelineRounds)&&pipelineRounds>=(qualityManifest?1:2)&&pipelineRounds<=5,qualityManifest?'Quality scenes allow 1–5 bounded rounds':'Measure first use separately from bounded warm runs (2–5 rounds)');
 const graphOverride=arg('pipeline-graph',null);
@@ -90,8 +87,11 @@ const extensionDebugging=process.argv.includes('--extension-debugging');
 const startupExtensionId=arg('extension-id',null);
 if(startupExtensionId)assert.match(startupExtensionId,/^[a-p]{32}$/,'Use a verified unpacked extension ID');
 const traceReader=process.argv.includes('--trace-reader');
-const traceLayout=process.argv.includes('--trace-layout');
-const targetUrl = arg('site-url','https://mangaplus.shueisha.co.jp/viewer/1024050');
+const traceLayout=process.argv.includes('--trace-layout')||Boolean(qualityManifest);
+const recoveryFixtureUrl=errorRecoverySurface==='canvas'?'https://comic-walker.com/detail/KC_1068_S/episodes/KC_1068_E':
+    errorRecoverySurface==='background'?'https://palcy.jp/comics/1068':'https://mangaplus.shueisha.co.jp/viewer/1024050';
+const targetUrl = arg('site-url',errorRecoveryTest?recoveryFixtureUrl:'https://mangaplus.shueisha.co.jp/viewer/1024050');
+if(errorRecoveryTest&&errorRecoverySurface!=='image')assert.equal(targetUrl,recoveryFixtureUrl,'Controlled recovery surfaces use an existing production reader profile and its exact fixture URL');
 const pixiv=targetUrl.includes('pixiv.net/artworks/');
 const explicitReaderSelector=arg('reader-selector',null);
 if(explicitReaderSelector)assert.ok(readerSmoke && liveSite && !pixiv && !surfaceReaderTest,'Explicit image selectors are limited to live reader smoke checks');
@@ -120,7 +120,9 @@ if(surfaceReaderTest){
     assert.ok(Number.isInteger(canvasTurnCount)&&canvasTurnCount>=1&&canvasTurnCount<=4,'Canvas turns must be 1–4');
     assert.ok(['ArrowLeft','ArrowRight'].includes(canvasTurnKey),'Canvas chapter turns use a normal horizontal arrow key');
 }
-const readerSelector=explicitReaderSelector || (surfaceReaderTest?explicitCanvasSelector || (backgroundReaderTest?'div[id^="page-"][style*="blob:"]':'#comici-viewer .-cv-page-canvas canvas'):pixiv?'img[src*="/img-master/"][src*="/150354216_p"], img[src*="/img-original/"][src*="/150354216_p"]':'.zao-image');
+const recoverySelector=errorRecoverySurface==='canvas'?'[data-viewer-full-screen-helper] canvas[data-type="contents"]':
+    errorRecoverySurface==='background'?'div[id^="page-"][style*="blob:"]':'.zao-image';
+const readerSelector=(errorRecoveryTest&&errorRecoverySurface!=='image'?recoverySelector:null)||explicitReaderSelector || (surfaceReaderTest?explicitCanvasSelector || (backgroundReaderTest?'div[id^="page-"][style*="blob:"]':'#comici-viewer .-cv-page-canvas canvas'):pixiv?'img[src*="/img-master/"][src*="/150354216_p"], img[src*="/img-original/"][src*="/150354216_p"]':'.zao-image');
 const sourceLanguage=arg('source-language',pixiv||surfaceReaderTest?'ja':'en');
 assert.ok(['en','ja','ko','ru','auto'].includes(sourceLanguage),'Use a supported sample source language');
 const targetLanguage=arg('target-language','zh-Hans');
@@ -150,13 +152,18 @@ fs.mkdirSync(artifacts, {recursive: true});
 const report = {site: liveSite ? 'live MANGA Plus' : 'controlled MANGA Plus reader fixture',
     translation: liveTranslation ? 'live Google' : 'deterministic Google text transport',
     ocr: ['ru','ko'].includes(sourceLanguage) ? 'real production Tesseract with manga cleanup and typesetting' : 'real production PaddleOCR', cases: [], screenshots: [], errors: [], hostErrors: [], pageErrors: [], consoleErrors: []};
+if(errorRecoveryTest){
+    report.site=`controlled ${errorRecoverySurface} recovery fixture using production reader discovery`;
+    report.errorRecovery={surface:errorRecoverySurface,fixtureUrl:targetUrl,sourceSelector:readerSelector,
+        scope:'Controlled page matches production reader discovery; only OCR-following text transport is failed; source pixels and attributes are asserted unchanged'};
+}
 if(pixiv)report.site='live Pixiv artwork 150354216';
 if(surfaceReaderTest){report.site=`live readable ${backgroundReaderTest?'background':'canvas'} chapter: ${targetUrl}`;report.canvasReader={selector:readerSelector,openSelector:canvasOpenSelector,initialTurns:canvasInitialTurns,turnKey:canvasTurnKey,turnCount:canvasTurnCount,readySettleMs:canvasReadySettleMs,nextClickSelector:canvasNextClickSelector,nextClickPosition:canvasNextClickPosition};}
 if(explicitReaderSelector){report.site=`live image chapter: ${targetUrl}`;report.readerSelector=explicitReaderSelector;}
 report.prefetchPages=prefetchPages;
 report.sourceLanguage=sourceLanguage;report.readerOpenSelector=readerOpenSelector;report.readerScrollSelector=readerScrollSelector;
 report.targetLanguage=targetLanguage;
-if(qualityManifest)report.qualityManifest={path:path.resolve(qualityManifestPath),version:qualityManifest.version,scenes:qualityFixtures.map(({name,sourceLanguage,scene,expectedAnchors,protectedProbes})=>({name,sourceLanguage,scene,expectedAnchors,protectedProbes}))};
+if(qualityManifest)report.qualityManifest={path:path.resolve(qualityManifestPath),version:qualityManifest.version,scenes:qualityFixtures.map(({name,sourceLanguage,scene,expectedAnchors,expectedNoText,forbiddenRegions,protectedProbes})=>({name,sourceLanguage,scene,expectedAnchors,expectedNoText,forbiddenRegions,protectedProbes}))};
 if(canvasContentPixels)report.canvasPixelWorld='own production extension content world; ordinary API, no prototype substitution';
 report.readerStartIndex=readerStartIndex;
 report.readerNextSelector=readerNextSelector;
@@ -248,6 +255,46 @@ window.addPage=(text,id)=>{
 };addPage('Welcome to FluentRead','page-one');addPage('Second manga page','page-two');addPage('Third manga page','page-three');
 ${readAheadTest || scrollStabilityTest || scrollIntentTest || cacheNavigationTest || tieredCacheTest || pageFeedbackTest ? "addPage('Fourth manga page','page-four');addPage('Fifth manga page','page-five');addPage('Sixth manga page','page-six');" : ''}
 </script></body></html>`;
+/** 夹具只绘制站点公开 DOM；canvas/background 复用现有适配，长图由生产 2048px 分段规则自行发现。 */
+function recoverySurfaceFixture(surface) {
+    assert.ok(['canvas','background','segments'].includes(surface));
+    return `<!doctype html><html><head><meta charset="utf-8"><title>Manga recovery ${surface} fixture</title><style>
+body{margin:0;background:#171923;color:white;font:16px system-ui}.heading{padding:22px;text-align:center}
+.zao-image-container{width:760px;margin:0 auto 50px}.manga-recovery-source{width:760px;height:1100px;display:block;padding:0;border:0}
+button{border:24px solid green!important;font:60px monospace!important;background:red!important}
+</style></head><body><div class="heading">漫画错误恢复 · ${surface}</div><main id="reader"></main><script>
+(async()=>{
+ const surface=${JSON.stringify(surface)},urls=[];
+ addEventListener('pagehide',()=>urls.forEach(url=>URL.revokeObjectURL(url)),{once:true});
+ const panel=(canvas,top,text)=>{
+  const ctx=canvas.getContext('2d',{willReadFrequently:true});ctx.fillStyle='#fff';ctx.fillRect(0,top,760,1100);
+  ctx.strokeStyle='#222';ctx.lineWidth=4;ctx.strokeRect(24,top+24,712,500);ctx.strokeRect(24,top+550,712,520);
+  ctx.beginPath();ctx.ellipse(380,top+160,310,100,0,0,Math.PI*2);ctx.stroke();
+  ctx.fillStyle='#111';ctx.textAlign='center';ctx.font='bold 36px Arial';ctx.fillText(text,380,top+150);
+  ctx.font='32px Arial';ctx.fillText('Read every page',380,top+205);ctx.fillText('Scroll to continue',380,top+680);
+ };
+ const blobUrl=async canvas=>{const blob=await new Promise(resolve=>canvas.toBlob(resolve));if(!blob)throw new Error('Recovery fixture PNG encoding failed');const url=URL.createObjectURL(blob);urls.push(url);return url;};
+ const append=element=>{const wrap=document.createElement('div');wrap.className='zao-image-container';
+  if(surface==='canvas')wrap.setAttribute('data-viewer-full-screen-helper','');wrap.append(element);document.querySelector('#reader').append(wrap);};
+ const texts=['Welcome to FluentRead','Second manga page','Third manga page'];
+ if(surface==='segments'){
+  const canvas=document.createElement('canvas');canvas.width=760;canvas.height=6144;
+  const ctx=canvas.getContext('2d',{willReadFrequently:true});ctx.fillStyle='white';ctx.fillRect(0,0,760,6144);
+  texts.forEach((text,index)=>panel(canvas,index*2048,text));
+  const image=document.createElement('img');image.className='zao-image manga-recovery-source';image.id='page-one';image.style.height='auto';
+  image.src=await blobUrl(canvas);await image.decode();append(image);canvas.width=canvas.height=0;
+ }else for(let index=0;index<3;index++){
+  const canvas=document.createElement('canvas');canvas.width=760;canvas.height=1100;panel(canvas,0,texts[index]);
+  if(surface==='canvas'){canvas.className='manga-recovery-source';canvas.id='page-'+index;canvas.setAttribute('data-type','contents');append(canvas);}
+  else{const element=document.createElement('div');element.className='manga-recovery-source';element.id='page-'+index;
+   element.style.cssText='background-size:contain;background-repeat:no-repeat;background-position:50% 50%;background-origin:padding-box;background-image:url("'+await blobUrl(canvas)+'")';
+   append(element);canvas.width=canvas.height=0;}
+ }
+ window.__recoverySurfaceFixture={ready:true,surface,pages:3,sourceCount:surface==='segments'?1:3,
+  naturalWidth:760,naturalHeight:surface==='segments'?6144:1100,segmentHeight:surface==='segments'?2048:null};
+})().catch(error=>{window.__recoverySurfaceFixture={error:error.message};console.error(error);});
+</script></body></html>`;
+}
 async function ui(hostId, code) {
     const tree = await cdp.send('DOM.getDocument', {depth: -1, pierce: true}); let host;
     function visit(node) {
@@ -268,7 +315,8 @@ async function ui(hostId, code) {
 const ball = code => ui('fluent-read-floating-ball-container', code);
 const imageUi = code => ui('fluent-read-image-translation-root', code);
 const mangaEntry = code => ui('fluent-read-manga-entry-container',code);
-const surfaceHost=segmentReaderTest?'fluent-read-manga-segment-container':backgroundReaderTest?'fluent-read-manga-background-container':'fluent-read-manga-canvas-container';
+const surfaceHost=segmentReaderTest||(errorRecoveryTest&&errorRecoverySurface==='segments')?'fluent-read-manga-segment-container':
+    backgroundReaderTest||(errorRecoveryTest&&errorRecoverySurface==='background')?'fluent-read-manga-background-container':'fluent-read-manga-canvas-container';
 const canvasUi = code => ui(surfaceHost,code);
 async function evaluateReaderElements(operation,value){
     if(!canvasContentPixels)return page.locator(readerSelector).evaluateAll(operation,value);
@@ -576,6 +624,116 @@ async function assertQuietReading() {
     assert.notEqual(await imageUi('return [...this.querySelectorAll(".fr-image-controls")].some(e=>!e.hidden && getComputedStyle(e).display!=="none")'),true,'No per-image original, text or cancel controls while reading');
 }
 
+/** 只注入文字传输失败；识别、页面状态、可信点击和重试继续执行生产实现。 */
+async function verifyErrorRecovery() {
+    const kind=errorRecoverySurface, sources=page.locator(readerSelector);
+    const recoveryUi=code=>ui(kind==='image'?'fluent-read-image-translation-root':surfaceHost,code);
+    const sourceFor=index=>sources.nth(kind==='segments'?0:index-1);
+    await sources.first().waitFor();
+    if(kind==='image'||kind==='segments')await page.waitForFunction(selector=>[...document.querySelectorAll(selector)].every(image=>image.complete&&image.naturalWidth>=80),readerSelector);
+    const snapshot=source=>source.evaluate(async(element,kind)=>{
+        let target=element,ownedImage;
+        try{
+            if(kind!=='canvas'){
+                let image=element;
+                if(kind==='background'){
+                    const url=/^url\(["']?(blob:[^"')]+)["']?\)$/.exec(getComputedStyle(element).backgroundImage)?.[1];
+                    if(!url||new URL(url).origin!==location.origin)throw new Error('Recovery background must be a same-origin blob');
+                    ownedImage=image=new Image();image.src=url;await image.decode();
+                }
+                target=document.createElement('canvas');target.width=image.naturalWidth;target.height=image.naturalHeight;
+                const context=target.getContext('2d',{willReadFrequently:true});context.drawImage(image,0,0);
+            }
+            const data=target.getContext('2d',{willReadFrequently:true}).getImageData(0,0,target.width,target.height).data;
+            let hash=2166136261;for(const value of data)hash=Math.imul(hash^value,16777619);
+            return {id:element.id,width:target.width,height:target.height,pixelHash:hash>>>0,
+                attributes:Object.fromEntries(element.getAttributeNames().sort().map(name=>[name,element.getAttribute(name)]))};
+        }finally{if(target!==element)target.width=target.height=0;if(ownedImage)ownedImage.src='';}
+    },kind);
+    const originals=[];for(let index=0;index<await sources.count();index++)originals.push(await snapshot(sources.nth(index)));
+    report.recoverySourceOriginals=originals;
+    const unchanged=async(index,allowImageHiding=false)=>{
+        const actual=await snapshot(sourceFor(index)),original=originals[kind==='segments'?0:index-1];
+        if(kind==='image'&&allowImageHiding){
+            const withoutStyle=value=>({...value,attributes:Object.fromEntries(Object.entries(value.attributes).filter(([key])=>key!=='style'))});
+            assert.deepEqual(withoutStyle(actual),withoutStyle(original),'Recovery preserves original pixels and source attributes');
+        }else assert.deepEqual(actual,original,'Recovery leaves original pixels, dimensions and all source attributes unchanged');
+    };
+    await modelObserver.command('Runtime.evaluate',{expression:`(()=>{
+        const send=chrome.runtime.sendMessage.bind(chrome.runtime);
+        const fixture=globalThis.__recoveryFixture={fail:true,failures:[]};
+        chrome.runtime.sendMessage=(message,...args)=>{
+            if(message?.type!=='fluentReadImageTranslateTexts'||!fixture.fail)return send(message,...args);
+            fixture.failures.push({requestId:message.requestId,texts:message.texts});
+            const response={success:false,error:'Controlled text transport failure for manga recovery',errorCode:'failed'};
+            const callback=args.at(-1);
+            if(typeof callback==='function'){queueMicrotask(()=>callback(response));return;}
+            return Promise.resolve(response);
+        };
+    })()`});
+    const control=async selector=>recoveryUi(`const e=this.querySelector('.fr-image-feedback[data-phase="error"]:not([hidden]) ${selector}');if(!e)return null;const r=e.getBoundingClientRect(),s=getComputedStyle(e);return {x:r.x+r.width/2,y:r.y+r.height/2,width:r.width,height:r.height,visible:!e.hidden&&r.width>0&&r.height>0&&s.visibility==='visible'&&e.checkVisibility({checkOpacity:true,checkVisibilityCSS:true}),text:e.textContent};`);
+    const click=async selector=>{const p=await control(selector);assert.ok(p?.visible,`Recovery control must be visible before trusted input: ${selector}`);await page.mouse.click(p.x,p.y);};
+    const failed=()=>recoveryUi(`const f=this.querySelector('.fr-image-feedback[data-phase="error"]:not([hidden])');if(!f)return null;const r=f.getBoundingClientRect(),s=getComputedStyle(f);return {x:r.x,y:r.y,width:r.width,height:r.height,text:f.querySelector('.fr-image-status').textContent,pointerEvents:s.pointerEvents,style:f.style.cssText,computed:{font:s.font,boxSizing:s.boxSizing,maxWidth:s.maxWidth,maxHeight:s.maxHeight,overflow:s.overflow}};`);
+    const boundsFor=index=>sourceFor(index).evaluate((element,{kind,index})=>{
+        const rect=element.getBoundingClientRect(),scale=kind==='segments'?rect.height/element.naturalHeight:1;
+        return {x:rect.x,y:rect.y+(kind==='segments'?(index-1)*2048*scale:0),width:rect.width,height:kind==='segments'?2048*scale:rect.height};
+    },{kind,index});
+    const position=async index=>{
+        await sourceFor(index).evaluate((element,{kind,index})=>{
+            const rect=element.getBoundingClientRect(),offset=kind==='segments'?(index-1)*2048*rect.height/element.naturalHeight:0;
+            scrollTo({top:rect.top+scrollY+offset-40,behavior:'instant'});
+        },{kind,index});
+        await wait(async()=>!!await failed(),90000,true);
+        const m=await failed(),bounds=await boundsFor(index),viewport=await page.evaluate(()=>({width:innerWidth,height:innerHeight}));
+        // 在断言前保存，布局失败也能从完整位置和样式定位，而不是只留下 assertion 字符串。
+        (report.recoveryMetrics??=[]).push({page:index,surface:kind,...m,sourceBounds:bounds,viewport});
+        assert.ok(m.x>=bounds.x&&m.x+m.width<=bounds.x+bounds.width+1&&m.y>=Math.max(0,bounds.y)&&m.y+m.height<=Math.min(viewport.height,bounds.y+bounds.height),'Recovery stays inside the visible source page');
+        assert.ok(m.height<180&&m.width<=360,'Recovery uses a compact edge surface');
+        assert.equal(m.pointerEvents,'auto');assert.equal(await sourceFor(index).evaluate(i=>i.style.opacity==='0'),false,'Failure keeps original artwork visible');
+        assert.ok((await control('.fluent-read-image-translation-button'))?.visible);assert.ok((await control('.fr-image-dismiss'))?.visible);
+        await unchanged(index);
+    };
+    const visibleBitmaps=()=>recoveryUi(`return [...this.querySelectorAll(${JSON.stringify(kind==='image'?'.fluent-read-image-translation-bitmap':'canvas')})].filter(e=>{const r=e.getBoundingClientRect();return e.checkVisibility({checkOpacity:true,checkVisibilityCSS:true})&&getComputedStyle(e).display!=='none'&&r.width>0&&r.height>0&&r.left<innerWidth&&r.right>0&&r.top<innerHeight&&r.bottom>0}).map(e=>({width:e.width||e.naturalWidth,height:e.height||e.naturalHeight,data:e.tagName==='CANVAS'?e.toDataURL('image/png'):e.src}));`);
+    const completed=async()=>kind==='image'?await sourceFor(1).evaluate(i=>i.style.opacity==='0'):(await visibleBitmaps())?.length>0;
+    const quiet=async()=>{await assertQuietReading();assert.notEqual(await recoveryUi(`return [...this.querySelectorAll('.fr-image-feedback')].some(e=>!e.hidden&&e.getBoundingClientRect().width>0)`),true,'Successful surface removes all failure prompts');};
+    report.currentCase='failed manga page exposes visible single-page recovery without automatic retry';
+    await toggle();await position(1);
+    const failedCount=await ops();await page.waitForTimeout(300);assert.equal(await ops(),failedCount);
+    await screenshot('recovery-error-visible');report.cases.push(report.currentCase);
+    report.currentCase='error details accept trusted keyboard input without reaching reader shortcuts';
+    await page.evaluate(()=>{globalThis.__recoveryHostKeys=0;document.addEventListener('keydown',()=>globalThis.__recoveryHostKeys++);});
+    await recoveryUi(`this.querySelector('.fr-image-feedback[data-phase="error"] summary').focus()`);
+    await page.keyboard.press('Enter');
+    assert.equal(await recoveryUi(`return this.querySelector('.fr-image-feedback[data-phase="error"] details').open`),true);
+    assert.equal(await page.evaluate(()=>globalThis.__recoveryHostKeys),0);
+    await screenshot('recovery-keyboard-details');await page.keyboard.press('Enter');report.cases.push(report.currentCase);
+    report.currentCase='trusted retry recovers only this page and removes error actions while loading';
+    await modelObserver.command('Runtime.evaluate',{expression:'globalThis.__recoveryFixture.fail=false'});
+    await click('.fluent-read-image-translation-button');
+    await wait(async()=>await ops()===failedCount+1,10000);
+    assert.equal(await failed(),null);
+    assert.notEqual(await recoveryUi(`return [...this.querySelectorAll('.fr-image-feedback[data-phase="loading"] .fr-image-actions')].some(e=>getComputedStyle(e).display!=='none'&&e.getBoundingClientRect().width>0)`),true);
+    await wait(completed);
+    assert.equal(await ops(),failedCount+1);await unchanged(1,true);await quiet();await screenshot('recovery-retry-complete');report.cases.push(report.currentCase);
+    report.currentCase='recovered manga redisplays the cached translation without OCR';
+    const completedCount=await ops(),bitmapsBefore=await visibleBitmaps();assert.ok(bitmapsBefore?.length>0,'Recovered source has a visible translated bitmap');
+    await toggle();await wait(async()=>(await visibleBitmaps())?.length===0);await unchanged(1);
+    await toggle();await wait(completed);assert.equal(await ops(),completedCount);
+    assert.deepEqual(await visibleBitmaps(),bitmapsBefore,'Cached redisplay preserves exact translated pixels');await unchanged(1,true);report.cases.push(report.currentCase);
+    report.currentCase='dismissing a later failed page removes its prompt without retrying it';
+    await modelObserver.command('Runtime.evaluate',{expression:'globalThis.__recoveryFixture.fail=true'});
+    await position(2);const beforeDismiss=await ops();await click('.fr-image-dismiss');
+    assert.equal(await failed(),null);await page.waitForTimeout(300);assert.equal(await ops(),beforeDismiss);await unchanged(2);report.cases.push(report.currentCase);
+    report.currentCase='pausing continuous translation clears a failed page and its controls';
+    await position(3);await toggle();
+    await wait(async()=>await failed()===null,10000,true);
+    assert.equal(await recoveryUi(`return this.querySelectorAll(${JSON.stringify(kind==='image'?'.fluent-read-image-translation-bitmap':'canvas')}).length`),0);
+    for(let index=1;index<=3;index++)await unchanged(index);
+    const injected=await modelObserver.command('Runtime.evaluate',{expression:'globalThis.__recoveryFixture.failures',returnByValue:true});
+    report.recoveryFailures=injected.result.value;
+    assert.equal(report.recoveryFailures.length,3);assert.ok(report.recoveryFailures.every(item=>item.texts.some(text=>text.trim())),'Every injected failure follows actual successful OCR');
+    report.cases.push(report.currentCase);auditPageErrors();assert.deepEqual(report.errors,[]);assert.deepEqual(report.consoleErrors,[]);focusGuard();
+}
 async function verifyPageFeedback() {
     const first=page.locator('#page-one'),second=page.locator('#page-two');
     const scroll=async image=>{await image.evaluate(i=>scrollTo({top:i.getBoundingClientRect().top+scrollY-40,behavior:'instant'}));await page.waitForTimeout(100);};
@@ -797,7 +955,13 @@ async function verifyPipelinePerformance(extensionId) {
             if(!animation.reducedMotion)assert.ok(new Set(animation.frames.map(frame=>frame.transform)).size>1,'Spinner keeps rotating when decorative animations are disabled');
             assert.ok(animation.frames.every((frame,i,frames)=>!i || frame.at-frames[i-1].at<500),'Page heartbeat stays responsive during real inference');
             await screenshot(`${caseName}-loading-${round+1}`);
-            await wait(async()=>await page.locator('.zao-image').first().evaluate(i=>i.style.opacity==='0'),180000);
+            if(fixture?.expectedNoText) {
+                // 无字页合法完成时保留原图；同样等待真实请求返回，误识别成对白仍记录为质量失败。
+                await wait(async()=>await worker.evaluate(index=>{
+                    const id=globalThis.__mangaTest.operations[index];
+                    return !!id&&globalThis.__mangaTest.layoutResults?.some(result=>result.requestId===id);
+                },before)&&await imageUi(`return !!this.querySelector('.fr-image-feedback[data-phase="translated"]')`),180000);
+            } else await wait(async()=>await page.locator('.zao-image').first().evaluate(i=>i.style.opacity==='0'),180000);
         });
         assert.equal(measured.error,undefined,'Measured pipeline completes');
         assert.equal(await page.locator('.zao-image').first().evaluate(i=>i.src),data,'Source stays the exact benchmark image');
@@ -808,29 +972,27 @@ async function verifyPipelinePerformance(extensionId) {
         const textBatches=await worker.evaluate(index=>globalThis.__mangaTest.textBatches.slice(index),batchStart);
         const texts=textBatches.flat();
         const sampled=await modelObserver.command('Runtime.evaluate',{expression:'globalThis.__pipelineSamples',returnByValue:true});
-        const translated=await imageUi(`const surface=this.querySelector('.fluent-read-image-translation-bitmap');return surface?.tagName==='CANVAS'?surface.toDataURL('image/png'):surface?.src`);
+        const displayedBitmap=await imageUi(`const surface=this.querySelector('.fluent-read-image-translation-bitmap');return surface?.tagName==='CANVAS'?surface.toDataURL('image/png'):surface?.src`);
+        const translated=displayedBitmap||(fixture?.expectedNoText?data:undefined);
         assert.ok(translated?.startsWith('data:image/png;base64,'),'Lossless translated output exists');
         const output=path.join(artifacts,`${caseName}-round-${round+1}-translated.png`);
         fs.writeFileSync(output,Buffer.from(translated.split(',')[1],'base64'));
         const display=await page.evaluate(()=>globalThis.__pipelineDisplay);
         const result={input,scene:caseName,sourceLanguage:fixture?.sourceLanguage||sourceLanguage,round,cold:report.pipeline.length===0,totalMs:end-start,start,display,requestId,progress,texts,...sampled.result.value,output,resources:measured};
         report.pipeline.push(result);
-        assert.ok(texts.length>0,'Actual text recognition ran');
+        if(!fixture?.expectedNoText)assert.ok(texts.length>0,'Actual text recognition ran');
         if(fixture){
             const normalize=normalizeOcrAnchor;
-            const recognized=normalize(texts.join(' '));
             result.expectedSource=fixture.expectedSource;
-            result.anchors=fixture.expectedAnchors.map(anchor=>{
-                const occurrences=countAnchorOccurrences(recognized,normalize(anchor));
-                // 旧 manifest 仅对源文本中确证唯一的锚点检查去重；重复源句必须显式声明期望次数，不能全局假设唯一。
-                const sourceOccurrences=Array.isArray(fixture.expectedSource)?countAnchorOccurrences(normalize(fixture.expectedSource.join(' ')),normalize(anchor)):undefined;
-                const expectedOccurrences=fixture.anchorOccurrences?.[anchor]??(sourceOccurrences===1?1:undefined);
-                return {anchor,occurrences,expectedOccurrences,found:occurrences>0&&(expectedOccurrences===undefined||occurrences===expectedOccurrences)};
-            });
-            // 精确 OCR 锚点是独立的质量门禁：保留失败并完成其余结构/像素/缓存检查和后续场景，最终统一严格失败。
-            result.qualityFailures=result.anchors.filter(anchor=>!anchor.found).map(({anchor,occurrences,expectedOccurrences})=>({type:expectedOccurrences!==undefined&&occurrences>expectedOccurrences?'duplicate-anchor':'ocr-anchor',anchor,occurrences,expectedOccurrences,
-                reason:occurrences===0?'Actual production OCR does not contain the normalized expected anchor':'Actual production OCR anchor count differs from the source-declared count'}));
-            const verticalColumns=(fixture.regions||[]).filter(region=>region.vertical).sort((a,b)=>b.bbox.x0-a.bbox.x0);
+            const layout=await worker.evaluate(id=>globalThis.__mangaTest.layoutResults.find(result=>result.requestId===id),requestId);
+            assert.ok(layout,'Quality scene captures its actual offscreen OCR layout');result.ocrLines=layout.lines;
+            // 正锚点、重复次数、负区域与无字页均保留失败，再完成后续场景；不以期望文字代替识别值。
+            Object.assign(result,evaluateQualityFixture(fixture,{texts,lines:layout.lines}));
+            if(fixture.expectedNoText) {
+                result.wordlessPage={noTextTransport:texts.length===0,noBitmap:!displayedBitmap,sourcePreserved:JSON.stringify(await page.locator('.zao-image').first().evaluate(image=>({src:image.src,srcset:image.getAttribute('srcset'),sizes:image.getAttribute('sizes'),style:image.getAttribute('style')})))===JSON.stringify(sourceState)};
+                if(!result.wordlessPage.noBitmap||!result.wordlessPage.sourcePreserved)result.qualityFailures.push({type:'wordless-page-render',reason:'A wordless source must remain visible without a translated bitmap',...result.wordlessPage});
+            }
+            const verticalColumns=fixture.readingOrder?fixture.readingOrder.map(id=>fixture.regions.find(region=>region.id===id)):(fixture.regions||[]).filter(region=>region.vertical).sort((a,b)=>b.bbox.x0-a.bbox.x0);
             if(verticalColumns.length>=2){
                 const anchors=verticalColumns.map(region=>region.anchor);
                 const paragraphIndex=texts.findIndex(text=>{
@@ -839,7 +1001,7 @@ async function verifyPipelinePerformance(extensionId) {
                     return true;
                 });
                 result.verticalParagraphOrder={anchors,paragraphIndex,found:paragraphIndex>=0};
-                assert.ok(paragraphIndex>=0,`Vertical columns share one actual OCR paragraph in right-to-left order: ${JSON.stringify(result.verticalParagraphOrder)}`);
+                if(paragraphIndex<0)result.qualityFailures.push({type:'vertical-paragraph-order',...result.verticalParagraphOrder,reason:'Declared main columns must share one actual OCR paragraph in the source right-to-left order'});
             }
             result.protectedPixels=await page.evaluate(async({source,translated,probes})=>{
                 const sample=async src=>{const image=new Image();image.src=src;await image.decode();const canvas=document.createElement('canvas');canvas.width=image.naturalWidth;canvas.height=image.naturalHeight;const ctx=canvas.getContext('2d',{willReadFrequently:true});ctx.drawImage(image,0,0);return {width:canvas.width,height:canvas.height,pixels:probes.map(({x,y})=>Array.from(ctx.getImageData(x,y,1,1).data))};};
@@ -857,8 +1019,8 @@ async function verifyPipelinePerformance(extensionId) {
         if(fixture){
             assert.deepEqual(await page.locator('.zao-image').first().evaluate(image=>({src:image.src,srcset:image.getAttribute('srcset'),sizes:image.getAttribute('sizes'),style:image.getAttribute('style')})),sourceState,'Restoring original preserves source content and styles');
             const operations=await ops(),requests=await worker.evaluate(()=>globalThis.__mangaTest.requests.length);
-            await toggle();await wait(async()=>await page.locator('.zao-image').first().evaluate(i=>i.style.opacity==='0'));
-            const restored=await imageUi(`const surface=this.querySelector('.fluent-read-image-translation-bitmap');return surface?.tagName==='CANVAS'?surface.toDataURL('image/png'):surface?.src`);
+            await toggle();await wait(async()=>fixture.expectedNoText?await imageUi(`return !!this.querySelector('.fr-image-feedback[data-phase="translated"]')`):await page.locator('.zao-image').first().evaluate(i=>i.style.opacity==='0'));
+            const restored=(await imageUi(`const surface=this.querySelector('.fluent-read-image-translation-bitmap');return surface?.tagName==='CANVAS'?surface.toDataURL('image/png'):surface?.src`))||(fixture.expectedNoText?data:undefined);
             assert.equal(restored,translated,'Cached redisplay preserves exact translated bitmap');
             assert.equal(await ops(),operations,'Cached redisplay issues no OCR operation');
             assert.equal(await worker.evaluate(()=>globalThis.__mangaTest.requests.length),requests,'Cached redisplay issues no text transport');
@@ -872,9 +1034,9 @@ async function verifyPipelinePerformance(extensionId) {
     if(qualityManifest){
         const anchors=report.pipeline.flatMap(result=>result.anchors||[]);
         const failures=report.pipeline.flatMap(result=>(result.qualityFailures||[]).map(failure=>({scene:result.scene,round:result.round,...failure})));
-        report.qualitySummary={completedScenes:report.pipeline.length,expectedScenes:qualityFixtures.length*pipelineRounds,anchors:{total:anchors.length,matched:anchors.filter(anchor=>anchor.found).length,failed:anchors.filter(anchor=>!anchor.found).length},failures,
+        report.qualitySummary={completedScenes:report.pipeline.length,expectedScenes:qualityFixtures.length*pipelineRounds,anchors:{total:anchors.length,matched:anchors.filter(anchor=>anchor.found).length,failed:anchors.filter(anchor=>!anchor.found).length},negativeRegions:{declared:qualityFixtures.reduce((sum,fixture)=>sum+(fixture.forbiddenRegions?.length||0),0)*pipelineRounds,falsePositives:report.pipeline.reduce((sum,result)=>sum+(result.negativeDetections?.length||0),0)},wordlessPages:report.pipeline.filter(result=>result.wordlessPage).map(result=>({scene:result.scene,...result.wordlessPage})),failures,
             normalization:'NFKC, uppercase, retain Unicode letters/numbers; count overlapping substring anchors in actual OCR text; exact occurrence counts follow manifest metadata or source-proven unique anchors',
-            scope:'Exact OCR anchors are aggregated. Reading order, protected pixels, source restoration, cached bitmap and request counts remain immediate structural assertions. No CER or translation-provider quality claim.'};
+            scope:'Exact OCR anchors, source occurrence counts, declared reading order, excess source-character counts and wordless artwork false positives are aggregated independently. Character inventories do not prove absence of omissions or preserve order. Protected pixels, source restoration, cached bitmap and request counts remain immediate structural assertions. No CER or translation-provider quality claim.'};
     }
     auditPageErrors();assert.deepEqual(report.errors,[]);assert.deepEqual(report.consoleErrors,[]);
     if(qualityManifest)assert.deepEqual(report.qualitySummary.failures,[],'All exact OCR quality anchors pass after completing every scene');
@@ -1315,7 +1477,7 @@ await import('./mangaInferenceWorker.real.js');self.removeEventListener('message
             const send=chrome.runtime.sendMessage.bind(chrome.runtime);
             chrome.runtime.sendMessage=function(...args){
                 const message=args[0],observe=response=>{
-                    if(message?.type==='FLUENT_READ_IMAGE_TRANSLATE_OFFSCREEN'&&Array.isArray(response?.lines)&&test.layoutResults.length<10)
+                    if(message?.type==='FLUENT_READ_IMAGE_TRANSLATE_OFFSCREEN'&&Array.isArray(response?.lines)&&test.layoutResults.length<100)
                         test.layoutResults.push({requestId:message.requestId,lines:response.lines.map(({text,sourceText,bbox,fontSize,sourceBoxes,vertical})=>({text,sourceText,bbox,fontSize,sourceBoxes,vertical}))});
                     return response;
                 };
@@ -1392,7 +1554,9 @@ await import('./mangaInferenceWorker.real.js');self.removeEventListener('message
             return draw.call(this,text,x,y,...args);
         };
     })()`});
-    if(!liveSite)await context.route(targetUrl,route=>route.fulfill({status:200,contentType:'text/html',body:pipelineInputs?fixture.replace("canvas.toBlob(blob=>{image.src=URL.createObjectURL(blob)})","image.src=canvas.toDataURL('image/png')"):fixture}));
+    if(!liveSite)await context.route(targetUrl,route=>route.fulfill({status:200,contentType:'text/html',body:
+        errorRecoveryTest&&errorRecoverySurface!=='image'?recoverySurfaceFixture(errorRecoverySurface):
+            pipelineInputs?fixture.replace("canvas.toBlob(blob=>{image.src=URL.createObjectURL(blob)})","image.src=canvas.toDataURL('image/png')"):fixture}));
     page=await newPageWithoutForeground(context);page.on('pageerror',error=>{
         const stack=error.stack||'';
         report.pageErrors.push({message:error.message,stack});
@@ -1400,6 +1564,12 @@ await import('./mangaInferenceWorker.real.js');self.removeEventListener('message
         else report.errors.push(error.message);
     });
     await gotoVisible(page,targetUrl,{waitUntil:'domcontentloaded',timeout:60000});
+    if(errorRecoveryTest&&errorRecoverySurface!=='image'){
+        await page.waitForFunction(()=>!!globalThis.__recoverySurfaceFixture);
+        const setup=await page.evaluate(()=>globalThis.__recoverySurfaceFixture);report.errorRecovery.fixture=setup;
+        assert.equal(setup.error,undefined,'Controlled recovery fixture source generation succeeds');
+        assert.equal(setup.ready,true);assert.equal(await page.locator(readerSelector).count(),setup.sourceCount);
+    }
     // 先建立浏览器/CDP 所有权并完成正文导航；只有实际可用的导入 UI 才准备模型，失败生命周期不触发文件或网络活动。
     // 下载来源回退/离线导入保持原有负向语义，不能让自动缓存掩盖它们。
     const useModelCache=!preloadModels&&!offlineModels&&!blockedOfficial&&!blockedAll&&!baseline;
@@ -1510,6 +1680,7 @@ await import('./mangaInferenceWorker.real.js');self.removeEventListener('message
     if(surfaceReaderTest){await verifyCanvasReader();report.status='passed';return;}
     if(imageTurnKey){await verifyPagedImageReader();report.status='passed';return;}
     if(pipelineInputs){await verifyPipelinePerformance(extensionId);report.status='passed';return;}
+    if(errorRecoveryTest){await verifyErrorRecovery();report.status='passed';focusGuard();return;}
     if(pageFeedbackTest){await verifyPageFeedback();report.status='passed';focusGuard();return;}
     if(tieredCacheTest){await verifyTieredCache(extensionId);report.status='passed';focusGuard();return;}
     if(cacheNavigationTest){await verifyCacheNavigation();report.status='passed';focusGuard();return;}
