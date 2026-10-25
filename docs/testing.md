@@ -202,7 +202,8 @@ pnpm test tests/speechProgress.test.ts tests/offscreenTtsPlayback.test.ts tests/
 node scripts/run-selection-speech-test.cjs \
   --extension-dir .output/chrome-mv3 \
   --playwright-root <Node包目录> \
-  --focus-safe-helper <扩展界面测试技能>/scripts/focus-safe-browser.cjs \
+  --focus-safe-helper scripts/testing/focus-safe-browser.cjs \
+  --runtime-diagnostics <扩展界面测试技能>/scripts/runtime-diagnostics.cjs \
   --artifacts-dir /private/tmp/fluentread-selection-speech
 ```
 
@@ -1512,3 +1513,10 @@ Popup 服务概览显示默认、继承和独立功能在配置中选择的模�
 生产 Chrome 构建后，运行 `node scripts/testing/run-kagi-headline-translation-test.cjs --allow-network --extension-dir .output/chrome-mv3 --playwright-root <工作区 Node.js 包目录> --artifacts-dir /private/tmp/fluentread-kagi-headlines`。可用 `--focus-safe-helper` 指定等价的焦点安全 helper，默认使用仓库版本。
 
 专项创建临时 Edge profile 与第二屏后台可见窗口，先检查 Kagi 原生展开/收起以确认页面水合，再验证正文/全部节点范围的双语标题、普通按钮原位替换、上下排版、点击与 Enter/空格、动态插入、仅译文闭合 Shadow 文本、恢复重译、Control 悬浮切换和真实分类切换。DOM、截图和报告写入证据目录；结束后关闭本次浏览器并删除临时 profile。翻译使用确定性微软响应，仅证明真实站点 DOM 与生产扩展的兼容性，不代表在线供应商质量或 Firefox 实机验收。
+
+
+## 划词语音栏与正文布局
+
+生成语音和播放状态栏位于正文之后，带独立分隔线并按控件实际高度参与布局。自动尺寸卡片为底栏自然增高，达到当前位置的可用高度上限时正文滚动；手动调整过尺寸的卡片保留用户外框，正文独立滚动。停止后底栏收起，自动卡恢复自然高度。
+
+针对该边界运行 `pnpm test tests/selectionTranslatorLifecycle.test.ts`。生产构建后运行 `node scripts/run-selection-speech-test.cjs --layout-only --extension-dir .output/chrome-mv3 --playwright-root <Node包目录> --focus-safe-helper scripts/testing/focus-safe-browser.cjs --runtime-diagnostics <扩展界面测试技能>/scripts/runtime-diagnostics.cjs --artifacts-dir <证据目录>`，验证等待生成、播放、停止和重播、原文与译文切换、窄屏与深色，以及手动缩小卡片后正文末尾和操作按钮仍可访问。断言正文滚动区域不与底栏相交，所有播放按钮完整位于底栏内；自动卡未到高度上限时不得因语音栏出现而压缩正文。测试使用临时后台 Edge 和确定性翻译/WAV 夹具，不能代替外部语音合成质量或 Firefox 实机验证。
