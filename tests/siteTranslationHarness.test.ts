@@ -87,7 +87,8 @@ describe('X request-level runtime attribution', () => {
 
   async function fixture(options: {networkUnavailable?: boolean; artifactHash?: string;
     extraEntries?: boolean; rawVerdictError?: string; snapshotFault?: boolean;
-    rawPassedOverride?: boolean; rawVerdictSucceeds?: boolean; stopError?: string} = {}) {
+    rawPassedOverride?: boolean; rawVerdictSucceeds?: boolean; stopError?: string;
+    redact?: (value: unknown) => string} = {}) {
     const entries: Record<string, unknown>[] = [];
     const coverage = {pages: [{status: 'listening'}], workers: [{attached: true}], failures: [] as unknown[], limitations: ['original limitation']};
     const originalCalls: {receiver: unknown; params: unknown}[] = [];
@@ -142,7 +143,7 @@ describe('X request-level runtime attribution', () => {
       stop: vi.fn(async () => {await session.detach(); if (options.stopError) throw new Error(options.stopError);}),
     };
     const readArtifactHash = vi.fn(() => options.artifactHash || POLICY.bridgeSha256);
-    const diagnostics = createXRuntimeDiagnostics({rawHelper: {createRuntimeDiagnostics: () => base, redact: String},
+    const diagnostics = createXRuntimeDiagnostics({rawHelper: {createRuntimeDiagnostics: () => base, redact: options.redact ?? String},
       extensionDir: '/explicit/test-build', readArtifactHash});
     await diagnostics.start(context); diagnostics.setExtensionId(extensionId); diagnostics.setPhase('full/restore');
     const request = (overrides = {}) => session.emit('Network.requestWillBeSent', {
@@ -280,6 +281,55 @@ describe('X request-level runtime attribution', () => {
     expect(report.passed).toBe(false);
     expect(report.requestOwnership.failures).toContainEqual({surface: 'raw-stop', message: 'Original collector stop failed'});
     if (observerFailure) expect(report.requestOwnership.failures).toContainEqual({surface: 'listener-cleanup', message: 'Listener cleanup failed'});
+  });
+
+  it('records a failed blob request as unknown evidence without changing the raw verdict or granting site ownership', async () => {
+    const f = await fixture();
+    const blobUrl = 'blob:https://x.com/native-player-resource';
+    f.request({request: {url: blobUrl, method: 'GET'}, initiator: {type: 'other'}});
+    f.session.emit('Network.loadingFailed', {requestId: 'request-1', errorText: 'net::ERR_FILE_NOT_FOUND',
+      type: 'Media', canceled: false});
+    f.log({url: blobUrl, text: 'Failed to load resource: net::ERR_FILE_NOT_FOUND'});
+    expect(() => f.diagnostics.assertClean()).toThrow();
+    const report = f.diagnostics.snapshot();
+    expect(report.rawDiagnostics).toEqual(f.rawSnapshot());
+    expect(report).toMatchObject({passed: false, blockerIds: [1], counts: {errors: 1, site: 0}});
+    expect(report.requestOwnership.adjustments).toEqual([]);
+    expect(report.requestOwnership.unclassifiedEntries).toMatchObject([{entryId: 1, reason: 'different-log',
+      binding: {networkRequestId: 'request-1', targetId: 'target-1', loaderId: 'loader-1'},
+      request: {url: blobUrl, method: 'GET', requestCount: 1, responseCount: 0, finishCount: 0,
+        failed: true, failure: {errorText: 'net::ERR_FILE_NOT_FOUND', type: 'Media', canceled: false},
+        initiator: {type: 'other'}}}]);
+    await f.diagnostics.stop();
+  });
+
+  it('redacts unknown request URLs and stacks while never recording headers or request bodies', async () => {
+    const f = await fixture({redact: value => String(value).replaceAll('fixture-private', '[REDACTED]')});
+    f.request({request: {url: POLICY.requestUrl + '&token=fixture-private', method: 'GET',
+      headers: {authorization: 'fixture-private'}, postData: 'fixture-private-body'},
+    initiator: {type: 'script', stack: {callFrames: [{url: 'https://native.test/script.js?token=fixture-private'}]}}});
+    f.response(); f.log(); f.finish();
+    expect(() => f.diagnostics.assertClean()).toThrow();
+    const report = f.diagnostics.snapshot();
+    const observation = report.requestOwnership.unclassifiedEntries[0];
+    expect(observation.request.url).toContain('token=[REDACTED]');
+    expect(observation.request.initiator.stack.callFrames[0].url).toContain('token=[REDACTED]');
+    expect(JSON.stringify(observation)).not.toContain('fixture-private');
+    expect(observation.request).not.toHaveProperty('headers');
+    expect(observation.request).not.toHaveProperty('postData');
+    expect(report.rawDiagnostics).toEqual(f.rawSnapshot());
+    expect(report.passed).toBe(false);
+    await f.diagnostics.stop();
+  });
+
+  it('keeps a missing request ID explicit instead of reconstructing unknown evidence from its URL', async () => {
+    const f = await fixture(); f.request(); f.response(); f.finish();
+    f.log({networkRequestId: undefined});
+    const report = f.diagnostics.snapshot();
+    expect(report.requestOwnership.unclassifiedEntries).toMatchObject([{entryId: 1,
+      reason: 'missing-or-ambiguous-entry-binding', binding: {networkRequestId: null}, request: null}]);
+    expect(report.passed).toBe(false);
+    await f.diagnostics.stop();
   });
 
   it('requires explicit nonduplicate base-helper and extension paths without a machine-specific default', () => {
@@ -2050,6 +2100,14 @@ describe('site translation coverage contract', () => {
     return {document, cover: () => {covered = true;}, changeDestination: () => {overlay.setAttribute('href', './read/changed-after-pointer');}};
   }
 
+  function hoverScrollTarget() {
+    return {
+      scrollIntoViewIfNeeded: async () => undefined,
+      evaluate: async (fn: (node: {scrollIntoView: (options: unknown) => void}) => unknown) =>
+        fn({scrollIntoView: () => undefined}),
+    };
+  }
+
   it('uses only the observed Google News empty same-destination link stack, preserving host DOM and 200ms stability', async () => {
     vi.useFakeTimers();
     vi.setSystemTime(0);
@@ -2065,7 +2123,7 @@ describe('site translation coverage contract', () => {
         x: 90, y: 150, text: 'A readable headline from the current card',
         hitPolicy: 'google-news-stretched-link:["./read/fixture-story?hl=en-US","_blank"]',
       });
-      await toggleHover(page, {scrollIntoViewIfNeeded: async () => undefined}, {selector: '#headline', index: 0}, 1, 500);
+      await toggleHover(page, hoverScrollTarget(), {selector: '#headline', index: 0}, 1, 500);
       expect(Date.now()).toBeGreaterThanOrEqual(200);
       expect(page.keyboard.down.mock.calls).toEqual([['Control']]);
       expect(page.keyboard.up.mock.calls).toEqual([['Control']]);
@@ -2100,7 +2158,7 @@ describe('site translation coverage contract', () => {
       waitForTimeout: async (ms: number) => {vi.advanceTimersByTime(ms);},
     };
     try {
-      await expect(toggleHover(page, {scrollIntoViewIfNeeded: async () => undefined},
+      await expect(toggleHover(page, hoverScrollTarget(),
         {selector: '#headline', index: 0}, 1, 300)).rejects.toThrow('悬浮原文没有稳定且可命中的位置');
       expect(page.mouse.move).toHaveBeenCalledOnce();
       expect(page.keyboard.down).not.toHaveBeenCalled();
@@ -2170,7 +2228,7 @@ describe('site translation coverage contract', () => {
       expect(findHoverTextPointInPage({selector: '#tagline', index: 0})).toMatchObject({
         x: 90, y: 150, text: 'Build useful tools with your team.', hitPolicy: 'product-hunt-stretched-link',
       });
-      await toggleHover(page, {scrollIntoViewIfNeeded: async () => undefined}, {selector: '#tagline', index: 0}, 1, 500);
+      await toggleHover(page, hoverScrollTarget(), {selector: '#tagline', index: 0}, 1, 500);
       expect(page.keyboard.down.mock.calls).toEqual([['Control']]);
       expect(page.keyboard.up.mock.calls).toEqual([['Control']]);
       expect(document.body.innerHTML).toBe(html);
@@ -2204,7 +2262,7 @@ describe('site translation coverage contract', () => {
       waitForTimeout: async (ms: number) => {vi.advanceTimersByTime(ms);},
     };
     try {
-      await expect(toggleHover(page, {scrollIntoViewIfNeeded: async () => undefined},
+      await expect(toggleHover(page, hoverScrollTarget(),
         {selector: '#tagline', index: 0}, 1, 300)).rejects.toThrow('悬浮原文没有稳定且可命中的位置');
       expect(page.mouse.move).toHaveBeenCalledOnce();
       expect(page.keyboard.down).not.toHaveBeenCalled();
@@ -2254,7 +2312,7 @@ describe('site translation coverage contract', () => {
       // 实际诊断只检测 H2 宽外框的 35% 点；该点在遮挡文字的面板右侧。
       expect(document.elementFromPoint(169 + 934 * 0.35, 548 + 37.2890625 / 2)).toBe(source);
       expect(findHoverTextPointInPage({selector: 'main h2', index: 0})).toBeNull();
-      const error = await toggleHover(page, {scrollIntoViewIfNeeded: async () => undefined},
+      const error = await toggleHover(page, hoverScrollTarget(),
         {selector: 'main h2', index: 0}, 1, 200, 1).catch((failure: Error) => failure);
       expect(error).toBeInstanceOf(Error);
       const diagnostics = JSON.parse((error as Error).message.split('：')[1]);
@@ -2298,7 +2356,7 @@ describe('site translation coverage contract', () => {
         vi.advanceTimersByTime(10);
       }),
     };
-    const target = {scrollIntoViewIfNeeded: vi.fn(async () => undefined)};
+    const target = {...hoverScrollTarget(), scrollIntoViewIfNeeded: vi.fn(async () => undefined)};
     const down = vi.fn(async () => { expect(Date.now()).toBeGreaterThanOrEqual(370); });
     const page = {
       evaluate: vi.fn(async () => Date.now() >= 100 && !dismissed ? null : point),
@@ -2349,7 +2407,7 @@ describe('site translation coverage contract', () => {
       mouse: {move: vi.fn()}, keyboard: {down: vi.fn(), up: vi.fn()},
       waitForFunction: vi.fn(), waitForTimeout: async (ms: number) => {vi.advanceTimersByTime(ms);}};
     try {
-      await toggleHover(page, {scrollIntoViewIfNeeded: async () => undefined}, {selector: 'main h2', index: 0}, 1, 1000, 1, 'Reject All');
+      await toggleHover(page, hoverScrollTarget(), {selector: 'main h2', index: 0}, 1, 1000, 1, 'Reject All');
       expect(clicked).toEqual([visible]);expect(hidden.hasAttribute('hidden')).toBe(true);
       expect(page.keyboard.down.mock.calls).toEqual([['Control']]);
       expect(page.keyboard.up.mock.calls).toEqual([['Control']]);
@@ -2385,7 +2443,7 @@ describe('site translation coverage contract', () => {
       waitForFunction: vi.fn(),
     };
     try {
-      await expect(toggleHover(page, {scrollIntoViewIfNeeded: async () => undefined},
+      await expect(toggleHover(page, hoverScrollTarget(),
         {selector: 'main h2', index: 0}, 1, 1000, 1, 'Reject All'))
         .rejects.toThrow('悬浮原文没有稳定且可命中的位置');
       expect(button.click).toHaveBeenCalledOnce();
@@ -2396,6 +2454,51 @@ describe('site translation coverage contract', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it.each([false, true])('centers native text under a sticky title and keeps persistent occlusion blocking (%s)', async staysCovered => {
+    vi.useFakeTimers();vi.setSystemTime(0);
+    const {document, window} = parseHTML('<html><body><header id="sticky">Native sticky title</header><main><p>Run using <code>npm run serve</code></p></main></body></html>');
+    const original = document.body.innerHTML;
+    const paragraph = document.querySelector('p')!;
+    const sticky = document.querySelector('header')!;
+    let top = 17;
+    const rect = () => ({left: 69, right: 140, top, bottom: top + 17, width: 71, height: 17});
+    Object.defineProperty(paragraph, 'getBoundingClientRect', {value: rect});
+    Object.defineProperty(document, 'createRange', {value: () => ({selectNodeContents: () => undefined, getClientRects: () => [rect()]})});
+    Object.defineProperty(document, 'elementFromPoint', {value: (_x: number, y: number) => y < 60 ? sticky : paragraph});
+    Object.defineProperty(document, 'elementsFromPoint', {value: (_x: number, y: number) => [y < 60 ? sticky : paragraph]});
+    for (const [key, value] of Object.entries({window, document, HTMLElement: window.HTMLElement,
+      innerWidth: 1272, innerHeight: 816, getComputedStyle: () => ({display: 'block', visibility: 'visible'})})) vi.stubGlobal(key, value);
+    Object.defineProperty(window, 'innerWidth', {configurable: true, value: 1272});
+    Object.defineProperty(window, 'innerHeight', {configurable: true, value: 816});
+    const center = vi.fn((options: unknown) => {
+      expect(options).toEqual({block: 'center', inline: 'nearest', behavior: 'instant'});
+      if (!staysCovered) top = 390;
+    });
+    const target = {scrollIntoViewIfNeeded: vi.fn(async () => undefined),
+      evaluate: async (fn: (node: {scrollIntoView: typeof center}) => unknown) => fn({scrollIntoView: center})};
+    const page = {evaluate: async (fn: (arg: unknown) => unknown, arg: unknown) => fn(arg),
+      mouse: {move: vi.fn()}, keyboard: {down: vi.fn(), up: vi.fn()}, waitForFunction: vi.fn(),
+      waitForTimeout: async (ms: number) => {vi.advanceTimersByTime(ms);}};
+    try {
+      expect(findHoverTextPointInPage({selector: 'main p', index: 0})).toBeNull();
+      const run = toggleHover(page, target, {selector: 'main p', index: 0}, 1, 500);
+      if (staysCovered) {
+        await expect(run).rejects.toThrow('悬浮原文没有稳定且可命中的位置');
+        expect(page.keyboard.down).not.toHaveBeenCalled();
+        expect(page.waitForFunction).not.toHaveBeenCalled();
+      } else {
+        await run;
+        expect(Date.now()).toBeGreaterThanOrEqual(200);
+        expect(page.mouse.move.mock.calls).toEqual([[93.85, 398.5]]);
+        expect(page.keyboard.down.mock.calls).toEqual([['Control']]);
+        expect(page.keyboard.up.mock.calls).toEqual([['Control']]);
+      }
+      expect(center).toHaveBeenCalledOnce();
+      expect(target.scrollIntoViewIfNeeded).toHaveBeenCalledOnce();
+      expect(document.body.innerHTML).toBe(original);
+    } finally {vi.unstubAllGlobals();vi.useRealTimers();}
   });
 
   it('waits through post-restore movement and temporary occlusion before sending one trusted hotkey', async () => {
@@ -2416,7 +2519,7 @@ describe('site translation coverage contract', () => {
       waitForFunction: vi.fn(async () => undefined),
     };
     try {
-      await toggleHover(page, {scrollIntoViewIfNeeded: async () => undefined}, {selector: 'h1', index: 0}, 1, 1000);
+      await toggleHover(page, hoverScrollTarget(), {selector: 'h1', index: 0}, 1, 1000);
       expect(move.mock.calls).toEqual([[90, 100], [90, 130], [90, 180]]);
       expect(down.mock.calls).toEqual([['Control']]);
       expect(up.mock.calls).toEqual([['Control']]);
@@ -2437,7 +2540,7 @@ describe('site translation coverage contract', () => {
       waitForTimeout: async (ms: number) => { vi.advanceTimersByTime(ms); },
     };
     try {
-      await expect(toggleHover(page, {scrollIntoViewIfNeeded: async () => undefined}, {selector: 'h1', index: 0}, 1, 200))
+      await expect(toggleHover(page, hoverScrollTarget(), {selector: 'h1', index: 0}, 1, 200))
         .rejects.toThrow('悬浮原文没有稳定且可命中的位置');
       expect(down).not.toHaveBeenCalled();
       expect(page.mouse.move).not.toHaveBeenCalled();

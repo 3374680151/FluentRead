@@ -2194,5 +2194,331 @@
     "fullPageHotkey": "Alt+T",
     "service": "freeTranslation",
     "notes": "Native public BBC Future longform on 2026-10-25: 1 h1, 38 p (37 core candidates plus a literal -- separator), 6 h2, 2 figcaption, 24 links. Finite-page completion must reveal and verify every eligible configured node including later sections, callout, More-like-this links, final disclaimer and newsletter prose; minInitial is only a readiness floor. Pure credit caption and standalone hero/body image credits must remain original; the separate descriptive caption remains translatable. Strict source partitions bind headings, descriptive caption and all selected hover bodies. All article links retain their native href and structural semantics. No video, medical advice quality, authenticated or paywalled scope is claimed. Full paragraph sourcePartition is not claimed: the native article includes a punctuation-only -- p without a stable unique attribute; every eligible paragraph is still tracked through completion, restore, retranslate and complete per-owner decoded attribution. No nth-based omission or source projection removal is used."
+  },
+  "wikipedia-bayes-math-article": {
+    "url": "https://en.wikipedia.org/wiki/Bayes'_theorem",
+    "hoverSelector": "#mw-content-text .mw-parser-output p",
+    "hoverTargets": [
+      {
+        "name": "article-title",
+        "selector": "h1#firstHeading",
+        "sourceIncludes": [
+          "Bayes' theorem"
+        ],
+        "sourcePartition": {
+          "excludeSelectors": []
+        }
+      },
+      {
+        "name": "lead-prose",
+        "selector": "#mw-content-text .mw-parser-output p",
+        "sourceIncludes": [
+          "In probability theory"
+        ],
+        "sourcePartition": {
+          "excludeSelectors": []
+        }
+      },
+      {
+        "name": "formula-bearing-derivation",
+        "selector": "#mw-content-text .mw-parser-output p",
+        "sourceIncludes": [
+          "Bayes' theorem may be derived from the relation between joint and conditional probabilities"
+        ],
+        "sourcePartition": {
+          "excludeSelectors": []
+        }
+      },
+      {
+        "name": "formula-definition-list",
+        "selector": "#mw-content-text .mw-parser-output li",
+        "sourceIncludes": [
+          "It is also called the posterior probability"
+        ],
+        "sourcePartition": {
+          "excludeSelectors": []
+        }
+      },
+      {
+        "name": "later-cryptanalysis-prose",
+        "selector": "#mw-content-text .mw-parser-output p",
+        "sourceIncludes": [
+          "Alan Turing and his collaborators at Bletchley Park"
+        ],
+        "sourcePartition": {
+          "excludeSelectors": []
+        }
+      },
+      {
+        "name": "descriptive-figure-caption",
+        "selector": "#mw-content-text figcaption",
+        "sourceIncludes": [
+          "Visual proof of Bayes' theorem"
+        ],
+        "sourcePartition": {
+          "excludeSelectors": []
+        }
+      }
+    ],
+    "requiredSelectors": [
+      "h1#firstHeading",
+      "#mw-content-text .mw-parser-output p",
+      "#mw-content-text h2",
+      "#mw-content-text figcaption"
+    ],
+    "coverageRules": [
+      {
+        "name": "article-title",
+        "selector": "h1#firstHeading",
+        "kind": "heading",
+        "minInitial": 1,
+        "sourcePartition": {
+          "excludeSelectors": []
+        }
+      },
+      {
+        "name": "article-prose-paragraphs",
+        "selector": "#mw-content-text .mw-parser-output p",
+        "kind": "content",
+        "minInitial": 40
+      },
+      {
+        "name": "article-h2-headings",
+        "selector": "#mw-content-text h2",
+        "kind": "heading",
+        "minInitial": 10,
+        "sourcePartition": {
+          "excludeSelectors": []
+        }
+      },
+      {
+        "name": "article-h3-headings",
+        "selector": "#mw-content-text h3",
+        "kind": "heading",
+        "minInitial": 14,
+        "sourcePartition": {
+          "excludeSelectors": []
+        }
+      },
+      {
+        "name": "article-h4-headings",
+        "selector": "#mw-content-text h4",
+        "kind": "heading",
+        "minInitial": 1,
+        "sourcePartition": {
+          "excludeSelectors": []
+        }
+      },
+      {
+        "name": "article-reading-list-items",
+        "selector": "#mw-content-text .mw-parser-output li",
+        "kind": "content",
+        "minInitial": 50
+      },
+      {
+        "name": "figure-descriptions",
+        "selector": "#mw-content-text figcaption",
+        "kind": "content",
+        "minInitial": 3,
+        "sourcePartition": {
+          "excludeSelectors": []
+        }
+      }
+    ],
+    "forbiddenSelectors": [
+      ".mwe-math-element",
+      "sup.reference",
+      ".mw-editsection",
+      ".mw-cite-backlink",
+      "nav",
+      "#vector-toc",
+      "input[name=\"search\"]",
+      "button"
+    ],
+    "forbiddenMustExistSelectors": [
+      ".mwe-math-element",
+      "sup.reference",
+      ".mw-editsection",
+      ".mw-cite-backlink",
+      "nav",
+      "#vector-toc",
+      "input[name=\"search\"]",
+      "button"
+    ],
+    "interactionSelectors": [
+      "#mw-content-text a[href]"
+    ],
+    "fullPageScope": "initial-corpus",
+    "modes": [
+      "hover",
+      "full"
+    ],
+    "tier": "required",
+    "hoverHotkey": "Control",
+    "fullPageHotkey": "Alt+T",
+    "service": "freeTranslation",
+    "notes": "Bounded initial loaded Wikipedia mathematical article: freeze all eligible configured prose paragraphs, section headings, reading list items and descriptive captions; require two real full cycles and native restoration. Native52P includes4 formula-only roots; core sees48P, so do not attach unfiltered full paragraph Text+BR sourcePartition. Strict ledgers cover title/headings/captions and selected formula-bearing hover P/LI. Table headers/labels, hatnotes and interwiki sidebar text are not separately mandatory completion groups; no claim that every English string, bibliography item, or table cell has been individually accepted. Formula/citation/edit/backlink/nav/search/button guards use the existing standard signature without a new class/HTML exemption. Broad interaction selector records total matching count plus representative interaction; no individual all551 href/structure proof claim. This candidate is unrun, not an accepted page or additional priority host."
+  },
+  "github-vue-computed-issue": {
+    "url": "https://github.com/vuejs/core/issues/1932",
+    "hoverSelector": "main h1 [data-testid='issue-title']",
+    "hoverTargets": [
+      {
+        "name": "issue-title",
+        "selector": "main h1 [data-testid='issue-title']",
+        "sourceIncludes": [
+          "Computed generators compute to the same iterator"
+        ],
+        "sourcePartition": {
+          "excludeSelectors": []
+        }
+      },
+      {
+        "name": "reproduction-heading",
+        "selector": ".markdown-body h3",
+        "sourceIncludes": [
+          "Steps to reproduce"
+        ],
+        "sourcePartition": {
+          "excludeSelectors": []
+        }
+      },
+      {
+        "name": "expected-result-paragraph",
+        "selector": ".markdown-body p",
+        "sourceIncludes": [
+          "The Paragraph should contain an increasing number for each click"
+        ],
+        "sourcePartition": {
+          "excludeSelectors": []
+        }
+      },
+      {
+        "name": "first-comment-with-inline-code",
+        "selector": ".markdown-body p",
+        "sourceIncludes": [
+          "Your computed property has no dependencies"
+        ],
+        "sourcePartition": {
+          "excludeSelectors": []
+        }
+      },
+      {
+        "name": "reproduction-step-with-code",
+        "selector": ".markdown-body p",
+        "sourceIncludes": [
+          "Run using"
+        ],
+        "sourcePartition": {
+          "excludeSelectors": []
+        }
+      }
+    ],
+    "requiredSelectors": [
+      "main h1 [data-testid='issue-title']",
+      ".markdown-body h3",
+      ".markdown-body p"
+    ],
+    "coverageRules": [
+      {
+        "name": "issue-title",
+        "selector": "main h1 [data-testid='issue-title']",
+        "kind": "heading",
+        "minInitial": 1,
+        "minSeen": 1,
+        "trackDynamic": false,
+        "sourceIncludes": [
+          "Computed generators compute to the same iterator"
+        ],
+        "sourcePartition": {
+          "excludeSelectors": []
+        }
+      },
+      {
+        "name": "all-markdown-subheadings",
+        "selector": ".markdown-body h3",
+        "kind": "heading",
+        "minInitial": 5,
+        "minSeen": 5,
+        "trackDynamic": false,
+        "sourceIncludes": [
+          "Version",
+          "Reproduction link",
+          "Steps to reproduce",
+          "What is expected?",
+          "What is actually happening?"
+        ],
+        "sourcePartition": {
+          "excludeSelectors": []
+        }
+      },
+      {
+        "name": "all-eligible-markdown-paragraphs",
+        "selector": ".markdown-body p",
+        "kind": "content",
+        "minInitial": 30,
+        "minSeen": 30,
+        "trackDynamic": false,
+        "sourceIncludes": [
+          "The Paragraph should contain an increasing number",
+          "Your computed property has no dependencies",
+          "Please if you continue to have questions",
+          "Ok, thanks"
+        ]
+      }
+    ],
+    "forbiddenSelectors": [
+      "main a[data-testid='issue-body-header-author'][data-hovercard-type='user'][href]:not(.markdown-body):not(.markdown-body *)",
+      "main [data-testid='comment-header']:not(.markdown-body):not(.markdown-body *):not(:has(.markdown-body))",
+      "main #issue-timeline a[data-testid='actor-link'][href]:not(.markdown-body):not(.markdown-body *)",
+      "main relative-time",
+      ".markdown-body pre",
+      ".markdown-body code",
+      "button[aria-haspopup='dialog'][aria-label*='search' i]"
+    ],
+    "forbiddenMustExistSelectors": [
+      "main a[data-testid='issue-body-header-author'][data-hovercard-type='user'][href]:not(.markdown-body):not(.markdown-body *)",
+      "main [data-testid='comment-header']:not(.markdown-body):not(.markdown-body *):not(:has(.markdown-body))",
+      "main #issue-timeline a[data-testid='actor-link'][href]:not(.markdown-body):not(.markdown-body *)",
+      "main relative-time",
+      ".markdown-body pre",
+      ".markdown-body code",
+      "button[aria-haspopup='dialog'][aria-label*='search' i]"
+    ],
+    "interactionSelectors": [
+      "main a[data-testid='issue-body-header-author'][data-hovercard-type='user'][href]:not(.markdown-body):not(.markdown-body *)",
+      "#issuecomment-678623820 a[data-testid='avatar-link'][data-hovercard-type='user'][href]",
+      "#issuecomment-678643328 a[data-testid='avatar-link'][data-hovercard-type='user'][href]",
+      "#issuecomment-678644833 a[data-testid='avatar-link'][data-hovercard-type='user'][href]",
+      "#issuecomment-678645678 a[data-testid='avatar-link'][data-hovercard-type='user'][href]",
+      "#issuecomment-678646036 a[data-testid='avatar-link'][data-hovercard-type='user'][href]",
+      "#issuecomment-678646654 a[data-testid='avatar-link'][data-hovercard-type='user'][href]",
+      "#issuecomment-678648351 a[data-testid='avatar-link'][data-hovercard-type='user'][href]",
+      "#issuecomment-678648820 a[data-testid='avatar-link'][data-hovercard-type='user'][href]",
+      "#issuecomment-678649009 a[data-testid='avatar-link'][data-hovercard-type='user'][href]",
+      "#issuecomment-678649223 a[data-testid='avatar-link'][data-hovercard-type='user'][href]",
+      "#issuecomment-678649847 a[data-testid='avatar-link'][data-hovercard-type='user'][href]",
+      "#issuecomment-678650042 a[data-testid='avatar-link'][data-hovercard-type='user'][href]",
+      "#issuecomment-678650228 a[data-testid='avatar-link'][data-hovercard-type='user'][href]",
+      "#issuecomment-678650434 a[data-testid='avatar-link'][data-hovercard-type='user'][href]",
+      "#issue-timeline > li[data-timeline-event-id='MDExOkNsb3NlZEV2ZW50MzY4MTg5MzgwMA=='] a[data-testid='actor-link'][href]",
+      "#issue-timeline > li[data-timeline-event-id='LOE_lADOCCum184oxHL6zwAAAAKHrjgb'] a[data-testid='actor-link'][href]",
+      ".markdown-body a[href='https://github.com/SebastianSpeitel/vue-bugs/tree/bug-generator']",
+      ".markdown-body a[href='https://user-images.githubusercontent.com/22002580/90953089-e2248f80-e468-11ea-91c0-8d6327256b99.png']",
+      ".markdown-body a[href='https://user-images.githubusercontent.com/4620458/90958192-b4e8d900-e48a-11ea-9bb4-0f8ea811d7f5.png']",
+      ".markdown-body a[href='https://vue.land/']",
+      ".markdown-body a[href='https://forum.vuejs.org/']"
+    ],
+    "modes": [
+      "hover",
+      "full"
+    ],
+    "tier": "required",
+    "fullPageScope": "finite-page",
+    "skipUnscopedH1Coverage": true,
+    "hoverHotkey": "Control",
+    "fullPageHotkey": "Alt+T",
+    "service": "freeTranslation",
+    "notes": "Public closed/locked official Vue issue:1 issue+14 comments=15 logical bodies;30 .markdown-body elements are nested pairs, not30 messages. Native core owners are30P+5H3=35;33 rawP include1URL-only reproduction link+2image-only anchors. All eligible P are verified through both finite-page passes, exact-owner completion, complete controlled per-owner decoded attribution and restoration. Four numbered steps already use P owners; do not double-count their ol/li. Strict pre-translation Text+BR source partitions bind title/all5H3/selected hover P. No strict partition over the complete rawP set is claimed because it contains nontext/URL-only roots. All baseline identity/header/actor/code/custom-time nodes receive individual forbidden signatures. Exactly17 author links and5Markdown reading/image links have22unique interaction selectors, so their href/focusability is checked per link. The31time elements are signature-only guards, not31interaction tests; all34user links are not claimed. No editor/checklist/load-more/streaming interaction is present or claimed; no external demo/source link is opened. Derived runtime ownership requires exact3native404 requests with same-session Log.requestId binding and version-pinned full6/277/226-frame stacks after accepted explicit2048capture; preserve raw diagnostics. This proposal adds no acceptance until both standard modes pass."
   }
 }

@@ -2,7 +2,7 @@
  * @file scripts/testing/x-runtime-diagnostics.cjs
  * 文件职责：给原运行时采集器补充 X 原生 guide 请求的逐请求归属证据，不改变生产扩展或原始采集结果。
  * 主要内容：在原采集器同一个 CDP session 上观察 Network，包装 Log 回调以绑定其实际新增 entry ID，
- * 仅对经过已审核透明 fetch 转发器的完整原生请求链派生 site 归属；所有缺口、歧义与扩展错误继续阻断。
+ * 仅对经过已审核透明 fetch 转发器的完整原生请求链派生 site 归属；未知请求保留脱敏关联事实，继续阻断。
  * 模块边界：不注入页面脚本、不修改请求/响应、不读取 headers/body，不编辑或复制外部原始采集器。
  */
 const fs = require('node:fs');
@@ -129,9 +129,10 @@ function createXRuntimeDiagnostics({rawHelper, extensionDir,
       const request = state.requests.get(requestId);
       if (request) request.finishCount += 1;
     });
-    on('Network.loadingFailed', ({requestId}) => {
+    on('Network.loadingFailed', ({requestId, errorText, canceled, blockedReason, corsErrorStatus, type}) => {
       const request = state.requests.get(requestId);
-      if (request) request.failed = true;
+      if (request) Object.assign(request, {failed: true,
+        failure: {errorText, canceled, blockedReason, corsErrorStatus, type}});
     });
     try {
       await session.send('Network.enable');
@@ -185,10 +186,27 @@ function createXRuntimeDiagnostics({rawHelper, extensionDir,
     const raw = base.snapshot();
     const duplicateIds = new Set(raw.entries.filter((entry, index, entries) => entries.findIndex(other => other.id === entry.id) !== index).map(entry => entry.id));
     const adjustments = [];
+    const unclassifiedEntries = [];
+    const redactObservation = value => typeof value === 'string' ? redact(value)
+      : Array.isArray(value) ? value.map(redactObservation)
+        : value && typeof value === 'object'
+          ? Object.fromEntries(Object.entries(value).map(([key, item]) => [key, redactObservation(item)])) : value;
     const entries = raw.entries.map(entry => {
       const linked = bindings.get(entry.id);
       const evidence = classifyRequest({entry, binding: linked?.binding, request: linked?.request, extensionId, artifactHash});
-      if (!evidence.matched || duplicateIds.has(entry.id)) return {...entry};
+      if (!evidence.matched || duplicateIds.has(entry.id)) {
+        if (entry.ownership === 'unattributed' && entry.type === 'browser-log' && entry.browserSource === 'network') {
+          const keys = ['requestId', 'targetId', 'sessionKey', 'frameId', 'loaderId', 'pageUrl', 'documentURL',
+            'method', 'url', 'hasPostData', 'initiator', 'requestCount', 'responseCount', 'finishCount',
+            'logCount', 'redirected', 'responseUrl', 'status', 'type', 'fromServiceWorker', 'ambiguous', 'failed', 'failure'];
+          unclassifiedEntries.push({entryId: entry.id,
+            reason: duplicateIds.has(entry.id) ? 'duplicate-entry-id' : evidence.reason,
+            binding: linked ? redactObservation(linked.binding) : null,
+            request: linked?.request ? redactObservation(Object.fromEntries(keys
+              .filter(key => linked.request[key] !== undefined).map(key => [key, linked.request[key]]))) : null});
+        }
+        return {...entry};
+      }
       adjustments.push({entryId: entry.id, rawOwnership: entry.ownership, ownership: 'site', evidence});
       return {...entry, rawOwnership: entry.ownership, ownership: 'site', ownershipEvidence: evidence};
     });
@@ -200,7 +218,8 @@ function createXRuntimeDiagnostics({rawHelper, extensionDir,
     return {...raw, entries, counts, blockerIds: remaining,
       passed: rawConsistent && remaining.length === 0 && raw.coverage.failures.length === 0 && raw.workerObserved === true && failures.length === 0,
       rawDiagnostics: raw, rawVerdict, requestOwnership: {policyId: POLICY.id, artifactHash,
-        rawSnapshotConsistent: rawConsistent, adjustments, failures: failures.map(item => ({...item})),
+        rawSnapshotConsistent: rawConsistent, adjustments, unclassifiedEntries,
+        failures: failures.map(item => ({...item})),
         limitations: ['Only exact Log networkRequestId bindings from the same page CDP session can be classified.',
           'Missing/changed native startup stacks, unknown bridge builds, OOPIFs and pre-attachment requests remain unclassified.']}};
   }

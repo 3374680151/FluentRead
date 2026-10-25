@@ -92,6 +92,13 @@ function readControlledPageEvidenceInPage(options) {
   // The production GitHub adapter explicitly protects these custom time elements without role=timer.
   const siteProtected = globalThis.location?.hostname === 'github.com' ? 'relative-time,time-ago,local-time'
     : cnnArticle ? '.byline__name,.timestamp__time-since,figcaption.image_large-elevate__credit,figcaption.image-elevate__credit' : '';
+  // 与生产 GitHub 原生 issue 身份组件一致；依赖连接中的 live 上下文匹配 main/timeline，
+  // 只配对保留的标签/文本/href/linkHref 骨架，不省略源、译文或 Markdown 内同名正文。
+  const githubMetadataProtected = globalThis.location?.hostname === 'github.com' ? [
+    'main a[data-testid="issue-body-header-author"][data-hovercard-type="user"][href]:not(.markdown-body):not(.markdown-body *)',
+    'main [data-testid="comment-header"]:not(.markdown-body):not(.markdown-body *):not(:has(.markdown-body))',
+    'main #issue-timeline a[data-testid="actor-link"][href]:not(.markdown-body):not(.markdown-body *)',
+  ].join(',') : '';
   const ubuntuManpage = globalThis.location?.hostname === 'manpages.ubuntu.com' && /^\/manpages\/[^/]+\/man[0-9][^/]*\/[^/]+\.html$/u.test(globalThis.location?.pathname || '');
   // Match the SQLite documentation profile exactly; ordinary page buttons are not protected prose.
   const sqliteDocument = ['sqlite.org', 'www.sqlite.org'].includes(globalThis.location?.hostname) &&
@@ -108,6 +115,7 @@ function readControlledPageEvidenceInPage(options) {
   const siteOmitted = [bingOmitted, steamOmitted].filter(Boolean).join(',');
   const literalToken = /^[\w.+/-]+(?:(?:\s*,\s*[\w.+/-]+)+|(?:\s+--?\w[\w-]*)+)?$/u;
   const isProtected = (node, live) => node.matches(protectedSelector) || siteProtected && node.matches(siteProtected) ||
+    githubMetadataProtected && live?.matches(githubMetadataProtected) ||
     sqliteDocument && node.matches('button') ||
     ubuntuManpage && live?.matches('#manpage-content section.Sh b,#manpage-content section.Sh i') && literalToken.test(node.textContent.trim()) ||
     node.matches('a[href]') && linkIdentifier.test(node.textContent.trim());

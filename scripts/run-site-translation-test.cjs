@@ -2608,6 +2608,9 @@ async function waitForHoverPointer(page, targetConfig, timeout, prepareClickText
 async function toggleHover(page, target, targetConfig, expectedCount, timeout, attempt, prepareClickText) {
   const {selector, index} = targetConfig;
   await target.scrollIntoViewIfNeeded();
+  // viewport 内的原文仍可能被原生 sticky 标题遮住。先用原生滚动居中，
+  // 再由下面原有的 TextRange / 实际命中 / 稳定期门禁决定能否发送手势。
+  await target.evaluate((node) => node.scrollIntoView({block: 'center', inline: 'nearest', behavior: 'instant'}));
   // 还原译文会改变布局，宿主也可能继续滚动或播放入场动画。固定等待后取外框
   // 坐标会落到空白容器；按键前等待真实原文行稳定并保持命中，按键只发送一次。
   const point = await waitForHoverPointer(page, targetConfig, timeout, prepareClickText);

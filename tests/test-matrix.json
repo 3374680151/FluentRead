@@ -805,6 +805,8 @@
       "tests/translationLayoutMeasurements.test.ts",
       "tests/siteTranslationHarness.test.ts",
       "tests/siteTranslationStability.test.ts",
+      "tests/githubControlledEvidence.test.ts",
+      "tests/githubRuntimeDiagnostics.test.ts",
       "tests/siteTranslationMatrixConcurrency.test.ts",
       "tests/siteTranslationIdle.test.ts",
       "tests/translationDocumentCorpus.test.ts",
