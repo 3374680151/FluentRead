@@ -31,8 +31,9 @@ const bytes = Buffer.byteLength(source);
 // Full Options adds its navigation, settings forms, and CSS to the direct-install build.
 // This build is hosted outside Greasy Fork, whose separate rules cap scripts at 2 MB.
 // Same-dependency main 6ec3ade22: 3,615,344 bytes; release tooling adds no runtime bytes.
-// Completing the two-click selection translations adds 2,005 bytes (3,617,349 total).
-// Round the measured artifact up to the next 1 KB, retaining only 651 bytes of headroom.
-const maxBytes = 3_618_000;
+// With the completed translations: local Node 20 measures 3,617,349 bytes;
+// the locked Ubuntu/Node 22 CI build measures 3,619,174 bytes (run 40168931505).
+// Round the measured CI artifact up to the next 1 KB, retaining 826 bytes of headroom.
+const maxBytes = 3_620_000;
 if (bytes > maxBytes) throw new Error(`Standalone userscript grew past ${maxBytes.toLocaleString('en-US')} bytes: ${bytes}`);
 console.log(`Verified ${artifact} (${bytes.toLocaleString()} bytes; no @require)`);
