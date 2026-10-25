@@ -101,7 +101,7 @@
     "settings.services.prompts.syncDone": "Synced to {count} AI services",
     "settings.services.visionProbeShort": "Test",
     "settings.fullPage.multiSegmentDescription": "Merges adjacent short paragraphs into one request during AI full-page translation",
-    "settings.fullPage.multiSegmentHelp": "Applies only to AI services that support general prompts. Machine, hover, selection, and input box translation are not affected.",
+    "settings.fullPage.multiSegmentHelp": "For AI services that support general prompts; combined services are not supported. Restore the original page and restart full-page translation to apply changes.",
     "glossary.builtin.helpDisabled": "The glossary is off. Turn on the switch above for added glossaries to take effect.",
     "image.settings.languageServiceTitle": "Languages and service",
     "settings.floatingBall.disabledNote": "The floating button is off. These preferences are kept and apply when you turn it back on.",

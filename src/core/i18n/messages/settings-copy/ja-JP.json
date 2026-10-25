@@ -101,7 +101,7 @@
     "settings.services.prompts.syncDone": "{count} 個の AI サービスに同期しました",
     "settings.services.visionProbeShort": "検出",
     "settings.fullPage.multiSegmentDescription": "AI サービスでページ全体を翻訳するとき、隣接する短い段落を 1 回のリクエストにまとめます",
-    "settings.fullPage.multiSegmentHelp": "汎用プロンプトに対応した AI サービスでのみ有効です。機械翻訳、ホバー、選択範囲、入力欄の翻訳には影響しません。",
+    "settings.fullPage.multiSegmentHelp": "汎用プロンプト対応の AI サービス専用です。複合サービスには適用されません。変更を反映するには原文に戻し、ページ全体の翻訳を再開してください。",
     "glossary.builtin.helpDisabled": "用語集はオフです。追加した用語集を使うには上のスイッチをオンにしてください。",
     "image.settings.languageServiceTitle": "言語とサービス",
     "settings.floatingBall.disabledNote": "フローティングボタンはオフです。これらの設定は保持され、再度オンにすると適用されます。",
