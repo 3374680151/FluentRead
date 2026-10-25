@@ -296,6 +296,7 @@ export default defineConfig({
         // 排除网站素材、测试证据和其他发布出口，避免超过 200 MB 上传限制。
         excludeSources: [
             'coverage/**',
+            'reports/release/**',
             'docs/**',
             'marketing/**',
             'userscript/**',
