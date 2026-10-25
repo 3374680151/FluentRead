@@ -269,10 +269,10 @@ describe('实际 Popup 缓存模板与页面操作',()=>{
     });
     await mount();expect(send.mock.calls.some(call=>call[1].type==='getPageTranslationFontState')).toBe(true);
     const entry=()=>button('page-font-entry');expect(entry().getAttribute('aria-pressed')).toBe('false');
-    expect(entry().getAttribute('data-font-state')).toBe('host');expect(entry().getAttribute('aria-label')).toBe('当前：网页字体。点击切换为浏览器默认字体。');
+    expect(entry().getAttribute('data-font-state')).toBe('host');expect(entry().getAttribute('aria-label')).toBe('使用浏览器默认字体');
     const old=eventOf(entry());await old();await drain();
     expect(entry().getAttribute('aria-pressed')).toBe('true');expect(entry().classList.contains('is-browser-default')).toBe(true);
-    expect(entry().getAttribute('aria-label')).toBe('当前：浏览器默认字体。点击恢复网页字体。');
+    expect(entry().getAttribute('aria-label')).toBe('使用浏览器默认字体');
     expect(send).toHaveBeenLastCalledWith(7,{type:'setPageTranslationFont',browserDefault:true,documentToken:'page-font-document',pageUrl:'https://example.com/a'},{frameId:0});
     const calls=send.mock.calls.length;old();await drain();expect(send).toHaveBeenCalledTimes(calls);
     await eventOf(entry())();await drain();expect(entry().getAttribute('aria-pressed')).toBe('false');
@@ -885,19 +885,19 @@ describe('实际 Popup 缓存模板与页面操作',()=>{
   it('右下角模式图标直接双向切换并保存共享偏好，不触发页面重译或打开抽屉',async()=>{
     config.service='bing';config.display=1;localized=true;await mount();const {messages,records}=await attachPersistence()
     const toggle=()=>button('popup-display-mode'),meta=document.querySelector('.translation-meta')!
-    expect(meta.contains(toggle())).toBe(true);expect(toggle().getAttribute('aria-label')).toBe('当前：双语，点击切换为仅译文');expect(toggle().hasAttribute('disabled')).toBe(false)
+    expect(meta.contains(toggle())).toBe(true);expect(toggle().getAttribute('aria-label')).toBe('显示原文和译文');expect(toggle().hasAttribute('disabled')).toBe(false)
     eventOf(toggle())();await drain();await persistenceStore!.waitForConfigPersistenceQueue();await drain()
-    expect(state.config.display).toBe(0);expect(records.get('local:config')).toMatchObject({display:0});expect(messages.at(-1)!.config).toEqual({display:0});expect(toggle().getAttribute('aria-label')).toBe('当前：仅译文，点击切换为双语')
+    expect(state.config.display).toBe(0);expect(records.get('local:config')).toMatchObject({display:0});expect(messages.at(-1)!.config).toEqual({display:0});expect(toggle().getAttribute('aria-label')).toBe('显示原文和译文')
     eventOf(toggle())();await drain();await persistenceStore!.waitForConfigPersistenceQueue();await drain()
-    expect(state.config.display).toBe(1);expect(records.get('local:config')).toMatchObject({display:1});expect(toggle().getAttribute('aria-label')).toBe('当前：双语，点击切换为仅译文')
+    expect(state.config.display).toBe(1);expect(records.get('local:config')).toMatchObject({display:1});expect(toggle().getAttribute('aria-label')).toBe('显示原文和译文')
     expect(commands()).toHaveLength(0);expect(state.drawerVisible).toBe(false);expect(close).not.toHaveBeenCalled()
   })
   it('Google 双语模式禁用切换为仅译文，已有仅译文偏好仍可一键修复为双语',async()=>{
     config.display=1;localized=true;await mount();const toggle=()=>button('popup-display-mode')
-    expect(toggle().hasAttribute('disabled')).toBe(true);expect(toggle().getAttribute('aria-label')).toBe('当前：双语，Google 翻译仅支持双语显示')
+    expect(toggle().hasAttribute('disabled')).toBe(true);expect(toggle().getAttribute('aria-description')).toBe('Google 翻译仅支持双语显示')
     eventOf(toggle())();await drain();expect(state.config.display).toBe(1);expect(patches).not.toHaveBeenCalled()
-    state.config.service='bing';state.config.display=0;await drain();expect(toggle().getAttribute('aria-label')).toBe('当前：仅译文，点击切换为双语')
-    state.config.service='google';await drain();expect(state.config.display).toBe(0);expect(toggle().hasAttribute('disabled')).toBe(false);expect(toggle().getAttribute('aria-label')).toContain('点击切换为双语')
+    state.config.service='bing';state.config.display=0;await drain();expect(toggle().getAttribute('aria-label')).toBe('显示原文和译文')
+    state.config.service='google';await drain();expect(state.config.display).toBe(0);expect(toggle().hasAttribute('disabled')).toBe(false);expect(toggle().getAttribute('aria-label')).toBe('显示原文和译文')
     eventOf(toggle())();await drain();expect(state.config.display).toBe(1);expect(toggle().hasAttribute('disabled')).toBe(true)
   })
   it.each(['display','service','paused','cached','pagehide','unmount'] as const)('%s 变化后缓存的模式按钮回调失效，不借用新会话',async reason=>{

@@ -3,7 +3,8 @@
 /**
  * @file scripts/testing/run-page-translation-font-ui-test.cjs
  * 当前页译文字体专项：用临时、后台可见且不抢焦点的 Edge 和本地确定性服务，
- * 从主面板真实 Aa 开关验证浏览器默认字体、双语/仅译文、隔离和页面生命周期。
+ * 从主面板真实 Aa 开关验证浏览器默认字体、双语/仅译文、隔离和页面生命周期，
+ * 同时检查图标两态保持尺寸和位置、译文字号不变，以及统一提示的悬停、聚焦与 Escape 关闭。
  * 仅使用 getPageTranslationFontState 读取状态；字体写入必须通过真实按钮。
  */
 const assert = require('node:assert/strict');
@@ -195,6 +196,7 @@ async function main() {
         return button?.getAttribute('aria-pressed') === String(value)
           && button.getAttribute('data-font-state') === (value ? 'browser-default' : 'host') && !button.disabled;
       }, enabled);
+      assert.equal(await popup.getByTestId('page-font-entry').locator('svg').getAttribute('data-font-style'), enabled ? 'sans' : 'serif', 'Aa 应以字体造型表达当前状态');
       assert.equal(await popup.locator('.drawer-surface:visible').count(), 0, 'Aa 字体切换不应打开设置抽屉');
     };
     await waitPopup();
@@ -237,10 +239,36 @@ async function main() {
         await shot(popup, 'tooltip-failure');
         throw error;
       }
-      const copy = await tooltip.innerText();
-      assert(copy.includes('网页字体') && copy.includes('浏览器默认'), '提示必须说明当前字体与下次点击的切换结果');
-      assert(copy.includes('仅当前页') && copy.includes('无需重新翻译'), '提示必须解释当前页作用域与立即生效');
+      const action = enabled ? '恢复网页字体' : '使用浏览器默认字体';
+      assert.equal(await tooltip.locator(':scope > span').innerText(), action, '字体提示应直接说明点击后的操作');
+      assert.equal(await button.getAttribute('aria-label'), '使用浏览器默认字体', '字体开关应保持稳定功能名，由 aria-pressed 表达当前状态');
+      assert.equal(await tooltip.locator('small').innerText(), '仅本页译文，刷新或跳转后恢复', '字体提示应简洁说明作用范围');
+      assert.equal(await tooltip.locator('xpath=ancestor::*[contains(concat(" ", normalize-space(@class), " "), " translation-tool-tooltip ")]').count(), 1, '字体提示应使用统一浮层');
       await shot(popup, `06-aa-tooltip-${enabled ? 'browser-default' : 'host'}-${keyboard ? 'keyboard' : 'hover'}`);
+      await popup.keyboard.press('Escape');
+      await tooltip.waitFor({state: 'hidden'});
+      await popup.getByTestId('page-translation').hover();
+      await popup.getByTestId('page-translation').focus();
+    };
+    const inspectDisplayModeTooltip = async (mode, keyboard = false, disabled = false) => {
+      await waitPopup();
+      const button = popup.getByTestId('popup-display-mode');
+      await popup.waitForFunction(({mode, disabled}) => {
+        const target = document.querySelector('[data-testid="popup-display-mode"]');
+        return target?.getAttribute('data-display-mode') === mode && target.disabled === disabled;
+      }, {mode, disabled});
+      assert.equal(await button.getAttribute('title'), null, '显示模式不应再使用浏览器原生提示');
+      const expected = disabled ? 'Google 翻译仅支持双语显示' : mode === 'bilingual' ? '只显示译文' : '显示原文和译文';
+      assert.equal(await button.getAttribute('aria-label'), '显示原文和译文', '显示模式开关应保持稳定功能名，由 aria-pressed 表达当前状态');
+      assert.equal(await button.getAttribute('aria-description'), disabled ? 'Google 翻译仅支持双语显示' : null, '不可用原因应通过说明提供，不能覆盖开关功能名');
+      await popup.getByTestId('page-translation').focus();
+      if (keyboard) await button.focus();
+      else {await popup.mouse.move(1, 1); await button.hover();}
+      const tooltip = popup.getByTestId('display-mode-tooltip');
+      await tooltip.waitFor({state: 'visible', timeout: 5000});
+      assert.equal(await tooltip.innerText(), expected, '显示模式提示应直接说明点击后的操作或不可用原因');
+      assert.equal(await tooltip.locator('xpath=ancestor::*[contains(concat(" ", normalize-space(@class), " "), " translation-tool-tooltip ")]').count(), 1, '显示模式提示应与字体提示使用统一浮层');
+      await shot(popup, `07-mode-tooltip-${disabled ? 'google-disabled' : mode}-${keyboard ? 'keyboard' : 'hover'}`);
       await popup.keyboard.press('Escape');
       await tooltip.waitFor({state: 'hidden'});
       await popup.getByTestId('page-translation').hover();
@@ -278,6 +306,7 @@ async function main() {
       await target.waitForFunction(({id, text}) => document.querySelector(`#${id} > .fluent-read-bilingual-content`)?.textContent.includes(text), {id, text: TRANSLATED[id]});
     };
     const fontOf = locator => locator.evaluate(element => getComputedStyle(element).fontFamily);
+    const fontSizeOf = locator => locator.evaluate(element => getComputedStyle(element).fontSize);
     const waitFont = async (locator, expected) => {
       await locator.waitFor({state: 'attached'});
       for (let attempt = 0; attempt < 160; attempt++) {if (await fontOf(locator) === expected) return; await delay(50);}
@@ -298,6 +327,9 @@ async function main() {
     assert.equal(await translatedCode.count(), 1, '夹具必须覆盖译文内保留的代码');
     assert.equal(await translatedMath.count(), 1, '夹具必须覆盖译文内保留的公式');
     const protectedBefore = {code: await fontOf(translatedCode), math: await fontOf(translatedMath)};
+    const bilingualSizes = async () => ({primary: await fontSizeOf(bilingual('primary')),
+      emphasis: await fontSizeOf(bilingual('primary').locator('strong')), code: await fontSizeOf(translatedCode), math: await fontSizeOf(translatedMath)});
+    const bilingualSizesBefore = await bilingualSizes();
     let count = fixture.requests.length;
     // 首次真实翻译计数通过配置广播到 Popup；等这次重绘完成再悬停，避免异步移位离开指针。
     await popup.waitForFunction(() => parseInt(document.querySelector('.popup-translation-count')?.textContent || '', 10) > 0);
@@ -310,12 +342,15 @@ async function main() {
     await waitFont(bilingual('primary').locator('strong'), browserDefault);
     assert.equal(await fontOf(translatedCode), protectedBefore.code, '译文内代码字体被改写');
     assert.equal(await fontOf(translatedMath), protectedBefore.math, '译文内公式字体被改写');
+    const bilingualSizesEnabled = await bilingualSizes();
+    assert.deepEqual(bilingualSizesEnabled, bilingualSizesBefore, '切换浏览器默认字体不得放大双语译文或其后代字号');
     await assertOriginalUnchanged('bilingual browser default');
     await noNewRequests(count, 'existing bilingual font change');
     await shot(page, '01-bilingual-browser-default');
     await shot(popup, '02-aa-main-browser-default');
     await inspectFontTooltip(true);
-    report.checks.push('hover and keyboard focus reveal the current font, next action and temporary-page hint; Escape dismisses the font tooltip');
+    await inspectFontTooltip(true, true);
+    report.checks.push('hover and keyboard focus reveal the direct font action and concise page-only hint in both states; Escape dismisses the font tooltip');
     await hover(page, 'secondary'); await waitBilingual('secondary');
     await waitFont(bilingual('secondary'), browserDefault);
     report.checks.push('the real Aa toggle updates existing and later bilingual translations directly without a drawer, including ordinary inline text; original, code and formula fonts remain unchanged');
@@ -325,6 +360,9 @@ async function main() {
     count = fixture.requests.length;
     await chooseFont(false); await waitFont(bilingual('primary'), original.primary);
     await waitFont(bilingual('primary').locator('strong'), original.emphasis);
+    const bilingualSizesRestored = await bilingualSizes();
+    assert.deepEqual(bilingualSizesRestored, bilingualSizesBefore, '恢复网页字体不得改变双语译文字号');
+    report.metrics.bilingualFontSizes = {host: bilingualSizesBefore, browserDefault: bilingualSizesEnabled, restored: bilingualSizesRestored};
     await noNewRequests(count, 'return to host font');
     await patchConfig({translationAppearance: {...DEFAULT_APPEARANCE, fontFamily: 'serif', customCss: 'font-family: cursive;'}});
     await waitFont(bilingual('primary'), 'cursive');
@@ -382,18 +420,19 @@ async function main() {
     await session.send('DOM.enable'); await session.send('CSS.enable');
     const attributes = node => Object.fromEntries(Array.from({length: (node.attributes || []).length / 2}, (_, index) => [node.attributes[index * 2], node.attributes[index * 2 + 1]]));
     const descend = node => [node, ...(node.children || []).flatMap(descend), ...(node.shadowRoots || []).flatMap(descend)];
-    const singleFonts = async id => {
+    const singleStyles = async (id, property) => {
       const {root} = await session.send('DOM.getDocument', {depth: -1, pierce: true});
       const target = descend(root).find(node => attributes(node).id === id);
       assert(target, `missing fixture #${id}`);
       const nodes = descend(target).filter(node => (attributes(node).class || '').split(/\s/u).includes('fluent-read-single-content'));
-      const fonts = [];
+      const values = [];
       for (const node of nodes) {
         const {computedStyle} = await session.send('CSS.getComputedStyleForNode', {nodeId: node.nodeId});
-        fonts.push(computedStyle.find(item => item.name === 'font-family').value);
+        values.push(computedStyle.find(item => item.name === property).value);
       }
-      return fonts;
+      return values;
     };
+    const singleFonts = id => singleStyles(id, 'font-family');
     const waitSingleFont = async (id, expected) => {
       let fonts;
       for (let attempt = 0; attempt < 160; attempt++) {
@@ -406,10 +445,13 @@ async function main() {
     await hover(page, 'primary');
     await page.locator('#primary .fluent-read-single-slot').first().waitFor({state: 'attached'});
     const singleHostFonts = await singleFonts('primary');
+    const singleHostSizes = await singleStyles('primary', 'font-size');
     assert(singleHostFonts.length > 0 && singleHostFonts.every(font => font !== browserDefault), '单译文必须先继承故意不同的网页字体');
     count = fixture.requests.length;
     await chooseFont(true);
     await waitSingleFont('primary', browserDefault);
+    const singleBrowserSizes = await singleStyles('primary', 'font-size');
+    assert.deepEqual(singleBrowserSizes, singleHostSizes, '切换浏览器默认字体不得放大闭合译文槽的字号');
     await assertOriginalUnchanged('single browser default');
     await noNewRequests(count, 'existing single font change');
     await hover(page, 'secondary');
@@ -420,6 +462,8 @@ async function main() {
     await chooseFont(false);
     const singleRestored = await singleFonts('primary');
     assert.deepEqual(singleRestored, singleHostFonts, '关闭后单译文未恢复每个原始文本槽的字体');
+    const singleRestoredSizes = await singleStyles('primary', 'font-size');
+    assert.deepEqual(singleRestoredSizes, singleHostSizes, '恢复网页字体不得改变闭合译文槽的字号');
     await chooseFont(true); await waitSingleFont('primary', browserDefault);
     await noNewRequests(count, 'single return to host and browser default');
     await hover(page, 'primary');
@@ -429,7 +473,8 @@ async function main() {
     await page.locator('#primary .fluent-read-single-slot').first().waitFor({state: 'attached'});
     await waitSingleFont('primary', browserDefault);
     assert.equal(await page.locator('#primary .fluent-read-bilingual-content').count(), 0, '仅译文不应遗留双语 wrapper');
-    report.metrics.single = {hostFonts: singleHostFonts, restoredFonts: singleRestored, repeatedFonts: await singleFonts('primary')};
+    report.metrics.single = {hostFonts: singleHostFonts, restoredFonts: singleRestored, repeatedFonts: await singleFonts('primary'),
+      fontSizes: {host: singleHostSizes, browserDefault: singleBrowserSizes, restored: singleRestoredSizes}};
     report.checks.push('existing, later and repeated single translations use browser default inside real closed roots; turning it off restores each slot; restore returns original DOM');
     await session.detach();
 
@@ -487,6 +532,27 @@ async function main() {
       laterContentFont: browserDefault, finalFont: original.primary, restoredOriginalDom: true};
     report.checks.push('real popup full-page translation supports existing and dynamically added content, Aa browser default and host restoration without extra requests, and full restore returns original DOM');
 
+    // 显示模式使用与 Aa 相同的短提示；实际点击切换两态，禁用状态仍应能解释原因。
+    diagnostics.setPhase('display-mode-actions-and-tooltips');
+    count = fixture.requests.length;
+    const fontStateBeforeMode = await popup.getByTestId('page-font-entry').getAttribute('data-font-state');
+    await inspectDisplayModeTooltip('bilingual');
+    await inspectDisplayModeTooltip('bilingual', true);
+    await popup.getByTestId('popup-display-mode').click();
+    await untilConfig(config => config.display === 0);
+    await inspectDisplayModeTooltip('translation-only');
+    await inspectDisplayModeTooltip('translation-only', true);
+    await popup.getByTestId('popup-display-mode').click();
+    await untilConfig(config => config.display === 1);
+    assert.equal(await popup.getByTestId('page-font-entry').getAttribute('data-font-state'), fontStateBeforeMode, '显示模式切换不得更改当前页字体选择');
+    await patchConfig({service: 'google'});
+    await inspectDisplayModeTooltip('bilingual', false, true);
+    assert.equal((await readConfig()).display, 1, 'Google 禁用状态不得修改显示模式');
+    await patchConfig({service});
+    await popup.waitForFunction(() => !document.querySelector('[data-testid="popup-display-mode"]').disabled);
+    await noNewRequests(count, 'display mode and tooltip checks without translated content');
+    report.checks.push('real display-mode clicks switch bilingual/translation-only without changing font choice; both action tooltips support hover, keyboard focus and Escape, and Google disabled hover explains the restriction');
+
     // 主面板开关在窄屏与深浅色主题下保留两态反馈，并且没有横向溢出。
     diagnostics.setPhase('light-dark-responsive-font-states');
     const layouts = {};
@@ -503,27 +569,46 @@ async function main() {
             const button = document.querySelector('[data-testid="page-font-entry"]');
             const mode = document.querySelector('[data-testid="popup-display-mode"]');
             const rect = button.getBoundingClientRect(), modeRect = mode.getBoundingClientRect();
+            const icon = button.querySelector('svg'), iconRect = icon.getBoundingClientRect();
             const slot = button.closest('.display-mode-slot'), slotStyle = getComputedStyle(slot);
             return {innerWidth, scrollWidth: document.documentElement.scrollWidth, rootWidth: root.getBoundingClientRect().width,
-              buttonLeft: rect.left, buttonRight: rect.right, buttonWidth: rect.width, buttonHeight: rect.height,
+              buttonLeft: rect.left, buttonTop: rect.top, buttonRight: rect.right, buttonWidth: rect.width, buttonHeight: rect.height,
+              iconLeft: iconRect.left, iconTop: iconRect.top, iconWidth: iconRect.width, iconHeight: iconRect.height,
+              fontStyle: icon.getAttribute('data-font-style'), iconPath: icon.querySelector('path').getAttribute('d'),
+              buttonTransform: getComputedStyle(button).transform, iconTransform: getComputedStyle(icon).transform,
               slotBackground: slotStyle.backgroundColor, slotBorderWidth: slotStyle.borderTopWidth,
               slotDivider: getComputedStyle(slot, '::after').content,
-              modeLeft: modeRect.left, fontState: button.getAttribute('data-font-state'), pressed: button.getAttribute('aria-pressed')};
+              modeLeft: modeRect.left, modeTop: modeRect.top, modeWidth: modeRect.width, modeHeight: modeRect.height,
+              fontState: button.getAttribute('data-font-state'), pressed: button.getAttribute('aria-pressed')};
           });
           assert(metrics.scrollWidth <= metrics.innerWidth + 1, `${theme}/${width} 页面横向溢出`);
           assert(metrics.buttonLeft >= -1 && metrics.buttonRight <= metrics.innerWidth + 1 && metrics.buttonWidth >= 20, '字体按钮超出视口或被压缩');
+          assert.equal(metrics.buttonWidth, 24, '桌面字体按钮宽度应保持 24px');
+          assert.equal(metrics.buttonHeight, 24, '桌面字体按钮高度应保持 24px');
+          assert.equal(metrics.iconWidth, 18, '字体图标宽度应保持 18px');
+          assert.equal(metrics.iconHeight, 18, '字体图标高度应保持 18px');
+          assert.equal(metrics.buttonTransform, 'none', '字体按钮不应通过缩放表达状态');
+          assert.equal(metrics.iconTransform, 'none', '字体图标不应通过缩放表达状态');
+          assert.equal(metrics.fontStyle, browserDefaultEnabled ? 'sans' : 'serif');
           assert(metrics.modeLeft - metrics.buttonRight >= 5.5, '两个独立功能按钮之间必须保留清晰间距');
           assert.equal(metrics.slotBackground, 'rgba(0, 0, 0, 0)', '两个独立功能不得共用底色');
           assert.equal(metrics.slotBorderWidth, '0px', '两个独立功能不得共用外框');
           assert(['none', 'normal'].includes(metrics.slotDivider), '两个独立功能不得用分隔线组成一组');
           const stateName = browserDefaultEnabled ? 'browser-default' : 'host';
+          if (browserDefaultEnabled) {
+            const host = layouts[`${theme}-${width}-host`];
+            for (const key of ['buttonLeft', 'buttonTop', 'buttonWidth', 'buttonHeight', 'iconLeft', 'iconTop', 'iconWidth', 'iconHeight', 'modeLeft', 'modeTop', 'modeWidth', 'modeHeight']) {
+              assert(Math.abs(metrics[key] - host[key]) < 0.01, `${theme}/${width} 切换字体后 ${key} 发生变化`);
+            }
+            assert.notEqual(metrics.iconPath, host.iconPath, '网页字体与浏览器默认字体应使用不同 Aa 造型');
+          }
           layouts[`${theme}-${width}-${stateName}`] = metrics;
           await shot(popup, `05-aa-${theme}-${width}-${stateName}`);
         }
       }
     }
     report.metrics.layouts = layouts;
-    report.checks.push('320/360 CSS px light/dark main panels show host and browser-default Aa states, retain separate font/display buttons, and have no horizontal overflow');
+    report.checks.push('320/360 CSS px light/dark main panels show distinct serif/sans Aa states with identical 24px buttons, 18px icons and positions, retain separate font/display buttons, and have no horizontal overflow');
     report.requests = fixture.requests.length;
     report.metrics.requestSources = fixture.requests.map(item => item.source);
     await diagnostics.flush();
