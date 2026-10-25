@@ -2515,6 +2515,101 @@ describe('site translation coverage contract', () => {
     await expect(verifySourcePartitionLedger(page, undefined, provider, 'lost-baseline')).rejects.toThrow('ledger');
   });
 
+  it('binds an indexed hover partition only to the resolved native root through restore and retranslation', async () => {
+    const {captureSourcePartitions, assertSourcePartitions, encodeControlledTranslation} = require('../scripts/site-translation/controlled-provider.cjs');
+    const {document} = parseHTML('<html><body><div class="reply">First independent native reply.</div><div class="reply">Second independent native reply.</div></body></html>');
+    const page = {evaluate: async (fn: (value: unknown) => unknown, value: unknown) => fn(value)};
+    const roots = [...document.querySelectorAll('.reply')];
+    const append = (root: Element) => {
+      const wrapper = document.createElement('span');
+      wrapper.className = 'fluent-read-bilingual-content';
+      wrapper.setAttribute('data-fr-translation-owned', 'true');
+      wrapper.textContent = encodeControlledTranslation(root.textContent);
+      root.append(wrapper);
+      return wrapper;
+    };
+    vi.stubGlobal('document', document);
+    try {
+      const ledger = await captureSourcePartitions(page, [{name: 'reply', selector: '.reply', index: 1,
+        sourcePartition: {excludeSelectors: []}}]);
+      let wrapper = append(roots[1]);
+      expect(await assertSourcePartitions(page, ledger, 'second-hover')).toMatchObject([{
+        selector: '.reply', index: 1, expectedSource: 'Second independent native reply.', ownerCount: 1,
+      }]);
+      expect(roots[0].querySelectorAll('.fluent-read-bilingual-content')).toHaveLength(0);
+      wrapper.remove();
+      expect(await assertSourcePartitions(page, ledger, 'second-restored', {restored: true}))
+        .toMatchObject([{index: 1, ownerCount: 0, restored: true}]);
+      wrapper = append(roots[1]);
+      expect(await assertSourcePartitions(page, ledger, 'second-retranslated')).toMatchObject([{index: 1, ownerCount: 1}]);
+      wrapper.remove();
+      roots[1].replaceWith(roots[1].cloneNode(true));
+      await expect(assertSourcePartitions(page, ledger, 'replaced-selected-root', {restored: true}))
+        .rejects.toThrow('native container changed: .reply/1');
+      const firstLedger = await captureSourcePartitions(page, [{name: 'first-reply', selector: '.reply', index: 0,
+        sourcePartition: {excludeSelectors: []}}]);
+      append(roots[0]);
+      expect(await assertSourcePartitions(page, firstLedger, 'explicit-zero-index'))
+        .toMatchObject([{index: 0, expectedSource: 'First independent native reply.', ownerCount: 1}]);
+    } finally {
+      delete (globalThis as Record<string, unknown>).__fluentReadControlledSourcePartitionsV1;
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it.each([-1, 0.5, '1', null, undefined, NaN, Infinity, Number.MAX_SAFE_INTEGER + 1])(
+    'rejects an explicitly invalid source partition index %s instead of silently capturing every root', async index => {
+      const {captureSourcePartitions} = require('../scripts/site-translation/controlled-provider.cjs');
+      const {document} = parseHTML('<html><body><div class="reply">A complete native reply.</div></body></html>');
+      vi.stubGlobal('document', document);
+      try {
+        const page = {evaluate: async (fn: (value: unknown) => unknown, value: unknown) => fn(value)};
+        await expect(captureSourcePartitions(page, [{selector: '.reply', index, sourcePartition: {excludeSelectors: []}}]))
+          .rejects.toThrow('index must be a non-negative safe integer');
+      } finally {
+        delete (globalThis as Record<string, unknown>).__fluentReadControlledSourcePartitionsV1;
+        vi.unstubAllGlobals();
+      }
+    });
+
+  it('keeps all native roots mandatory for an unindexed full partition and rejects missing or out-of-range targets', async () => {
+    const {captureSourcePartitions, assertSourcePartitions, encodeControlledTranslation} = require('../scripts/site-translation/controlled-provider.cjs');
+    const {document} = parseHTML('<html><body><div class="reply">First independent native reply.</div><div class="reply">Second independent native reply.</div></body></html>');
+    const page = {evaluate: async (fn: (value: unknown) => unknown, value: unknown) => fn(value)};
+    vi.stubGlobal('document', document);
+    try {
+      for (const index of [2, Number.MAX_SAFE_INTEGER]) {
+        await expect(captureSourcePartitions(page, [{selector: '.reply', index, sourcePartition: {excludeSelectors: []}}]))
+          .rejects.toThrow('index out of range');
+      }
+      await expect(captureSourcePartitions(page, [{selector: '.missing', index: 0, sourcePartition: {excludeSelectors: []}}]))
+        .rejects.toThrow('container missing');
+      const ledger = await captureSourcePartitions(page, [{name: 'all-replies', selector: '.reply',
+        sourcePartition: {excludeSelectors: []}}]);
+      const roots = [...document.querySelectorAll('.reply')];
+      const append = (root: Element) => {
+        const wrapper = document.createElement('span');
+        wrapper.className = 'fluent-read-bilingual-content';
+        wrapper.setAttribute('data-fr-translation-owned', 'true');
+        wrapper.textContent = encodeControlledTranslation(root.textContent);
+        root.append(wrapper);
+      };
+      append(roots[0]);
+      await expect(assertSourcePartitions(page, ledger, 'missing-second-reply')).rejects.toThrow('owners missing');
+      append(roots[1]);
+      expect(await assertSourcePartitions(page, ledger, 'all-replies')).toMatchObject([
+        {index: 0, expectedSource: 'First independent native reply.', ownerCount: 1},
+        {index: 1, expectedSource: 'Second independent native reply.', ownerCount: 1},
+      ]);
+      document.querySelectorAll('.fluent-read-bilingual-content').forEach(wrapper => wrapper.remove());
+      expect(await assertSourcePartitions(page, ledger, 'all-restored', {restored: true}))
+        .toMatchObject([{index: 0, restored: true}, {index: 1, restored: true}]);
+    } finally {
+      delete (globalThis as Record<string, unknown>).__fluentReadControlledSourcePartitionsV1;
+      vi.unstubAllGlobals();
+    }
+  });
+
   it('counts late dynamic nodes and fails if any observed node is untranslated', () => {
     const rules = normalizeCoverageRules([{
       name: 'dynamic-comments',
@@ -4685,6 +4780,129 @@ describe('geometry-bounded long-page scrolling',()=>{
   });
   it('retains an absolute work cap for an infinitely growing page',async()=>{
     const fixture=await scrollFixture({extent:30000,endless:true});await expect(fixture.run()).rejects.toThrow('2048');expect(fixture.moves).toBeLessThanOrEqual(2050);
+  });
+});
+
+describe('Steam discussion pinned-label source projection', () => {
+  const {encodeControlledTranslation, readControlledPageEvidenceInPage, assertControlledPageEvidence,
+    captureSourcePartitions, assertSourcePartitions} = require('../scripts/site-translation/controlled-provider.cjs');
+  const title = 'A complete title explains stable behavior.\nThe final title words remain required.';
+  const nativeTitle = '<div id="title" class="forum_topic_name"><span class="forum_topic_label sticky_label">PINNED:</span>' +
+    'A complete title explains stable behavior.<br><strong>The final title words remain required.</strong></div>';
+  const nativeContainer = `<div id="AppHubContent"><div class="forum_topics">${nativeTitle}</div></div>`;
+  const withDom = async (url: string, html: string, run: (document: Document) => unknown) => {
+    const document = parseHTML(`<html><body>${html}</body></html>`).document as unknown as Document;
+    vi.stubGlobal('document', document);
+    vi.stubGlobal('location', new URL(url));
+    try {await run(document);} finally {
+      delete (globalThis as Record<string, unknown>).__fluentReadControlledSourcePartitionsV1;
+      vi.unstubAllGlobals();
+    }
+  };
+  const appendOutput = (document: Document, text: string) => {
+    const wrapper = document.createElement('span');
+    wrapper.className = 'fluent-read-bilingual-content';
+    wrapper.setAttribute('data-fr-translation-owned', 'true');
+    wrapper.textContent = encodeControlledTranslation(text);
+    document.querySelector('#title')!.append(wrapper);
+    return wrapper;
+  };
+
+  it.each([
+    'https://steamcommunity.com/app/570/discussions/',
+    'https://steamcommunity.com/app/570/discussions/0/123456/',
+    'http://steamcommunity.com/app/42/discussions/',
+  ])('omits only the native label from complete source on %s and preserves the actual DOM', async url => {
+    await withDom(url, nativeContainer, async document => {
+      const page = {evaluate: async (fn: (value: unknown) => unknown, value: unknown) => fn(value)};
+      const ledger = await captureSourcePartitions(page, [{selector: '#title', index: 0, sourcePartition: {excludeSelectors: []}}]);
+      const label = document.querySelector('.forum_topic_label')!.outerHTML;
+      const wrapper = appendOutput(document, title), rendered = document.body.innerHTML;
+      const evidence = readControlledPageEvidenceInPage();
+      expect(assertControlledPageEvidence(evidence, 'native-pinned')).toMatchObject({owners: 1});
+      expect(evidence[0].source).toBe(title);
+      expect(evidence[0].omittedParts).toContainEqual({tag: 'span', text: 'PINNED:', reason: 'site-rule-omission'});
+      expect(await assertSourcePartitions(page, ledger, 'complete-pinned')).toMatchObject([{
+        expectedSource: title, ownerCount: 1, completeSourceMatched: true,
+      }]);
+      expect(document.body.innerHTML).toBe(rendered);
+      expect(document.querySelector('.forum_topic_label')!.outerHTML).toBe(label);
+      wrapper.remove();
+      expect(await assertSourcePartitions(page, ledger, 'restored-pinned', {restored: true})).toMatchObject([{restored: true}]);
+    });
+  });
+
+  it('projects the actual observed Chinese pinned label while requiring the entire title', async () => {
+    await withDom('https://steamcommunity.com/app/570/discussions/', nativeContainer.replace('PINNED:', '置顶：'), document => {
+      appendOutput(document, title);
+      const evidence = readControlledPageEvidenceInPage();
+      expect(assertControlledPageEvidence(evidence, 'observed-chinese-label')).toMatchObject({owners: 1});
+      expect(evidence[0].source).toBe(title);
+      expect(evidence[0].omittedParts).toContainEqual({tag: 'span', text: '置顶：', reason: 'site-rule-omission'});
+      expect(document.querySelector('.forum_topic_label')!.textContent).toBe('置顶：');
+    });
+  });
+
+  it.each([
+    'https://example.test/app/570/discussions/',
+    'https://steamcommunity.com.evil.test/app/570/discussions/',
+    'https://www.steamcommunity.com/app/570/discussions/',
+    'https://steamcommunity.com/app/570/reviews/',
+    'https://steamcommunity.com/app/not-numeric/discussions/',
+    'https://steamcommunity.com/app/570/discussions',
+    'https://steamcommunity.com/app/570/discussions-other/',
+    'ftp://steamcommunity.com/app/570/discussions/',
+  ])('keeps the same label as required source outside the exact native host/path %s', async url => {
+    await withDom(url, nativeContainer, document => {
+      appendOutput(document, title);
+      const evidence = readControlledPageEvidenceInPage();
+      expect(evidence[0].source).toContain('PINNED:');
+      expect(evidence[0].omittedParts).not.toContainEqual(expect.objectContaining({reason: 'site-rule-omission'}));
+      expect(() => assertControlledPageEvidence(evidence, 'wrong-site')).toThrow('complete source');
+    });
+  });
+
+  it.each([
+    `<div class="forum_topics">${nativeTitle}</div>`,
+    `<div id="AppHubContent">${nativeTitle}</div>`,
+    `<div id="AppHubContent"><div class="forum_topics">${nativeTitle.replace('forum_topic_name', 'commentthread_comment_text')}</div></div>`,
+    nativeContainer.replace('forum_topic_label sticky_label', 'ordinary-title-word'),
+  ])('does not omit an external or lookalike label merely because its text or class is familiar', async html => {
+    await withDom('https://steamcommunity.com/app/570/discussions/', html, document => {
+      appendOutput(document, title);
+      const evidence = readControlledPageEvidenceInPage();
+      expect(evidence[0].source).toContain('PINNED:');
+      expect(() => assertControlledPageEvidence(evidence, 'wrong-container')).toThrow('complete source');
+    });
+  });
+
+  it.each([
+    ['missing body suffix', 'A complete title explains stable behavior.'],
+    ['wrong encoded body', 'A different title explains stable behavior.\nThe final title words remain required.'],
+    ['extra encoded label', 'PINNED:' + title],
+    ['duplicated title', title + '\n' + title],
+  ])('rejects %s even after the exact source metadata omission', async (_name, output) => {
+    await withDom('https://steamcommunity.com/app/570/discussions/', nativeContainer, document => {
+      appendOutput(document, output);
+      expect(() => assertControlledPageEvidence(readControlledPageEvidenceInPage(), 'bad-output')).toThrow('complete source');
+    });
+  });
+
+  it('never removes a literal or encoded label from actual translation output', async () => {
+    await withDom('https://steamcommunity.com/app/570/discussions/', nativeContainer, document => {
+      const wrapper = appendOutput(document, title);
+      const label = document.createElement('span');
+      label.className = 'forum_topic_label';
+      label.textContent = 'PINNED:';
+      wrapper.prepend(label);
+      const literalHtml = wrapper.outerHTML;
+      expect(() => assertControlledPageEvidence(readControlledPageEvidenceInPage(), 'literal-output-label')).toThrow('complete source');
+      expect(wrapper.outerHTML).toBe(literalHtml);
+      label.textContent = encodeControlledTranslation('PINNED:');
+      const encodedHtml = wrapper.outerHTML;
+      expect(() => assertControlledPageEvidence(readControlledPageEvidenceInPage(), 'encoded-output-label')).toThrow('complete source');
+      expect(wrapper.outerHTML).toBe(encodedHtml);
+    });
   });
 });
 

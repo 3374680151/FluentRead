@@ -1763,5 +1763,147 @@
     "service": "freeTranslation",
     "notes": "Public CNN article observed HTTP200 after native main-frame exact-text Agree click in a fresh disposable profile. Observed 34 body p.paragraph-elevate, unique main h1, two body h2.subheader and two main-image captions. Caption translation belongs to the surrounding image_large-elevate__metadata inline-run owner; the renderer places a translation segment around the caption child, so descendant :has() preserves owner identity before and after rendering. Count2 and both caption source fragments remain required. Four figcaption credit nodes, byline name and visible relative timestamp are protected metadata; captions are separate siblings. Related-card paragraphs/captions are outside the required body corpus. Production baseline captured actual translation wrappers in the author, relative timestamp and two main-image credits; raw baseline failures are retained separately.",
     "prepareClickText": "Agree"
+  },
+  "steam-community-dota2-discussion-list": {
+    "tier": "quarantine",
+    "quarantineReason": "讨论列表原生标题被同卡片空链接覆盖；当前标准悬浮命中安全契约未接受该关系，不能计为required通过。保留严格全文验收和待验证悬浮契约，不放宽命中策略。",
+    "hoverHotkey": "Control",
+    "fullPageHotkey": "Alt+T",
+    "service": "freeTranslation",
+    "url": "https://steamcommunity.com/app/570/discussions/",
+    "fullPageScope": "initial-corpus",
+    "hoverSelector": "#AppHubContent .forum_topics .forum_topic_name",
+    "hoverTargets": [
+      {
+        "name": "pinned-title-native-overlay-pending",
+        "selector": "#AppHubContent .forum_topics .forum_topic_name",
+        "index": 0,
+        "textIncludes": ["HELP!"],
+        "sourceIncludes": ["HELP!"]
+      }
+    ],
+    "requiredSelectors": [
+      "#AppHubContent .forum_topics .forum_topic_name"
+    ],
+    "coverageRules": [
+      {
+        "name": "loaded-discussion-titles",
+        "selector": "#AppHubContent .forum_topics .forum_topic_name",
+        "kind": "content",
+        "minInitial": 10
+      }
+    ],
+    "forbiddenSelectors": [
+      ".forum_topic_details",
+      ".forum_topic_op",
+      ".forum_topic_label",
+      ".forum_topic_overlay",
+      ".forum_paging",
+      ".rightcol",
+      "#global_header",
+      "input.discussionSearchText"
+    ],
+    "interactionSelectors": [
+      ".forum_topic_overlay"
+    ],
+    "modes": [
+      "hover",
+      "full"
+    ],
+    "notes": "Native HTTP200:15 mixed-language titles and15 empty overlay links. Freeze all currently eligible loaded titles each pass; minInitial10, never exact15 or the whole archive. Real title Text hits its sibling overlay; core resolves the title, but current standard hover safety policy rejects this relation, so full only. Pinned labels are production-omitted metadata; retain all titles and investigate any controlled evidence mismatch instead of narrowing the corpus. Quarantine: required matrix acceptance needs both hover/full; full-only evidence cannot satisfy that gate. Latin heuristic eligibility is a test corpus, not every language on the page.",
+    "forbiddenMustExistSelectors": [
+      ".forum_topic_details",
+      ".forum_topic_op",
+      ".forum_topic_label",
+      ".forum_topic_overlay",
+      ".forum_paging",
+      ".rightcol",
+      "#global_header",
+      "input.discussionSearchText"
+    ]
+  },
+  "steam-community-dota2-crash-thread": {
+    "tier": "required",
+    "hoverHotkey": "Control",
+    "fullPageHotkey": "Alt+T",
+    "service": "freeTranslation",
+    "url": "https://steamcommunity.com/app/570/discussions/0/807973945275884795/",
+    "fullPageScope": "finite-page",
+    "hoverSelector": "#AppHubContent .forum_op > .content[id^=\"forum_op_content_\"]",
+    "requiredSelectors": [
+      "#AppHubContent .forum_op > .topic",
+      "#AppHubContent .forum_op > .content[id^=\"forum_op_content_\"]",
+      "#AppHubContent .commentthread_comment_text"
+    ],
+    "coverageRules": [
+      {
+        "name": "thread-topic",
+        "selector": "#AppHubContent .forum_op > .topic",
+        "kind": "content",
+        "minInitial": 1
+      },
+      {
+        "name": "complete-original-post",
+        "selector": "#AppHubContent .forum_op > .content[id^=\"forum_op_content_\"]",
+        "kind": "content",
+        "minInitial": 1,
+        "sourcePartition": {
+          "excludeSelectors": []
+        }
+      },
+      {
+        "name": "all-loaded-reply-bodies",
+        "selector": "#AppHubContent .commentthread_comment_text",
+        "kind": "content",
+        "minInitial": 3,
+        "sourcePartition": {
+          "excludeSelectors": []
+        }
+      }
+    ],
+    "hoverTargets": [
+      {
+        "name": "thread-topic",
+        "selector": "#AppHubContent .forum_op > .topic",
+        "index": 0
+      },
+      {
+        "name": "original-post-direct-text",
+        "selector": "#AppHubContent .forum_op > .content[id^=\"forum_op_content_\"]",
+        "index": 0,
+        "textIncludes": [
+          "1 file is from yesterday"
+        ],
+        "sourceIncludes": [
+          "Till now i have tried:"
+        ]
+      },
+      {
+        "name": "first-reply-direct-text",
+        "selector": "#AppHubContent .commentthread_comment_text",
+        "index": 0
+      }
+    ],
+    "forbiddenSelectors": [
+      ".forum_op_header",
+      ".forum_op_footer",
+      ".commentthread_comment_author",
+      ".commentthread_comment_timestamp",
+      ".commentthread_comment_actions",
+      ".forum_paging",
+      ".rightcol",
+      "#global_header",
+      "input.discussionSearchText",
+      "textarea#forum_report_reason",
+      "#AppHubContent .forum_op > .content[id^=\"forum_op_content_\"] a[href^=\"https://steamcommunity.com/linkfilter/\"]"
+    ],
+    "interactionSelectors": [
+      "#AppHubContent .forum_op > .content[id^=\"forum_op_content_\"] a[href^=\"https://steamcommunity.com/linkfilter/\"]"
+    ],
+    "modes": [
+      "hover",
+      "full"
+    ],
+    "notes": "Native HTTP200:1 title,1 complete OP and3 English replies; native pager shows1-3 of3. OP has direct Text,11 BR and one literal external-reference link. OP/all-replies sourcePartition excludeSelectors[] verifies complete native source. Each full pass freezes every reply loaded at that pass start; minInitial3 is this sample readiness floor, not an exact total. Later native replies, expansion and pagination require separate acceptance. Hover uses title, OP and reply0 with explicit-index partition capture. Preserve author/date/action/paging/search/hidden report textarea and the native literal link text/href; do not open external references. Actual .bb_code/pre/code/quote/button/reply-editor nodes are absent, so no real coverage claimed for them."
   }
 }

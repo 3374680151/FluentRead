@@ -99,6 +99,13 @@ function readControlledPageEvidenceInPage(options) {
   // 与生产 Bing 正文规则的日期 omit 完全相同；普通日期 span 和其它页面仍参与完整源文比较。
   const bingOmitted = globalThis.location?.hostname === 'www.bing.com' && globalThis.location?.pathname === '/search'
     ? '#b_results > .b_algo .b_caption .news_dt' : '';
+  // Steam 讨论标题明确 omit 此元数据；只投影原生标题下的标签，不删译文或放过多余输出。
+  const steamDiscussion = ['http:', 'https:'].includes(globalThis.location?.protocol) &&
+    globalThis.location?.hostname === 'steamcommunity.com' &&
+    /^\/app\/\d+\/discussions\//u.test(globalThis.location?.pathname || '');
+  const steamOmitted = steamDiscussion
+    ? '#AppHubContent .forum_topics .forum_topic_name .forum_topic_label' : '';
+  const siteOmitted = [bingOmitted, steamOmitted].filter(Boolean).join(',');
   const literalToken = /^[\w.+/-]+(?:(?:\s*,\s*[\w.+/-]+)+|(?:\s+--?\w[\w-]*)+)?$/u;
   const isProtected = (node, live) => node.matches(protectedSelector) || siteProtected && node.matches(siteProtected) ||
     sqliteDocument && node.matches('button') ||
@@ -140,7 +147,7 @@ function readControlledPageEvidenceInPage(options) {
               /^(?:0(?:\.\d+)?|1(?:\.0+)?)px$/u.test(style.width) && /^(?:0(?:\.\d+)?|1(?:\.0+)?)px$/u.test(style.height)) omit = true;
         }
       } catch { /* Missing styles never exempt source text. */ }
-      if (bingOmitted && node.matches(bingOmitted)) omit = true;
+      if (siteOmitted && node.matches(siteOmitted)) omit = true;
       if (omit) clones[index].remove();
     });
     copy.querySelectorAll(artifact).forEach(node => node.remove());
@@ -159,9 +166,18 @@ function readControlledPageEvidenceInPage(options) {
       if (!Array.isArray(partitionRequest.configs) || !partitionRequest.configs.length) throw new Error('Source partitions require configurations');
       const records = partitionRequest.configs.flatMap(config => {
         const excludeSelectors = config.sourcePartition?.excludeSelectors ?? [];
+        const indexed = Object.prototype.hasOwnProperty.call(config, 'index');
+        if (indexed && (!Number.isSafeInteger(config.index) || config.index < 0)) {
+          throw new Error('Source partition index must be a non-negative safe integer');
+        }
         const roots = [...document.querySelectorAll(config.selector)];
         if (!roots.length) throw new Error(`Source partition container missing: ${config.selector}`);
-        return roots.map((root, index) => {
+        if (indexed && config.index >= roots.length) throw new Error(`Source partition index out of range: ${config.selector}/${config.index}`);
+        // Hover supplies the resolved raw DOM index; full coverage omits index and
+        // retains every native container. Keep the raw index for later identity checks.
+        const selectedRoots = indexed ? [{root: roots[config.index], index: config.index}]
+          : roots.map((root, index) => ({root, index}));
+        return selectedRoots.map(({root, index}) => {
           if (excludeSelectors.some(selector => root.matches(selector))) throw new Error('Source partition excludes its entire container');
           if (root.matches(partitionArtifact) || partitionRows(root, excludeSelectors, partitionArtifact).length) {
             throw new Error('Source partition baseline already has translation artifacts');
@@ -203,7 +219,7 @@ function readControlledPageEvidenceInPage(options) {
               /^(?:0(?:\.\d+)?|1(?:\.0+)?)px$/u.test(style.width) && /^(?:0(?:\.\d+)?|1(?:\.0+)?)px$/u.test(style.height)) reason = 'computed-clipped-accessibility';
         }
       } catch { /* Unavailable styles cannot exempt visible source text. */ }
-      if (bingOmitted && node.matches(bingOmitted)) reason = 'site-rule-omission';
+      if (siteOmitted && node.matches(siteOmitted)) reason = 'site-rule-omission';
       if (reason) {omittedParts.push({tag: node.localName, text: node.textContent, reason}); clonedElements[position].remove();}
     });
     source.querySelectorAll(artifact).forEach(node => node.remove());
