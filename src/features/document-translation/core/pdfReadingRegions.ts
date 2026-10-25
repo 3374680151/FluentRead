@@ -1,7 +1,7 @@
 /**
  * @file src/features/document-translation/core/pdfReadingRegions.ts
  * 文件职责：在可读 PDF 计划中把同一数学式、编号和图表的原像素保留为完整区域。
- * 主要内容：定义共用的文字与原图条目；以片段编号或源块物理区域区分普通文字与共用 -1 哨兵的保留块，复用已保留区域、逐行几何与拉伸定界符的原始字形，保守补全带编号的独立单行数学式，按局部间距合并数学组件，每次扩张检查正文和栏间距；条件需逐行基线对应，细路径只扩展既有数学组；仅移动图片的插入点，文字对象、字符及相互顺序不变。
+ * 主要内容：定义共用的文字与原图条目；纯文字计划直接保留条目与顺序，跳过区域几何计算；以片段编号或源块物理区域区分普通文字与共用 -1 哨兵的保留块，复用已保留区域、逐行几何与拉伸定界符的原始字形，保守补全带编号的独立单行数学式，按局部间距合并数学组件，每次扩张检查正文和栏间距；条件需逐行基线对应，细路径只扩展既有数学组；仅移动图片的插入点，文字对象、字符及相互顺序不变。
  * 模块边界：纯数据转换，不解析 PDF、不重建公式、不调用字体、DOM、Canvas、翻译或文件 I/O。
  */
 import type {PdfDocumentBlock, PdfDocumentLine, PdfDocumentPage, PdfDocumentRun} from './document';
@@ -142,6 +142,7 @@ function stretchedDelimiterSubjects(blocks: readonly PdfDocumentBlock[], compone
 
 /** 输入文字先由原计划确定；新增图片 hull 不参与文字删除或译文改写。 */
 export function groupPdfReadingRegions(page: PdfDocumentPage, entries: readonly PdfReadingEntry[], sourceControlIndexes: ReadonlySet<number>): PdfReadingEntry[] {
+    if (!entries.some(entry => entry.kind === 'region')) return entries.slice();
     const texts = entries.filter((entry): entry is PdfReadingTextEntry => entry.kind === 'text');
     const textIndexes = new Set(texts.filter(entry => entry.segmentIndex >= 0).map(entry => entry.segmentIndex));
     const blocks = page.blocks.filter(valid);

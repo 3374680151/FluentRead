@@ -140,6 +140,12 @@ GitHub 仓库列表和 Issue 列表同时保留旧容器与当前结构的保护
 
 `contentUiRuntime` 通过真实 feature registry 和悬浮球 runtime 验证宿主被页面移除后释放旧订阅并重建、旧排队回调隔离、停用后的迟到挂载移除与再次启用恢复；单纯替换 body 保留原实例。Shadow UI 工厂与组件端口在该测试中受控，不等于真实 Vue 挂载或网站验收。
 
+`popupBootstrap` 验证设置页等待配置及界面资源时的退出与水合状态复核；阻止迟到挂载后，启动失败仍须由真实入口消费拒绝并提供手动恢复提示，不能留下空白页。`pageDiscourseContext` 验证候选本身就是文章或正文根时不读取根外兄弟和文档标题；请求等待期间移入另一材料须拒绝旧依据，同一材料内的合法移动继续有效。
+
+`documentTextWrappedParagraphs` 验证补充平面汉字与普通汉字之间的固定宽度折行，覆盖 LF、CRLF、CR、边界空白及 Latin/emoji 对照，导出原文保持不变。`pdfReadingRegions` 与实际阅读计划消费者验证纯文本计划无保留区域时直接保留条目身份和顺序，不访问区域几何；操作计数只说明跳过的计算，不代表实际 PDF 渲染耗时。
+
+`materialSource` 验证主动收藏新材料时立即清理旧恢复失败提示。`translationStatsAggregation`、`modelUsageAggregation` 与 `usageDashboardLifecycle` 验证已有记录起点（含 null 和 0）不再触发额外全量起点扫描，缺省时逐项归约而不展开无界函数实参；稀疏直方图的零或负分位数也须返回有限下界。大数组属于纯聚合合同测试，不能据此声称正常有界存储曾发生界面崩溃。
+
 `inputBox` 与 `inputTranslationContentFeature` 覆盖 fieldset 继承禁用、首个 legend 例外、响应前再次检查及提示定位的按帧合并与卸载清理。`videoCaptionPlatformRuntime` 保证失败句 A→B→A 在退避期内仍可手动重试；`videoPretranslationController` 检查换句不重绑原生字幕监听，轨道增删只操作变化项。`paragraphCopyCore` 验证复制代码时保留首行缩进及内部空行。
 
 `emojiLiterals` 对简单 emoji 检查零分段器构造，复杂字素每次扫描只构造一次；`harnessMemoryRecall` 用 200 条学习笔记检查无检索信息的查询不构建搜索投影，并保留偏好排序和每次重读。操作计数和 Node 微基准只证明所测计算减少，不代表页面帧率、输入延迟、实机内存或全项目无缺陷。函数索引、人工审查与实际行为验证须分别记录，未审函数不能因类型检查或测试总数而视为审查完成。

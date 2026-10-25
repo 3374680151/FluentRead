@@ -1,5 +1,5 @@
 import {afterEach, beforeEach, describe, expect, it, vi} from 'vitest';
-import {parseHTML} from 'linkedom';
+import {Event as DomEvent, parseHTML} from 'linkedom';
 
 const ports = vi.hoisted(() => ({
     config: {uiLanguageSetupCompleted: false, uiLanguage: 'en-US', interfaceFont: 'system'},
@@ -7,7 +7,7 @@ const ports = vi.hoisted(() => ({
     mainGate: undefined as Promise<void> | undefined, onboardingGate: undefined as Promise<void> | undefined,
     mainLoaded: vi.fn(), onboardingLoaded: vi.fn(), ensureBundle: vi.fn(async (_language: unknown) => {}), font: vi.fn(async (_font: unknown) => {}),
     browser: 'chrome', platform: vi.fn(), currentTab: vi.fn(), tabApi: 'present' as 'present' | 'missing-tabs' | 'missing-method', unmountCallbacks: [] as Array<()=>void>,
-    createApp: vi.fn(), plugin: vi.fn(() => ({kind: 'i18n'})), use: vi.fn(), component: vi.fn(), mount: vi.fn(),
+    createApp: vi.fn(), plugin: vi.fn(() => ({kind: 'i18n'})), use: vi.fn(), component: vi.fn(), mount: vi.fn(), anonymousElement: false,
 }));
 vi.mock('webextension-polyfill', () => ({default: {
     runtime: {getPlatformInfo: ports.platform},
@@ -17,12 +17,20 @@ vi.mock('../src/platform/browser/capabilities', () => ({browserCapabilities: {ge
 vi.mock('vue', () => ({createApp: ports.createApp}));
 vi.mock('element-plus/es/components/base/style/css', () => ({}));
 vi.mock('element-plus/es/components/tooltip/style/css', () => ({}));
-vi.mock('@element-plus/icons-vue', () => ({Coffee: {kind: 'coffee'}}));
+vi.mock('@element-plus/icons-vue', () => ({Coffee: {kind: 'coffee'}, ...Object.fromEntries(
+    ['CircleCheckFilled', 'Download', 'Edit', 'InfoFilled', 'Loading', 'Refresh', 'Setting', 'Upload', 'Warning', 'WarningFilled'].map(name => [name, {kind: name}]),
+)}));
+vi.mock('element-plus', () => Object.fromEntries(
+    ['ElButton', 'ElDialog', 'ElIcon', 'ElInput', 'ElInputNumber', 'ElOption', 'ElOptionGroup', 'ElSwitch', 'ElTooltip']
+        .map(name => [name, {get name() {return name === 'ElDialog' && ports.anonymousElement ? undefined : name;}}]),
+));
+vi.mock('../src/app/options/OptionsApp.vue', () => ({default: {kind: 'options'}}));
+vi.mock('../src/ui/components/UiSelect.vue', () => ({default: {kind: 'ui-select'}}));
 vi.mock('../src/services/config/store', () => ({config: ports.config, get configReady() {return ports.ready;}, getConfigHydrationStatus: () => ports.hydration}));
 vi.mock('../src/ui/i18n', () => ({createUiI18nPlugin: ports.plugin}));
 vi.mock('../src/platform/i18n/uiLanguageBundles', () => ({ensureUiLanguageBundle: ports.ensureBundle}));
 vi.mock('../src/ui/interfaceAppearance', () => ({prepareInterfaceFont: ports.font}));
-function deferred() {let resolve!: () => void; const promise = new Promise<void>(yes => {resolve = yes;}); return {promise, resolve};}
+function deferred() {let resolve!: () => void, reject!: (error: Error) => void; const promise = new Promise<void>((yes, no) => {resolve = yes;reject = no;}); return {promise, resolve, reject};}
 function pageTransition(type: 'pagehide' | 'pageshow', persisted: boolean) {
     const event = new Event(type); Object.defineProperty(event, 'persisted', {value: persisted}); window.dispatchEvent(event);
 }
@@ -32,7 +40,7 @@ beforeEach(async () => {
     vi.resetModules(); vi.clearAllMocks(); ports.ready = Promise.resolve(); ports.hydration = 'ready'; ports.mainGate = undefined; ports.onboardingGate = undefined;
     Object.assign(ports.config, {uiLanguageSetupCompleted: false, uiLanguage: 'en-US', interfaceFont: 'system'});
     ports.font.mockReset().mockResolvedValue(undefined); ports.ensureBundle.mockReset().mockResolvedValue(undefined);
-    ports.browser='chrome';ports.platform.mockReset().mockResolvedValue({os:'mac'});ports.unmountCallbacks=[];
+    ports.browser='chrome';ports.platform.mockReset().mockResolvedValue({os:'mac'});ports.unmountCallbacks=[];ports.anonymousElement=false;
     ports.tabApi='present';ports.currentTab.mockReset().mockResolvedValue(undefined);
     ports.mount.mockReset();ports.createApp.mockReturnValue({use: ports.use, component: ports.component, mount: ports.mount,onUnmount: (fn:()=>void)=>ports.unmountCallbacks.push(fn)});
     vi.stubGlobal('document', parseHTML('<html><body></body></html>').document);
@@ -43,6 +51,150 @@ beforeEach(async () => {
     bootstrap = await import('../src/app/popup/mount');
 });
 afterEach(() => {ports.unmountCallbacks.forEach(fn=>fn());vi.unstubAllGlobals();});
+
+describe('Options startup lifecycle', () => {
+    async function optionsEntry() {
+        // 浏览器样式作为显示端口；Node 不执行 Element Plus 导入的原始 CSS。
+        for (const name of ['button','dialog','icon','input','input-number','option','option-group','popover','select','switch','message','message-box','color-picker']) {
+            vi.doMock(`element-plus/es/components/${name}/style/css`, () => ({}));
+        }
+        return import('../src/app/options');
+    }
+    it('waits for configuration and UI resources, mounts once, and releases its startup listener', async () => {
+        const config = deferred(), language = deferred();ports.ready=config.promise;ports.ensureBundle.mockReturnValue(language.promise);
+        const add=vi.spyOn(window,'addEventListener'),remove=vi.spyOn(window,'removeEventListener');
+        const {mountOptionsApp}=await optionsEntry();const pending=mountOptionsApp('#settings');
+        expect(ports.ensureBundle).not.toHaveBeenCalled();config.resolve();await vi.waitFor(()=>expect(ports.ensureBundle).toHaveBeenCalledWith('en-US'));
+        expect(ports.createApp).not.toHaveBeenCalled();language.resolve();await pending;
+        expect(ports.font).toHaveBeenCalledWith('system');expect(ports.createApp).toHaveBeenCalledWith({kind:'options'});
+        expect(ports.mount).toHaveBeenCalledOnce();expect(ports.mount).toHaveBeenCalledWith('#settings');
+        const listener=add.mock.calls.find(([type])=>type==='pagehide')?.[1];expect(listener).toBeTypeOf('function');
+        expect(remove).toHaveBeenCalledWith('pagehide',listener);pageTransition('pagehide',false);expect(ports.mount).toHaveBeenCalledOnce();
+    });
+    it.each(['loading','blocked'] as const)('rejects resolved configuration with %s hydration before preparing assets', async hydration => {
+        ports.hydration=hydration;const remove=vi.spyOn(window,'removeEventListener');const {mountOptionsApp}=await optionsEntry();
+        await expect(mountOptionsApp('#settings')).rejects.toThrow('Options configuration is not ready');
+        expect(ports.ensureBundle).not.toHaveBeenCalled();expect(ports.font).not.toHaveBeenCalled();expect(ports.createApp).not.toHaveBeenCalled();
+        expect(remove).toHaveBeenCalledWith('pagehide',expect.any(Function));
+    });
+    it.each(['language','font'] as const)('rechecks hydration after pending %s assets and releases its listener', async asset => {
+        const gate=deferred();(asset==='language'?ports.ensureBundle:ports.font).mockReturnValue(gate.promise);
+        const remove=vi.spyOn(window,'removeEventListener');const {mountOptionsApp}=await optionsEntry();const pending=mountOptionsApp('#settings');
+        const outcome=expect(pending).rejects.toThrow('Options configuration is not ready');
+        await vi.waitFor(()=>expect(ports.font).toHaveBeenCalledOnce());ports.hydration='blocked';gate.resolve();await outcome;
+        expect(ports.createApp).not.toHaveBeenCalled();expect(remove).toHaveBeenCalledWith('pagehide',expect.any(Function));
+    });
+    it.each(['config','language','font'] as const)('does not mount after pagehide during pending %s work, including a later pageshow', async stage => {
+        const gate=deferred();if(stage==='config')ports.ready=gate.promise;else(stage==='language'?ports.ensureBundle:ports.font).mockReturnValue(gate.promise);
+        const remove=vi.spyOn(window,'removeEventListener');const {mountOptionsApp}=await optionsEntry();const pending=mountOptionsApp('#settings');
+        if(stage!=='config')await vi.waitFor(()=>expect(ports.font).toHaveBeenCalledOnce());
+        pageTransition('pagehide',true);pageTransition('pageshow',true);ports.hydration='blocked';gate.resolve();await pending;
+        expect(ports.createApp).not.toHaveBeenCalled();expect(remove).toHaveBeenCalledWith('pagehide',expect.any(Function));
+        if(stage==='config')expect(ports.ensureBundle).not.toHaveBeenCalled();
+    });
+    it.each(['config','language','font','mount'] as const)('propagates %s failure and removes its startup listener', async stage => {
+        const failure=Error('startup failed');if(stage==='config'){ports.ready=Promise.reject(failure);void ports.ready.catch(()=>{});}
+        else if(stage==='language')ports.ensureBundle.mockRejectedValue(failure);else if(stage==='font')ports.font.mockRejectedValue(failure);else ports.mount.mockImplementation(()=>{throw failure;});
+        const remove=vi.spyOn(window,'removeEventListener');const {mountOptionsApp}=await optionsEntry();await expect(mountOptionsApp('#settings')).rejects.toBe(failure);
+        expect(remove).toHaveBeenCalledWith('pagehide',expect.any(Function));
+        if(stage!=='mount')expect(ports.createApp).not.toHaveBeenCalled();
+    });
+    it('supports a document-only host without a Window event target', async () => {
+        vi.stubGlobal('window',undefined);const {mountOptionsApp}=await optionsEntry();await mountOptionsApp('#settings');
+        expect(ports.mount).toHaveBeenCalledOnce();expect(ports.mount).toHaveBeenCalledWith('#settings');
+    });
+    it('keeps shared installer root ownership explicit and skips components without a public name', async () => {
+        const {installOptionsApp}=await optionsEntry();const app={use:ports.use,component:ports.component} as unknown as import('vue').App;
+        installOptionsApp(app);expect(ports.plugin).toHaveBeenLastCalledWith({documentRoot:document.body,documentTitleKey:'metadata.optionsTitle',uiRoot:undefined});
+        expect(ports.component).toHaveBeenCalledWith('ElSelect',{kind:'ui-select'});expect(ports.component).toHaveBeenCalledWith('ElDialog',expect.any(Object));
+        ports.component.mockClear();ports.anonymousElement=true;const root=document.createElement('section');
+        installOptionsApp(app,{documentRoot:null,uiRoot:root,documentTitleKey:'owned-title'});
+        expect(ports.plugin).toHaveBeenLastCalledWith({documentRoot:null,documentTitleKey:'owned-title',uiRoot:root});
+        expect(ports.component.mock.calls.some(([name])=>name==='ElDialog')).toBe(false);
+        expect(ports.component).toHaveBeenCalledWith('Coffee',{kind:'coffee'});
+    });
+
+    describe('Options page startup recovery', () => {
+        const reload=vi.fn(),unhandled=vi.fn();
+        beforeEach(() => {
+            document.body.innerHTML='<div id="app"></div>';reload.mockClear();unhandled.mockClear();
+            vi.stubGlobal('location',{reload});process.on('unhandledRejection',unhandled);
+        });
+        afterEach(() => {
+            pageTransition('pagehide',false);process.off('unhandledRejection',unhandled);
+            vi.useRealTimers();expect(unhandled).not.toHaveBeenCalled();
+        });
+        async function startPage() {await optionsEntry();await import('../entrypoints/options/main');}
+        function expectListenersReleased(add: {mock: {calls: readonly (readonly unknown[])[]}},remove: {mock: {calls: readonly (readonly unknown[])[]}}) {
+            const listeners=add.mock.calls.filter(([type])=>type==='pagehide').map(([,listener])=>listener);
+            expect(listeners).toHaveLength(2);
+            for(const listener of listeners)expect(remove).toHaveBeenCalledWith('pagehide',listener);
+        }
+        it.each(['blocked','config','language','font','mount'] as const)('handles %s startup failure with safe feedback and manual recovery',async stage=>{
+            const failure=Error('Bearer SECRET https://private.example/?token=SECRET');
+            if(stage==='blocked')ports.hydration='blocked';
+            else if(stage==='config'){ports.ready=Promise.reject(failure);void ports.ready.catch(()=>{});}
+            else if(stage==='language')ports.ensureBundle.mockRejectedValue(failure);
+            else if(stage==='font')ports.font.mockRejectedValue(failure);
+            else ports.mount.mockImplementation(()=>{throw failure;});
+            const add=vi.spyOn(window,'addEventListener'),remove=vi.spyOn(window,'removeEventListener');
+            await startPage();await vi.waitFor(()=>expect(document.querySelector('strong')?.textContent).toBe('暂时无法打开流畅阅读'));
+            const root=document.querySelector('#app')!;
+            expect(root.textContent).toContain('已保存的偏好会保留');expect(root.innerHTML).not.toMatch(/SECRET|Bearer|private\.example|token|Error|stack/);
+            expect(root.querySelector('[role=status]')).not.toBeNull();expect(root.querySelectorAll('button')).toHaveLength(1);
+            expect(reload).not.toHaveBeenCalled();if(stage!=='mount')expect(ports.createApp).not.toHaveBeenCalled();
+            // 自有 linkedom 显示端口使用其 Event 构造；类型声明经 DOM 接口对接，不改变运行时事件。
+            const button=root.querySelector('button')!;button.dispatchEvent(new DomEvent('click') as unknown as Event);expect(reload).toHaveBeenCalledOnce();
+            pageTransition('pagehide',false);expectListenersReleased(add,remove);button.dispatchEvent(new DomEvent('click') as unknown as Event);expect(reload).toHaveBeenCalledOnce();
+            await new Promise<void>(resolve=>setImmediate(resolve));
+        });
+        it.each(['language','font'] as const)('shows recoverable failure when hydration blocks during %s preparation',async asset=>{
+            const gate=deferred();(asset==='language'?ports.ensureBundle:ports.font).mockReturnValue(gate.promise);
+            await startPage();await vi.waitFor(()=>expect(ports.font).toHaveBeenCalledOnce());ports.hydration='blocked';gate.resolve();
+            await vi.waitFor(()=>expect(document.querySelector('strong')?.textContent).toBe('暂时无法打开流畅阅读'));
+            expect(ports.createApp).not.toHaveBeenCalled();expect(document.querySelectorAll('button')).toHaveLength(1);
+        });
+        it('releases startup feedback on a successful mount without leaving a recovery action',async()=>{
+            const add=vi.spyOn(window,'addEventListener'),remove=vi.spyOn(window,'removeEventListener');
+            await startPage();await vi.waitFor(()=>expect(ports.mount).toHaveBeenCalledOnce());
+            expectListenersReleased(add,remove);expect(document.querySelector('[role=status]')).toBeNull();expect(reload).not.toHaveBeenCalled();
+        });
+        it('clears slow startup feedback after resources become ready and disables its old retry button',async()=>{
+            vi.useFakeTimers();const gate=deferred();ports.ensureBundle.mockReturnValue(gate.promise);
+            const add=vi.spyOn(window,'addEventListener'),remove=vi.spyOn(window,'removeEventListener');
+            // 真实 Vue mount 接管根节点；其余测试将 Vue 作为可观测显示端口。
+            ports.mount.mockImplementation(()=>{document.querySelector('#app')!.replaceChildren();});
+            await startPage();await vi.advanceTimersByTimeAsync(5000);
+            expect(document.querySelector('strong')?.textContent).toBe('正在读取设置…');const button=document.querySelector('button')!;
+            gate.resolve();await vi.waitFor(()=>expect(ports.mount).toHaveBeenCalledOnce());
+            expect(document.querySelector('[role=status]')).toBeNull();expectListenersReleased(add,remove);expect(vi.getTimerCount()).toBe(0);
+            button.dispatchEvent(new DomEvent('click') as unknown as Event);expect(reload).not.toHaveBeenCalled();
+        });
+        it.each(['config','language','font'] as const)('stays silent after pagehide while pending %s resolves or rejects',async stage=>{
+            for(const rejected of [false,true]) {
+                const gate=deferred();ports.ready=Promise.resolve();ports.ensureBundle.mockResolvedValue(undefined);ports.font.mockResolvedValue(undefined);
+                if(stage==='config')ports.ready=gate.promise;else(stage==='language'?ports.ensureBundle:ports.font).mockReturnValue(gate.promise);
+                vi.resetModules();const add=vi.spyOn(window,'addEventListener'),remove=vi.spyOn(window,'removeEventListener');
+                await startPage();if(stage!=='config')await vi.waitFor(()=>expect(ports.font).toHaveBeenCalled());
+                pageTransition('pagehide',true);pageTransition('pageshow',true);
+                document.querySelector('#app')!.textContent='New page owns this root';
+                if(rejected)gate.reject(Error('SECRET late failure'));else gate.resolve();
+                await vi.waitFor(()=>expectListenersReleased(add,remove));
+                expect(document.querySelector('#app')!.textContent).toBe('New page owns this root');expect(ports.createApp).not.toHaveBeenCalled();
+                expect(reload).not.toHaveBeenCalled();await new Promise<void>(resolve=>setImmediate(resolve));
+                add.mockRestore();remove.mockRestore();ports.font.mockClear();
+            }
+        });
+        it('can reload a blocked startup and mount once readiness is restored in the new document',async()=>{
+            ports.hydration='blocked';await startPage();await vi.waitFor(()=>expect(document.querySelector('button')).not.toBeNull());
+            const oldButton=document.querySelector('button')!;oldButton.dispatchEvent(new DomEvent('click') as unknown as Event);expect(reload).toHaveBeenCalledOnce();
+            pageTransition('pagehide',false);vi.resetModules();ports.hydration='ready';document.body.innerHTML='<div id="app"></div>';
+            await startPage();await vi.waitFor(()=>expect(ports.mount).toHaveBeenCalledOnce());
+            expect(ports.mount).toHaveBeenCalledWith('#app');expect(document.querySelector('[role=status]')).toBeNull();
+            oldButton.dispatchEvent(new DomEvent('click') as unknown as Event);expect(reload).toHaveBeenCalledOnce();
+        });
+    });
+});
 
 describe('Popup fresh configuration bootstrap', () => {
     it.each([false,true])('Safari coarse 对首次完成=%s 的根启用自有填宽且卸载释放',async completed=>{
