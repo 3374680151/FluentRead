@@ -5,6 +5,26 @@ import {resolve} from 'node:path';
 import * as ts from 'typescript';
 import { Config, normalizeConfig } from '@/src/core/config/model';
 import {GLOSSARY_LIMITS} from '@/src/core/glossary';
+describe('浏览器默认译文字体配置', () => {
+    it('浏览器默认译文字体默认关闭，仅严格布尔 true 开启，导入导出保留选择且不改原有外观', () => {
+        expect(new Config().browserDefaultTranslationFont).toBe(false);
+        expect(normalizeConfig(undefined).browserDefaultTranslationFont).toBe(false);
+        expect(normalizeConfig({}).browserDefaultTranslationFont).toBe(false);
+        for (const browserDefaultTranslationFont of [undefined, null, '', 'true', 'false', 0, 1, {}, []]) {
+            expect(normalizeConfig({browserDefaultTranslationFont}).browserDefaultTranslationFont).toBe(false);
+        }
+        for (const browserDefaultTranslationFont of [true, false]) {
+            const source = {browserDefaultTranslationFont, translationAppearance: {fontFamily: 'mono', fontScale: 112}};
+            const normalized = normalizeConfig(source);
+            expect(normalized.browserDefaultTranslationFont).toBe(browserDefaultTranslationFont);
+            expect(normalized.translationAppearance).toMatchObject(source.translationAppearance);
+            const imported = normalizeConfig(JSON.parse(JSON.stringify(normalized)));
+            expect(imported.browserDefaultTranslationFont).toBe(browserDefaultTranslationFont);
+            expect(imported.translationAppearance).toEqual(normalized.translationAppearance);
+            expect(source).toEqual({browserDefaultTranslationFont, translationAppearance: {fontFamily: 'mono', fontScale: 112}});
+        }
+    });
+});
 describe('单图本地识别方式配置', () => {
     it('新配置、缺失和非法值默认 PaddleOCR，显式引擎选择可往返且不改变漫画开关', () => {
         expect(new Config().imageTranslationOcrEngine).toBe('paddle');

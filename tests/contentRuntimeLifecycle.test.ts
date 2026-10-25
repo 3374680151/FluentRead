@@ -1,7 +1,7 @@
 /**
  * @file tests/contentRuntimeLifecycle.test.ts
  * 文件职责：验证内容应用启动、配置等待、页面暂停恢复与离开时的生命周期边界。
- * 主要内容：验证文章导航、锚点跳转、禁用与恢复后的触发归属，以及材料生命周期、原始 XML、失效上下文和伪造事件；另经真实字体消息、输入翻译、悬浮与信息高亮入口验证配置代次、站点许可、后端端口和清理联动。
+ * 主要内容：验证文章导航、锚点跳转、禁用与恢复后的触发归属，以及材料生命周期、原始 XML、失效上下文和伪造事件；另经全局字体配置、只读诊断、输入翻译、悬浮与信息高亮入口验证配置代次、站点许可、后端端口和清理联动。
  * 模块边界：常规生命周期隔离无关 feature；集成场景运行真实消息、字体、输入、悬浮与高亮生产控制器，仅提供确定性 DOM 布局、CSS Highlight、Shadow UI 和后端消息端口，不声称覆盖真实浏览器或在线翻译服务。
  */
 import {afterEach, beforeEach, describe, expect, it, vi} from 'vitest';
@@ -15,6 +15,7 @@ const mocks = vi.hoisted(() => ({
     realComposition: false, createUi: vi.fn(),
     config: {
         on: true, autoTranslate: false, alwaysTranslateDomains: [] as string[], disabledExtensionDomains: [] as string[], bilingualSentenceHighlightEnabled: true,
+        browserDefaultTranslationFont: false,
         disableFloatingBall: true, disableSelectionTranslator: true, disableImageTranslator: true,
         selectionAreaEnabled: false, translationProgressPanelEnabled: false,
         writing: {enabled: false}, inputBoxTranslationTrigger: 'disabled', paragraphCopyEnabled: false, vocabularyReencounterEnabled: false,
@@ -447,6 +448,7 @@ describe('content composition root 冷启动与暂停恢复', () => {
         mocks.languageBundleWait = undefined;
         mocks.realComposition = false;
         mocks.config.on = true;
+        mocks.config.browserDefaultTranslationFont = false;
         mocks.pageFontEnabled = false;
         mocks.config.autoTranslate = false;
         Object.assign(mocks.config, {disableFloatingBall: true, disableSelectionTranslator: true, disableImageTranslator: true, selectionAreaEnabled: false, translationProgressPanelEnabled: false, imageTranslationMangaEnabled: false, selectionTranslatorMode: 'bilingual'});
@@ -480,30 +482,59 @@ describe('content composition root 冷启动与暂停恢复', () => {
 
     afterEach(() => { invalidated?.(); vi.unstubAllGlobals(); });
 
-    it('当前页字体通过消息状态装配，普通锚点保留，文章路由、总开关、暂停和卸载均清理', async () => {
+    it('全局字体在水合后启用并跨锚点和文章路由保留，停用与 BFCache 暂停撤样式后按原偏好恢复', async () => {
+        mocks.config.browserDefaultTranslationFont = true;
         const {startContentApp} = await import('@/src/app/content/runtime');
         const starting = startContentApp(context as never); ready(); await starting;
-        const state = mocks.createMessageHandler.mock.calls[0]![1] as {pageTranslationFont: {read(): boolean; set(value: boolean): boolean}};
-        state.pageTranslationFont.set(true);
+        const state = mocks.createMessageHandler.mock.calls[0]![1] as {pageTranslationFont: {read(): boolean}};
+        expect(state.pageTranslationFont.read()).toBe(true);
         Object.assign(page, {location: {href: 'https://example.com/article#contents'}});
         document.dispatchEvent(new Event('fluentread-route-change'));
         expect(state.pageTranslationFont.read()).toBe(true);
         expect(mocks.pageFontReset).not.toHaveBeenCalled();
         Object.assign(page, {location: {href: 'https://example.com/next'}});
         document.dispatchEvent(new Event('fluentread-route-change'));
-        expect(state.pageTranslationFont.read()).toBe(false);
-        state.pageTranslationFont.set(true);
+        expect(state.pageTranslationFont.read()).toBe(true);
+        expect(mocks.pageFontReset).not.toHaveBeenCalled();
         mocks.config.on = false;
         mocks.subscribeConfig.mock.calls[0]![0](mocks.config);
         expect(state.pageTranslationFont.read()).toBe(false);
+        expect(mocks.config.browserDefaultTranslationFont).toBe(true);
         mocks.config.on = true;
         mocks.subscribeConfig.mock.calls[0]![0](mocks.config);
         await vi.waitFor(() => expect(mocks.installPageStyles).toHaveBeenCalledTimes(2));
-        state.pageTranslationFont.set(true);
+        expect(state.pageTranslationFont.read()).toBe(true);
         transition(page, 'pagehide', true);
         expect(state.pageTranslationFont.read()).toBe(false);
+        mocks.subscribeConfig.mock.calls[0]![0](mocks.config);
+        expect(state.pageTranslationFont.read()).toBe(false);
+        expect(mocks.config.browserDefaultTranslationFont).toBe(true);
+        transition(page, 'pageshow', true);
+        await vi.waitFor(() => expect(mocks.installPageStyles).toHaveBeenCalledTimes(3));
+        expect(state.pageTranslationFont.read()).toBe(true);
         invalidated();
+        expect(state.pageTranslationFont.read()).toBe(false);
+        expect(mocks.config.browserDefaultTranslationFont).toBe(true);
         expect(mocks.pageFontDispose).toHaveBeenCalledOnce();
+    });
+
+    it('全局字体配置 true/false 即时同步，刷新重建运行时仍读取保存的偏好', async () => {
+        const {startContentApp} = await import('@/src/app/content/runtime');
+        const starting = startContentApp(context as never); ready(); await starting;
+        const readFont = () => mocks.createMessageHandler.mock.calls.at(-1)![1].pageTranslationFont.read();
+        expect(readFont()).toBe(false);
+        for (const enabled of [true, false, true]) {
+            mocks.config.browserDefaultTranslationFont = enabled;
+            mocks.subscribeConfig.mock.calls[0]![0](mocks.config);
+            expect(readFont()).toBe(enabled);
+        }
+        invalidated();
+        expect(readFont()).toBe(false);
+        expect(mocks.config.browserDefaultTranslationFont).toBe(true);
+        await startContentApp(context as never);
+        expect(mocks.createMessageHandler).toHaveBeenCalledTimes(2);
+        expect(readFont()).toBe(true);
+        expect(mocks.config.browserDefaultTranslationFont).toBe(true);
     });
 
     it('恢复原文后进入下一篇文章重启始终翻译，锚点和重复路由不重复触发', async () => {
@@ -966,17 +997,34 @@ describe('content composition root 的真实页面入口联动', () => {
     });
     afterEach(() => {dispose(); mocks.realComposition = false; vi.useRealTimers(); vi.unstubAllGlobals();});
 
-    it('runtime 字体消息更新真实样式并发通知，站点停用清除样式且拒绝旧页面写入', async () => {
+    it('全局字体配置更新真实样式并发通知，站点停用清除样式后重新启用恢复偏好，旧单页写入无效', async () => {
         const changed = vi.fn(); doc.addEventListener('fluentread-page-translation-font-changed', changed);
         const state = await message({type: 'getPageTranslationFontState'});
         expect(state).toMatchObject({status: 'success', browserDefault: false, pageUrl: 'https://example.com/article'});
-        expect(await message({type: 'setPageTranslationFont', browserDefault: true, documentToken: state.documentToken, pageUrl: state.pageUrl})).toMatchObject({status: 'success', browserDefault: true});
+        mocks.config.browserDefaultTranslationFont = true;
+        mocks.subscribeConfig.mock.calls[0][0](mocks.config);
         expect(doc.getElementById('fluent-read-page-translation-font')?.textContent).toContain('font-family: initial');
         expect(changed).toHaveBeenCalledOnce();
+        expect(await message({type: 'getPageTranslationFontState'})).toMatchObject({status: 'success', browserDefault: true});
+        const obsoleteReply = vi.fn();
+        expect(listener({type: 'setPageTranslationFont', browserDefault: false, documentToken: state.documentToken, pageUrl: state.pageUrl}, {id: 'composition-extension'}, obsoleteReply)).toBe(false);
+        expect(obsoleteReply).not.toHaveBeenCalled();
+        expect(mocks.config.browserDefaultTranslationFont).toBe(true);
+        mocks.config.browserDefaultTranslationFont = false;
+        mocks.subscribeConfig.mock.calls[0][0](mocks.config);
+        expect(doc.getElementById('fluent-read-page-translation-font')).toBeNull();
+        expect(await message({type: 'getPageTranslationFontState'})).toMatchObject({status: 'success', browserDefault: false});
+        mocks.config.browserDefaultTranslationFont = true;
+        mocks.subscribeConfig.mock.calls[0][0](mocks.config);
         expect(await message({type: 'updateSiteExtensionDisabled', isDisabled: true})).toEqual({status: 'success'});
-        expect(doc.getElementById('fluent-read-page-translation-font')).toBeNull(); expect(changed).toHaveBeenCalledTimes(2);
+        expect(doc.getElementById('fluent-read-page-translation-font')).toBeNull(); expect(changed).toHaveBeenCalledTimes(4);
+        expect(mocks.config.browserDefaultTranslationFont).toBe(true);
         expect(await message({type: 'toggleFloatingBall', isEnabled: true})).toEqual({status: 'disabled'});
-        expect(await message({type: 'setPageTranslationFont', browserDefault: true, documentToken: state.documentToken, pageUrl: state.pageUrl})).toEqual({status: 'disabled'});
+        expect(await message({type: 'getPageTranslationFontState'})).toEqual({status: 'disabled'});
+        expect(await message({type: 'updateSiteExtensionDisabled', isDisabled: false})).toEqual({status: 'success'});
+        expect(doc.getElementById('fluent-read-page-translation-font')?.textContent).toContain('font-family: initial');
+        expect(mocks.config.browserDefaultTranslationFont).toBe(true);
+        expect(changed).toHaveBeenCalledTimes(5);
     });
 
     it('真实输入按键发起翻译，配置切换取消旧响应且新目标能写回，停用后不能再发送', async () => {

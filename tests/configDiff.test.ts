@@ -9,6 +9,16 @@ function group(result: ReturnType<typeof buildConfigDiff>, id: string) {
 }
 
 describe('配置差异预览', () => {
+    it('浏览器默认译文字体以可读设置名称展示启停，独立于原有译文外观', () => {
+        expect(configDiffFieldLabel('browserDefaultTranslationFont')).toBe('浏览器默认译文字体');
+        for (const enabled of [true, false]) {
+            const result = buildConfigDiff({browserDefaultTranslationFont: !enabled, translationAppearance: {fontFamily: 'mono'}},
+                {browserDefaultTranslationFont: enabled, translationAppearance: {fontFamily: 'mono'}});
+            expect(result.changeCount).toBe(1);
+            expect(group(result, 'general')?.changes).toEqual([{key: 'browserDefaultTranslationFont', label: '浏览器默认译文字体',
+                before: enabled ? '关闭' : '开启', after: enabled ? '开启' : '关闭'}]);
+        }
+    });
     it('组合配置以策略、成员和单成员超时展示，空及旧损坏条目仍可预览', () => {
         expect(configDiffFieldLabel('compositeTranslationProviders')).toBe('组合翻译服务');
         const preview = buildConfigDiff({compositeTranslationProviders: []}, {compositeTranslationProviders: [

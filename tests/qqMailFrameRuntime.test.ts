@@ -4,6 +4,7 @@ vi.mock('webextension-polyfill', () => ({default: {}}));
 
 const mocks = vi.hoisted(() => ({
     config: {on: true, disabledExtensionDomains: [], bilingualSentenceHighlightEnabled: false,
+        browserDefaultTranslationFont: false,
         selectionTranslatorMode: 'bilingual', disableSelectionTranslator: false, floatingBallHotkey: 'Alt+T', hotkey: 'Control'},
     realHotkeys: false,
     configReady: Promise.resolve(),
@@ -106,6 +107,7 @@ beforeEach(() => {
     mocks.getState.mockReset().mockReturnValue({sessionId: null, translationConfig: undefined, fullPageMode: 'all'});
     mocks.fontSet.mockReset(); mocks.fontReset.mockReset(); mocks.fontDispose.mockReset();
     mocks.config.on = true;
+    mocks.config.browserDefaultTranslationFont = false;
     mocks.realHotkeys = false;
     mocks.configReady = Promise.resolve();
     mocks.config.bilingualSentenceHighlightEnabled = false;
@@ -416,25 +418,95 @@ describe('frame bridge cleanup after extension reload', () => {
     });
 
     it.each(['qq', 'netease', 'embedded'] as const)(
-        '%s 正文字体跟随认证顶层真值，字体更新不恢复或重新请求翻译', async kind => {
+        '%s 正文字体以已水合的全局配置为准，迟到顶层字体快照不能覆盖新偏好或重新请求翻译', async kind => {
             const {start} = await readingFrame(kind);
-            let browserDefaultFont = true;
-            mocks.sendMessage.mockImplementation(async () => ({enabled: true, revision: 0, sessionId: null, browserDefaultFont}));
+            mocks.config.browserDefaultTranslationFont = true;
+            const top = {enabled: true, revision: 0, sessionId: null, browserDefaultFont: false};
+            mocks.sendMessage.mockImplementation(async () => ({...top}));
             let invalidate!: () => void;
-            await start({isInvalid: false, onInvalidated: (callback: () => void) => { invalidate = callback; }} as never);
-            expect(mocks.fontSet).toHaveBeenLastCalledWith(true);
-            const restores = mocks.restoreOriginalContent.mock.calls.length;
-            const listener = mocks.addRuntimeListener.mock.calls[0][0];
-            const type = kind === 'qq' ? 'qqMailFrameRefresh' : kind === 'netease' ? 'neteaseMailFrameRefresh' : 'embeddedFrameRefresh';
-            browserDefaultFont = false;
-            listener({type}, {id: 'other'});
-            expect(mocks.fontSet).toHaveBeenCalledOnce();
-            listener({type}, {id: 'extension-id'});
-            await vi.waitFor(() => expect(mocks.fontSet).toHaveBeenLastCalledWith(false));
-            expect(mocks.restoreOriginalContent).toHaveBeenCalledTimes(restores);
-            expect(mocks.autoTranslateEnglishPage).not.toHaveBeenCalled();
-            invalidate();
+            try {
+                await start({isInvalid: false, onInvalidated: (callback: () => void) => { invalidate = callback; }} as never);
+                expect(mocks.fontSet).toHaveBeenLastCalledWith(true);
+                const restores = mocks.restoreOriginalContent.mock.calls.length;
+                const listener = mocks.addRuntimeListener.mock.calls[0][0];
+                const type = kind === 'qq' ? 'qqMailFrameRefresh' : kind === 'netease' ? 'neteaseMailFrameRefresh' : 'embeddedFrameRefresh';
+                const calls = mocks.sendMessage.mock.calls.length;
+                listener({type}, {id: 'other'});
+                expect(mocks.sendMessage).toHaveBeenCalledTimes(calls);
+                mocks.config.browserDefaultTranslationFont = false;
+                mocks.subscribeConfig.mock.calls[0][0](mocks.config);
+                expect(mocks.fontSet).toHaveBeenLastCalledWith(false);
+                await vi.waitFor(() => expect(mocks.sendMessage.mock.calls.length).toBeGreaterThan(calls));
+                let resolveOld!: (state: unknown) => void;
+                const reading = mocks.sendMessage.mock.calls.length;
+                mocks.sendMessage.mockReturnValueOnce(new Promise(resolve => { resolveOld = resolve; }));
+                listener({type}, {id: 'extension-id'});
+                await vi.waitFor(() => expect(mocks.sendMessage.mock.calls.length).toBeGreaterThan(reading));
+                mocks.config.browserDefaultTranslationFont = true;
+                mocks.subscribeConfig.mock.calls[0][0](mocks.config);
+                expect(mocks.fontSet).toHaveBeenLastCalledWith(true);
+                const writes = mocks.fontSet.mock.calls.length;
+                resolveOld({...top, browserDefaultFont: false});
+                await vi.waitFor(() => expect(mocks.sendMessage.mock.calls.length).toBeGreaterThan(reading + 1));
+                await Promise.resolve();
+                expect(mocks.fontSet.mock.calls.slice(writes).every(([enabled]) => enabled === true)).toBe(true);
+                expect(mocks.fontSet).toHaveBeenLastCalledWith(true);
+                expect(mocks.config.browserDefaultTranslationFont).toBe(true);
+                expect(mocks.restoreOriginalContent).toHaveBeenCalledTimes(restores);
+                expect(mocks.autoTranslateEnglishPage).not.toHaveBeenCalled();
+            } finally { invalidate?.(); }
             expect(mocks.fontReset).toHaveBeenCalled();
+            expect(mocks.fontDispose).toHaveBeenCalledOnce();
+        },
+    );
+
+    it.each(['qq', 'netease', 'embedded'] as const)(
+        '%s 授权恢复与 BFCache 返回重新应用全局字体，暂停和站点禁用均不改写偏好', async kind => {
+            const {start, window} = await readingFrame(kind);
+            mocks.config.browserDefaultTranslationFont = true;
+            let authorized = true;
+            mocks.sendMessage.mockImplementation(async () => ({enabled: authorized, revision: 0, sessionId: null, browserDefaultFont: false}));
+            let invalidate!: () => void;
+            const transition = (type: string) => {
+                const event = Object.assign(new Event(type), {persisted: true});
+                Object.defineProperty(event, 'isTrusted', {value: true});
+                window.dispatchEvent(event);
+            };
+            try {
+                await start({isInvalid: false, onInvalidated: (callback: () => void) => { invalidate = callback; }} as never);
+                const refresh = () => mocks.addRuntimeListener.mock.calls[0][0](
+                    {type: kind === 'qq' ? 'qqMailFrameRefresh' : kind === 'netease' ? 'neteaseMailFrameRefresh' : 'embeddedFrameRefresh'}, {id: 'extension-id'});
+                expect(mocks.fontSet).toHaveBeenLastCalledWith(true);
+                authorized = false; refresh();
+                await vi.waitFor(() => expect(mocks.removeStyles).toHaveBeenCalledOnce());
+                expect(mocks.fontReset).toHaveBeenCalled();
+                expect(mocks.config.browserDefaultTranslationFont).toBe(true);
+                const unauthorizedWrites = mocks.fontSet.mock.calls.length;
+                mocks.subscribeConfig.mock.calls[0][0](mocks.config);
+                expect(mocks.fontSet).toHaveBeenCalledTimes(unauthorizedWrites);
+                authorized = true; refresh();
+                await vi.waitFor(() => expect(mocks.installStyles).toHaveBeenCalledTimes(2));
+                expect(mocks.fontSet).toHaveBeenLastCalledWith(true);
+                transition('pagehide');
+                expect(mocks.removeStyles).toHaveBeenCalledTimes(2);
+                const pausedWrites = mocks.fontSet.mock.calls.length;
+                mocks.subscribeConfig.mock.calls[0][0](mocks.config);
+                expect(mocks.fontSet).toHaveBeenCalledTimes(pausedWrites);
+                expect(mocks.config.browserDefaultTranslationFont).toBe(true);
+                transition('pageshow');
+                await vi.waitFor(() => expect(mocks.installStyles).toHaveBeenCalledTimes(3));
+                expect(mocks.fontSet).toHaveBeenLastCalledWith(true);
+                mocks.isDisabled.mockReturnValue(true);
+                mocks.subscribeConfig.mock.calls[0][0](mocks.config);
+                expect(mocks.removeStyles).toHaveBeenCalledTimes(3);
+                expect(mocks.config.browserDefaultTranslationFont).toBe(true);
+                mocks.isDisabled.mockReturnValue(false);
+                mocks.subscribeConfig.mock.calls[0][0](mocks.config);
+                await vi.waitFor(() => expect(mocks.installStyles).toHaveBeenCalledTimes(4));
+                expect(mocks.fontSet).toHaveBeenLastCalledWith(true);
+                expect(mocks.config.browserDefaultTranslationFont).toBe(true);
+                expect(mocks.autoTranslateEnglishPage).not.toHaveBeenCalled();
+            } finally { invalidate?.(); }
             expect(mocks.fontDispose).toHaveBeenCalledOnce();
         },
     );

@@ -7,6 +7,23 @@ import {buildDriveSyncDiff, driveSyncPayload as completePayload, driveValuesEqua
 const driveSyncPayload = (config: Record<string, unknown>) => completePayload(config, true);
 function complete(patch: Record<string, unknown> = {}) {return toDriveSyncConfig(normalizeConfig({...new Config(), videoServiceDefaultMigrated: true, ...patch}));}
 describe('Google Drive 完整快照和安全合并', () => {
+    it('浏览器默认译文字体属于普通备份设置，恢复和双向同步保留布尔选择及中文差异名称', () => {
+        for (const enabled of [true, false]) {
+            const local = complete({browserDefaultTranslationFont: !enabled, translationAppearance: {fontFamily: 'mono'}});
+            const remote = complete({browserDefaultTranslationFont: enabled, translationAppearance: {fontFamily: 'mono'}});
+            const publicSettings = projectDriveSyncConfig(remote);
+            expect(publicSettings.browserDefaultTranslationFont).toBe(enabled);
+            const restored = restoreDriveSyncSettings(local, parseDriveSyncPayload(completePayload(remote)));
+            expect(restored.browserDefaultTranslationFont).toBe(enabled);
+            expect(restored.translationAppearance).toEqual(remote.translationAppearance);
+            expect(parseDriveSyncPayload(driveSyncPayload(remote)).browserDefaultTranslationFont).toBe(enabled);
+            const diff = buildDriveSyncDiff(local, local, remote);
+            expect(diff.changes).toHaveLength(1);
+            expect(diff.changes[0]).toMatchObject({label: '浏览器默认译文字体', sensitive: false, conflict: false,
+                local: enabled ? '关闭' : '开启', remote: enabled ? '开启' : '关闭'});
+            expect(resolveDriveSyncDiff(diff, {}).browserDefaultTranslationFont).toBe(enabled);
+        }
+    });
     it('普通备份携带公开组合策略，无运行统计或凭据；完整备份拒绝孤儿组合引用', () => {
         const composite = {id: 'composite:work', name: '工作组合', strategy: 'smart', services: ['google', 'custom:fixture'], timeoutMs: 12_000};
         const fixture = complete({service: composite.id, compositeTranslationProviders: [composite], customOpenAIProviders: [
