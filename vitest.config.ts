@@ -82,7 +82,6 @@ export default defineConfig({
         resolve(__dirname, 'docs/.vitepress/theme/PromoVideo.vue'),
         resolve(__dirname, 'docs/.vitepress/theme/SettingsGuide.vue'),
         resolve(__dirname, 'docs/.vitepress/theme/SiteHome.vue'),
-        resolve(__dirname, 'docs/.vitepress/theme/SponsorSlot.vue'),
         resolve(__dirname, 'docs/.vitepress/theme/StepCallout.vue'),
         resolve(__dirname, 'docs/.vitepress/theme/SupportOptions.vue'),
         resolve(__dirname, 'docs/.vitepress/theme/TransferFlow.vue'),
