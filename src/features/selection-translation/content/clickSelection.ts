@@ -1,11 +1,11 @@
 /**
  * @file src/features/selection-translation/content/clickSelection.ts
  * 文件职责：以一次开启、两次点击的临时手势建立原生正文选区，避免持续按键或拖动鼠标。
- * 主要内容：校验真实字形命中和来源身份，有界检查选区长度，兼容反向选择，与局部选择共享指针会话互斥，并仅在开启期间监听取消与自身点击事件。
+ * 主要内容：校验真实字形命中和来源身份，仅放行文档根表面的全局禁译标记而保留局部保护，有界检查选区长度，兼容反向选择，与局部选择共享指针会话互斥，并仅在开启期间监听取消与自身点击事件。
  * 模块边界：不读写配置、不注册快捷键、不发起翻译或挂载界面；普通指针事件由已有划词组件转发，完成后由调用方接管选区。
  */
 import {claimPointerSelectionSession} from '@/src/shared/dom/pointerSelectionSession';
-import {findTextPointAtPoint} from '@/src/core/translation/dom';
+import {findTextPointAtPoint, hasNoTranslateMarker, isDocumentSurfaceNoTranslateShell} from '@/src/core/translation/dom';
 import {shouldIgnoreSelection} from '@/src/features/selection-translation/core';
 
 export type ClickSelectionState = 'idle' | 'start' | 'end';
@@ -28,7 +28,15 @@ interface PointerGesture {point: Endpoint | null; x: number; y: number; pointerI
 const MAX_TEXT = 4096;
 const MAX_NODES = 8192;
 const MAX_TRAVEL = 6;
-const EXCLUDED = 'a[href],button,label,input,textarea,select,option,summary,script,style,noscript,template,iframe,object,embed,canvas,svg,math,video,audio,[inert],[hidden],[aria-hidden="true"],[contenteditable]:not([contenteditable="false"]),[role="link"],[role="button"],[role="textbox"],[role="checkbox"],[role="combobox"],[role="listbox"],[role="menuitem"],[role="menuitemcheckbox"],[role="menuitemradio"],[role="option"],[role="radio"],[role="scrollbar"],[role="slider"],[role="spinbutton"],[role="switch"],[role="tab"],.notranslate,[translate="no"],[data-notranslate="true"],[data-fluent-read-ui],.fluent-read-bilingual-content,.fluent-read-loading,.fluent-read-retry-wrapper,#fluent-read-selection-translator-container,#fluent-read-floating-ball-container,#fluent-read-share-card-container';
+const EXCLUDED = 'a[href],button,label,input,textarea,select,option,summary,script,style,noscript,template,iframe,object,embed,canvas,svg,math,video,audio,[inert],[hidden],[aria-hidden="true"],[contenteditable]:not([contenteditable="false"]),[role="link"],[role="button"],[role="textbox"],[role="checkbox"],[role="combobox"],[role="listbox"],[role="menuitem"],[role="menuitemcheckbox"],[role="menuitemradio"],[role="option"],[role="radio"],[role="scrollbar"],[role="slider"],[role="spinbutton"],[role="switch"],[role="tab"],[data-fluent-read-ui],.fluent-read-bilingual-content,.fluent-read-loading,.fluent-read-retry-wrapper,#fluent-read-selection-translator-container,#fluent-read-floating-ball-container,#fluent-read-share-card-container';
+
+/** html/body 的全局禁译标记不阻止主动选取；同层的控件、编辑器与扩展 UI 标记仍逐层检查。 */
+function isExcludedEndpoint(element: Element): boolean {
+    for (let current: Element | null = element; current; current = current.parentElement) {
+        if (current.matches(EXCLUDED) || hasNoTranslateMarker(current) && !isDocumentSurfaceNoTranslateShell(current)) return true;
+    }
+    return false;
+}
 
 /** 两端都必须属于同一仍然连接的原文；DOM 替换或同节点改字均不能沿用旧起点。 */
 function isCurrent(point: Endpoint, owner: Document): boolean {
@@ -64,7 +72,7 @@ function readPoint(event: PointerEvent, owner: Document, targetNode: Node): Endp
     if (!point || point.node.nodeType !== 3 || targetNode !== point.node && !targetNode.contains(point.node)) return null;
     const node = point.node as Text;
     const parent = node.parentElement;
-    if (!parent || parent.closest(EXCLUDED) || (parent as HTMLElement).isContentEditable
+    if (!parent || isExcludedEndpoint(parent) || (parent as HTMLElement).isContentEditable
         || node.ownerDocument !== owner || !node.isConnected || point.offset < 0 || point.offset > node.length) return null;
     const style = owner.defaultView?.getComputedStyle(parent);
     if (style?.visibility === 'hidden' || style?.display === 'none' || style?.userSelect === 'none') return null;
@@ -161,7 +169,7 @@ export function createClickSelectionController(options: ClickSelectionOptions): 
             const element = (target as Node | null)?.nodeType === 1 ? target as Element : (target as Node | null)?.parentElement;
             if (event.button !== 0 || !['mouse', 'pen'].includes(event.pointerType)
                 || event.ctrlKey || event.altKey || event.metaKey || event.shiftKey
-                || !element || element.closest(EXCLUDED) || (element as HTMLElement).isContentEditable
+                || !element || isExcludedEndpoint(element) || (element as HTMLElement).isContentEditable
                 || anchor && !isCurrent(anchor, owner)) {
                 cancel();
                 return false;

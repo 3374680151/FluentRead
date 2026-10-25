@@ -1,7 +1,7 @@
 /**
  * @file tests/clickSelection.test.ts
  * 文件职责：验证两点选取只消费明确开启后的正文点击，并保持原生选择方向与宿主控件行为。
- * 主要内容：覆盖正反向选区、空白重试、拖动拒绝、来源失效、文本与节点预算、点击抑制和临时监听清理。
+ * 主要内容：覆盖正反向选区、文档根禁译外壳与局部保护、空白重试、拖动拒绝、来源失效、文本与节点预算、点击抑制和临时监听清理。
  * 模块边界：使用独立 DOM 与可控字符几何验证手势控制器，不调用翻译、配置或扩展消息。
  */
 import {parseHTML} from 'linkedom';
@@ -197,6 +197,81 @@ describe('两点选取', () => {
         expect(up).toBe(false);
         expect(event.preventDefault).not.toHaveBeenCalled();
         expect(controller.active).toBe(false);
+        expect(f.complete).not.toHaveBeenCalled();
+    });
+
+    it.each(['html', 'body'].flatMap(tag => ['class', 'translate', 'data-notranslate'].map(attribute => ({tag, attribute}))))('文档根禁译标记 $tag/$attribute 不阻止两点选取正文', ({tag, attribute}) => {
+        const f = fixture();
+        f.owner.querySelector(tag)!.setAttribute(attribute, attribute === 'class' ? 'notranslate' : attribute === 'translate' ? 'no' : 'true');
+        const controller = f.create();
+        controller.toggle();
+        expect(f.click(controller, f.text(), 0).down).toBe(true);
+        expect(f.click(controller, f.text(), 5).down).toBe(true);
+        expect(f.selection.setBaseAndExtent).toHaveBeenCalledWith(f.text(), 0, f.text(), 5);
+        expect(f.complete).toHaveBeenCalledOnce();
+        expect(controller.active).toBe(false);
+    });
+
+    it('DeepSeek 组合根标记下跨段落选取仍只完成一次', () => {
+        const f = fixture();
+        f.owner.documentElement.classList.add('notranslate');
+        f.owner.documentElement.setAttribute('translate', 'no');
+        f.owner.body.setAttribute('data-notranslate', 'true');
+        const controller = f.create();
+        controller.toggle();
+        f.click(controller, f.text(), 0);
+        f.click(controller, f.text('#second'), 6);
+        expect(f.selection.setBaseAndExtent).toHaveBeenCalledWith(f.text(), 0, f.text('#second'), 6);
+        expect(f.complete).toHaveBeenCalledOnce();
+    });
+
+    it.each(['class="notranslate"', 'translate="no"', 'data-notranslate="true"'])('根禁译外壳内的局部 %s 仍放行宿主点击', marker => {
+        const f = fixture(`<p id="first">Readable text</p><span ${marker} id="protected">Protected text</span>`);
+        f.owner.documentElement.setAttribute('translate', 'no');
+        const controller = f.create();
+        controller.toggle();
+        f.click(controller, f.text(), 0);
+        const {event, down, up} = f.click(controller, f.text('#protected'), 3);
+        expect(down).toBe(false);
+        expect(up).toBe(false);
+        expect(event.preventDefault).not.toHaveBeenCalled();
+        expect(f.selection.setBaseAndExtent).not.toHaveBeenCalled();
+        expect(f.complete).not.toHaveBeenCalled();
+        expect(controller.active).toBe(false);
+    });
+
+    it.each([
+        ['html', 'role', 'button'], ['body', 'role', 'textbox'],
+        ['html', 'contenteditable', 'true'], ['body', 'hidden', ''],
+        ['html', 'aria-hidden', 'true'], ['body', 'inert', ''],
+        ['html', 'data-fluent-read-ui', ''], ['body', 'class', 'fluent-read-bilingual-content'],
+    ])('根禁译标记不能绕过同层保护 %s/%s', (tag, attribute, value) => {
+        const f = fixture();
+        const surface = f.owner.querySelector(tag)!;
+        surface.setAttribute('translate', 'no');
+        surface.setAttribute(attribute, value);
+        const controller = f.create();
+        controller.toggle();
+        const {event, down} = f.click(controller, f.text(), 0);
+        expect(down).toBe(false);
+        expect(event.preventDefault).not.toHaveBeenCalled();
+        expect(f.complete).not.toHaveBeenCalled();
+        expect(controller.active).toBe(false);
+    });
+
+    it('caret 在普通事件容器内命中局部禁译文本时仍拒绝端点', () => {
+        const f = fixture('<p id="first">Before <span translate="no">Protected text</span> after</p>');
+        f.owner.documentElement.classList.add('notranslate');
+        f.owner.documentElement.setAttribute('translate', 'no');
+        const protectedText = f.owner.querySelector('span')!.firstChild!;
+        const controller = f.create();
+        controller.toggle();
+        const event = f.pointer(f.text(), 0);
+        f.owner.caretPositionFromPoint = (() => ({offsetNode: protectedText, offset: 0})) as unknown as Document['caretPositionFromPoint'];
+        expect(controller.handlePointerDown(event)).toBe(true);
+        expect(controller.handlePointerUp(event)).toBe(true);
+        expect(f.rejected).toHaveBeenCalledWith('text-miss');
+        expect(f.states.mock.calls).toEqual([['start']]);
         expect(f.complete).not.toHaveBeenCalled();
     });
 
