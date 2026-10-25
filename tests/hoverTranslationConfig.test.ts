@@ -91,13 +91,17 @@ describe('hover pending config ownership', () => {
         source.modelThinking = {deepseek: {'fixed-model': true}}; sync(source); expect(cancel).toHaveBeenCalledOnce();
     });
 
-    it('keeps pending hover work when the full-page multi-segment preference changes', () => {
+    it('keeps pending hover work when the full-page multi-segment preference or budgets change', () => {
         const source = new Config();
         const cancel = vi.fn();
         const sync = createHoverTranslationConfigInvalidator(source, cancel);
         source.enableAIMultiSegment = true;
         sync(source);
         source.enableAIMultiSegment = false;
+        sync(source);
+        source.aiMultiSegmentMaxSegments = 32;
+        sync(source);
+        source.aiMultiSegmentMaxCharacters = 12_000;
         sync(source);
         expect(cancel).not.toHaveBeenCalled();
     });

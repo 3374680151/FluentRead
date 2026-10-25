@@ -17,7 +17,7 @@ registerAllUiLanguageBundles();
 const languages: UiLanguage[] = ['zh-CN', 'en-US', 'ja-JP', 'ko-KR', 'fr-FR', 'ru-RU', 'es-ES'];
 const catalog = (language: UiLanguage) => JSON.parse(readFileSync(`src/core/i18n/messages/settings-copy/${language}.json`, 'utf8')) as {messages: Record<string, string>; legacy: Record<string, string>};
 const changedKeys = Object.keys(catalog('en-US').messages).filter(key => key.startsWith('settings.floatingBall.')
-  || key.startsWith('settings.personalCorrections.') || [
+  || key.startsWith('settings.personalCorrections.') || key.startsWith('settings.fullPage.multiSegment') || [
     'options.panel.floatingBall', 'settings.general.assistance', 'settings.general.aiContextHelp', 'settings.general.floatingBall',
     'settings.general.floatingBallDescription', 'settings.general.progressPanel', 'settings.general.progressPanelDescription',
     'settings.general.preferences', 'settings.general.themeDescription', 'settings.services.freeWeights.timeoutHelp',

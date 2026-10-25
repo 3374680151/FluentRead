@@ -5,6 +5,7 @@
  * 锚点编排：翻译设置保留连续表单，双语逐句阅读辅助与智能高亮各有独立锚点；智能高亮仅在翻译设置分区激活时挂载，定位不隐藏其他分组，既有表单配置保持原归属。新建兼容服务对话框只在首次请求打开时挂载，此后保留实例与关闭动画；加载中或失败时在添加入口旁显示可关闭提示，并停用入口说明气泡以免遮挡反馈，离开后不复活旧提示，草稿仍由原有活跃上下文和关闭流程管理。
  * 两点选取：在划词触发组内按需显示紧凑开关与快捷键编辑，分区活跃状态限制录制归属。
  * 交互延迟归属：悬浮与划词延迟只在所属活跃分区确认后提交，外部同步或离开使旧输入失效，保留原步长、范围及空值恢复规则。
+ * 多段预算：全文页使用独立紧凑组件编辑片段与字符上限，每次预算更新由父组件原子交接现有配置队列。
  * 请求数值归属：高级页的 AI 超时、重试次数、密钥恢复与退避等待共用活跃配置身份；分区、缓存状态、配置同步或卸载会同步失效旧控件回调，秒/分钟确认后交接毫秒配置，退避上下限一次提交完整快照。缓存管理表单保留实例和未保存限额，通过 active 传递高级页及缓存面板归属，离开时结束旧等待、返回时刷新统计。
  * 设置同步：Safari 仅保存权威配置，由后台通知实际 content 接收者同步功能；其他浏览器保留合并后的即时标签页广播，卸载后不继续投递。
  * 模块边界：该组件负责设置 UI 编排但不实现 provider 网络、配置仓库或 feature 运行时；校验与迁移来自 core/config，持久化经 services/config，复杂子界面保持在各自 feature/组件内；ChatGPT 登录模块在公开构建中隐藏，旧默认或深链接只回退编辑目标，不迁移或删除用户数据；脚本入口已拦截的扩展专属分区在构建期不引入其子 UI，原入口提示与数据接口保持。
@@ -415,9 +416,8 @@
             </div>
           </div>
         </SettingsItem>
-        <SettingsItem label="AI 多段翻译" :description="t('settings.fullPage.multiSegmentDescription')" :help="t('settings.fullPage.multiSegmentHelp')">
-          <el-switch v-model="config.enableAIMultiSegment" class="settings-toggle" aria-label="AI 多段翻译" />
-        </SettingsItem>
+        <AiMultiSegmentSettings :config="config" :active="viewActive && props.activeSection === 'settings-translation' && (!props.activePanel || props.activePanel === 'page')"
+          @update:limits="setAIMultiSegmentLimits" />
         <SettingsItem label="全文翻译范围" help="“按阅读进度”预翻译可视区域附近的内容；“立即翻译到网页底部”处理已加载的整页及后续新增内容，无需自动滚动，可能增加无限滚动页面的请求量和费用；下次启动全文翻译时生效">
           <SegmentedControl v-model="config.fullPageTranslationMode" :options="fullPageTranslationModeOptions" label="全文翻译范围" />
         </SettingsItem>
@@ -676,6 +676,8 @@ const ParagraphCopySettings = defineAsyncComponent(() => import('./ParagraphCopy
 const SectionTranslationSettings = defineAsyncComponent(() => import('./SectionTranslationSettings.vue'));
 const ParagraphHandlingSettings = defineAsyncComponent(() => import('./ParagraphHandlingSettings.vue'));
 const TranslationCacheSettings = defineAsyncComponent(() => import('./TranslationCacheSettings.vue'));
+import AiMultiSegmentSettings from './AiMultiSegmentSettings.vue';
+import type {AiMultiSegmentLimits} from '@/src/core/config/aiMultiSegment';
 import SettingsGroup from './components/SettingsGroup.vue';
 import ExcludedLanguageSettings from './ExcludedLanguageSettings.vue';
 import ReadingAssistanceSettings from './ReadingAssistanceSettings.vue';
@@ -1000,6 +1002,10 @@ interface CustomProviderDraft {
  * 全局配置监听使用 flush: sync；逐字段修改会让中间态先被 normalize 后回灌，
  * 既产生多条历史，也可能把刚删除的当前模型重新补回列表。
  */
+function setAIMultiSegmentLimits(limits: AiMultiSegmentLimits): void {
+  updateConfigAtomically(draft => Object.assign(draft, limits));
+}
+
 function updateConfigAtomically(update: (draft: Config) => void): void {
   const draft = normalizeConfig(config.value);
   update(draft);

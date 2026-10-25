@@ -22,8 +22,8 @@ const features = [
     kind: 'selection',
     title: t('划词翻译', 'Selection translation'),
     description: t(
-      '选中文字即可查看译文并朗读原文或译文，还可通过卡片查音标、释义，理解句子结构。',
-      'Translate selected text and listen to both languages, with cards for word definitions, pronunciation and sentence structure.'
+      '选中文字后打开翻译卡片，查看译文、朗读原文或译文，还可查音标、释义，理解句子结构。',
+      'Select text and open its translation card to read or listen in both languages, check pronunciation and definitions, and explore sentence structure.'
     ),
     path: '/guide/deepseek-harness',
   },

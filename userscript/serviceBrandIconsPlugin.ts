@@ -1,7 +1,7 @@
 /**
  * @file userscript/serviceBrandIconsPlugin.ts
  * 文件职责：仅为完整独立脚本无损压缩本地服务品牌路径数据。
- * 主要内容：校验完整输入，在首次请求已有品牌时通过既有 pako 字符串端口恢复并缓存全表。
+ * 主要内容：校验完整输入，以既有 ASCII85 保存完整 gzip 字节，在首次请求已有品牌时通过既有 pako 字符串端口恢复并缓存全表。
  * 模块边界：不改变图标、provider或许可，不顶层解压，不新增全局、异步或网络回退。
  */
 import {createHash} from 'node:crypto';

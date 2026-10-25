@@ -491,7 +491,8 @@
       "tests/i18nPlural.test.ts",
       "tests/pdfResources.test.ts",
       "tests/clickSelectionConfig.test.ts",
-      "tests/pointerSelectionSession.test.ts"
+      "tests/pointerSelectionSession.test.ts",
+      "tests/aiMultiSegmentConfig.test.ts"
     ],
     "functional": [
       "tests/affectedTests.test.ts",
@@ -775,7 +776,8 @@
       "tests/zoteroWorkspace.test.ts",
       "tests/zoteroFontCache.test.ts",
       "tests/clickSelection.test.ts",
-      "tests/clickSelectionSettingsLifecycle.test.ts"
+      "tests/clickSelectionSettingsLifecycle.test.ts",
+      "tests/aiMultiSegmentSettingsLifecycle.test.ts"
     ],
     "regression": [
       "tests/discordServerIconBoundary.test.ts",

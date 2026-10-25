@@ -1,50 +1,42 @@
 # Zotero literature translation
 
-FluentRead provides an experimental Zotero desktop plugin. Translate PDFs from your library, translate selected text while reading, and save the results as new attachments under the same literature item or as bilingual notes. The compatibility manifest targets Zotero 7–10; Zotero 7 compatibility has not been tested separately.
+FluentRead’s experimental Zotero desktop plugin translates PDFs and selected text, then saves translated attachments or bilingual notes. Install and configure it separately from the browser extension.
 
 ## Install
 
-Install and configure this plugin separately from the browser extension. It currently requires a source build: run `pnpm build:zotero` in the FluentRead repository root to generate `integrations/zotero/dist/fluentread-zotero.xpi`.
+1. Run `pnpm build:zotero` in the FluentRead repository root to create `integrations/zotero/dist/fluentread-zotero.xpi`.
+2. In Zotero, open **Tools → Plugins**, choose **Install Plugin From File** from the gear menu, and select the XPI.
+3. Open the FluentRead workspace to configure languages and a service.
 
-In Zotero, open **Tools → Plugins**, click the gear menu, choose **Install Plugin From File**, and select the XPI. The plugin is not yet listed in Zotero's plugin directory.
-
-Full-document translation, saving Chinese PDF results, bilingual notes, and task recovery have been verified in an isolated test library using Zotero 10.0.6 on macOS. The full-document workflow used a controlled translation service; a separate fixed public sentence verified a real Chinese response from Microsoft Translator. Zotero 7–9, Windows/Linux, and the semantic quality of complete papers translated by real services have not been tested. Use a test library first.
-
-The current package is for local testing and has not been published to an automatic update channel.
+The plugin currently requires a source build and has no automatic update channel. Its compatibility declaration targets Zotero 7–10. Existing checks mainly cover Zotero 10 on macOS; other versions and platforms still need validation. Try a test library first.
 
 ## Configure translation
 
-Open the FluentRead workspace and select the source language, target language, and service. By default, the plugin detects the source language automatically and translates into Simplified Chinese.
+The default detects the source language and translates into Simplified Chinese. Options include:
 
-- **Microsoft Translator** uses FluentRead's existing Microsoft translation service without requiring a model API key.
-- **OpenAI-compatible services** require a Chat Completions endpoint, model, and API key. Remote endpoints use HTTPS; local models can use an HTTP loopback address.
-- **Terminology** lets you specify consistent translations for terms in the current document.
-- **Output** lets you choose a bilingual or translation-only PDF and whether to open the result automatically when finished.
+- **Microsoft Translator:** no model API key required.
+- **OpenAI-compatible services:** enter a Chat Completions endpoint, model, and API key. Use HTTPS for remote endpoints; local models can use HTTP loopback addresses.
+- **Terminology:** set fixed translations for terms in this document.
+- **Output:** choose a bilingual or translation-only PDF and whether to open it when finished.
 
-The plugin stores its own settings and does not read or synchronize the browser extension's keys.
+Settings are separate from the browser extension; its keys are not read or synchronized.
 
 ## Translate and continue reading
 
-Select one or more literature items with local PDFs in your Zotero library, or select PDF attachments directly, then add them to the translation queue from the FluentRead menu.
+1. Select library items with local PDFs, or PDF attachments directly, and add them to the queue from the FluentRead menu.
+2. Follow progress in the workspace. Documents run sequentially. Pause to keep completed passages, continue to process the remainder, or retry a failed task.
+3. The translated PDF becomes a new attachment under the original item, preserving the original file. Standalone PDF results stay in the original library and collections. You can also save bilingual notes organized by page.
 
-The workspace shows progress for each document. Files are processed sequentially. Pausing preserves completed translations, and continuing processes the remaining passages. Failed tasks can be retried. After closing or disabling the plugin, unfinished tasks return in a paused state; new translation requests are sent only when you continue. Changing the source language, target language, or service affects new tasks; existing tasks retain the settings used when they were created.
+Closing or disabling the plugin pauses unfinished tasks; new requests start only when you continue. Language and service changes apply to new tasks. Existing tasks keep their original settings. If the source PDF changes, create a new task. Clearing task history does not delete generated PDFs or notes.
 
-Before continuing, the plugin checks the attachment's identity and file contents. If the original PDF has changed, create a new task to avoid applying old translations to a different document.
-
-When translation finishes, the translated PDF is saved as a new attachment under the original literature item, preserving the original file. Results for standalone PDFs stay in the original library and collections. Task actions can also save the original text and translation as bilingual notes organized by page. Clearing task records does not delete PDFs or notes that have already been created.
-
-Select text in Zotero's PDF reader and use the FluentRead selection action to translate it. This action uses the same service and language settings as document translation in the plugin.
+For a short passage, select text in Zotero’s PDF reader and use the FluentRead action. It uses the workspace’s service and languages.
 
 ## Files and data
 
-The plugin currently supports PDFs with a text layer. Scanned documents need an OCR text layer first; the plugin does not include OCR for scans. It does not support EPUB, Zotero's web library, or mobile apps. The layout and page count of translated PDFs may differ from the original. Highlights and annotations on the original file are not automatically transferred to the translation.
+Only PDFs with a text layer are supported. Scans need OCR first. EPUB, the web library, and mobile apps are unsupported. Output layout and page count may differ, and original annotations do not transfer automatically.
 
-PDFs are parsed and generated locally. When you start translation, the text to translate and necessary translation instructions are sent to the selected service, with terminology handled according to your glossary. The complete PDF is not uploaded to FluentRead's cloud. The plugin does not collect telemetry.
+PDF parsing and generation happen locally. Translation sends text and necessary instructions to your selected service, without uploading the complete PDF to FluentRead’s cloud. The plugin collects no telemetry. Settings and progress stay in `fluentread/` in the Zotero profile. Keys are stored separately in local `credentials.json`, excluded from tasks and notes; this file is not encrypted.
 
-Settings, tasks, and translation progress are stored in `fluentread/` within the current Zotero profile directory. API keys are stored in a separate local `credentials.json` file and are not included in task records or notes. This file is not an encrypted credential store.
+The first export may download about 5 MB of openly licensed fonts, verified and cached for reuse. Font requests contain no paper text, translations, or keys.
 
-PDF.js runtime resources are bundled with the installation package. The first export may download about 5 MB of openly licensed font data. Its size and SHA-256 are verified before it is stored in the local font cache and reused for later exports. The download request contains no document text, translations, or keys.
-
-Results cannot be saved to read-only libraries. If a PDF cannot be found, download the attachment in Zotero or locate its file again first.
-
-See the [Zotero plugin directory](https://github.com/Bistutu/FluentRead/tree/main/integrations/zotero) for source code, build instructions, and implementation boundaries.
+If saving fails, check that the library is writable. If a PDF is missing, download the attachment or locate its file in Zotero first. See the [Zotero plugin directory](https://github.com/FluentRead/FluentRead/tree/main/integrations/zotero) for source and build instructions.

@@ -1219,6 +1219,7 @@ describe('options UI composition architecture', () => {
     const translation = activeSectionSource(settings, 'settings-translation')
     const inputTranslation = source('src/features/settings/ui/InputTranslationSettings.vue')
     const paragraphCopySettings = source('src/features/settings/ui/ParagraphCopySettings.vue')
+    const aiMultiSegmentSettings = source('src/features/settings/ui/AiMultiSegmentSettings.vue')
 
     expect(settingsGroupTitles(translation)).toEqual([
       '鼠标悬浮翻译',
@@ -1237,8 +1238,10 @@ describe('options UI composition architecture', () => {
     expect(inputTranslation).toContain('class="input-translation-service-control"')
     expect(inputTranslation).toContain('<ServiceIcon')
     expect(translation).toContain('label="全文翻译范围"')
-    expect(translation).toContain('aria-label="AI 多段翻译"')
-    expect(translation).toContain('v-model="config.enableAIMultiSegment"')
+    expect(translation).toContain('<AiMultiSegmentSettings :config="config"')
+    expect(aiMultiSegmentSettings).toContain(":aria-label=\"t('settings.fullPage.multiSegmentTitle')\"")
+    expect(aiMultiSegmentSettings).toContain(':model-value="config.enableAIMultiSegment"')
+    expect(aiMultiSegmentSettings).toContain('data-testid="ai-multi-segment-limits"')
     expect(translation.match(/<QuickTranslationProfiles\b/gu)).toHaveLength(2)
     expect(translation).toContain('action="hover"')
     expect(translation).toContain('action="full-page"')
@@ -1312,7 +1315,7 @@ describe('options UI composition architecture', () => {
     expect(item).toContain('<slot name="description"><small v-if="description">{{ description }}</small></slot>')
     expect(settings).toContain(`label="划词触发方式" :help="t('selectionTrigger.modeDescription')">`)
     expect(settings).toContain(`<SettingsItem id="floating-ball-toggle" :label="t('settings.general.floatingBall')">`)
-    expect(settings).toContain(`:description="t('settings.fullPage.multiSegmentDescription')" :help="t('settings.fullPage.multiSegmentHelp')"`)
+    expect(source('src/features/settings/ui/AiMultiSegmentSettings.vue')).toContain(`:description="t('settings.fullPage.multiSegmentDescription')" :help="t('settings.fullPage.multiSegmentHelp')"`)
   })
 
   it('uses one compact number field for delays, lengths and limits', () => {
