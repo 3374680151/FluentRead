@@ -298,6 +298,47 @@ describe('已提交网页译文显示切换', () => {
         const cleanup = createPageTranslationDisplayModeSync({display: 1}, () => restoreTranslation(owner));
         cleanup({display: 0}); expect(getTranslationState(owner)).toBeUndefined();
     });
+    it('上下顺序立即应用已完成的译文，并保留来源节点、请求身份和恢复能力', () => {
+        const {owner, state, nodes, sourceHTML} = committed('bilingual', {translationBeforeOriginal: false});
+        const controller = state.controller, generation = state.generation;
+        const sync = createPageTranslationDisplayModeSync<{display: number; translationBeforeOriginal: boolean}>({display: 1, translationBeforeOriginal: false}, vi.fn());
+        for (const before of [true, false, true]) {
+            sync({display: 1, translationBeforeOriginal: before});
+            expect(before ? owner.firstChild : owner.lastChild).toBe(state.bilingualContent);
+            expect(state.bilingualReplay!.translationBeforeOriginal).toBe(before);
+            expect(nodes.every(node => owner.contains(node))).toBe(true);
+            expect(state.controller).toBe(controller); expect(state.generation).toBe(generation);
+            expect(isTranslationArtifactCurrent(owner, state)).toBe(true);
+            const content = state.bilingualContent;
+            sync({display: 1, translationBeforeOriginal: before});
+            expect(state.bilingualContent).toBe(content);
+        }
+        expect(restoreTranslation(owner)).toBe(true); expect(owner.innerHTML).toBe(sourceHTML);
+    });
+    it('仅译文下更改顺序不重建文本槽，恢复双语沿用新顺序', () => {
+        const {owner, state, nodes} = committed('single', {translationBeforeOriginal: false});
+        const slots = state.singleTextSlotHosts;
+        expect(syncTranslationDisplayMode(owner, state, 0, false, true)).toBe(true);
+        expect(state.singleTextSlotHosts).toBe(slots);
+        expect(syncTranslationDisplayMode(owner, state, 1, false, true)).toBe(true);
+        expect(owner.firstChild).toBe(state.bilingualContent);
+        expect(nodes.every(node => owner.contains(node))).toBe(true);
+    });
+    it.each(['google', 'explicit'] as const)('%s限制保留显示模式，同时允许上下顺序即时生效', restriction => {
+        const {owner, state, nodes} = committed('bilingual', {translationBeforeOriginal: false,
+            ...(restriction === 'google' ? {service: 'google'} : {displayModeOverridden: true})});
+        expect(syncTranslationDisplayMode(owner, state, 0, false, true)).toBe(true);
+        expect(state.mode).toBe('bilingual'); expect(owner.firstChild).toBe(state.bilingualContent);
+        expect(nodes.every(node => owner.contains(node))).toBe(true);
+        expect(syncTranslationDisplayMode(owner, state, 0, false, true)).toBe(false);
+    });
+    it('原文或翻译工件失效时不因顺序变化重放陈旧译文', () => {
+        const {owner, state} = committed('bilingual', {translationBeforeOriginal: false});
+        state.sourceTextNodes![0]!.data = 'Host changed this sentence.';
+        const before = owner.innerHTML;
+        expect(syncTranslationDisplayMode(owner, state, 1, false, true)).toBe(false);
+        expect(owner.innerHTML).toBe(before); expect(state.bilingualReplay!.translationBeforeOriginal).toBe(false);
+    });
     it.each(['bilingual', 'single'] as const)('从%s来回切换只重排工件，保留原文节点、链接语义、请求身份与恢复', mode => {
         const fixture = committed(mode);
         const {owner, state, nodes, sourceHTML} = fixture;
@@ -337,8 +378,13 @@ describe('已提交网页译文显示切换', () => {
         expect(link.getAttribute('href')).toBe('https://example.com/after');
     });
 
-    it.each(['immediate', 'late-replay'])('安全href/title更新通过%s重放后仍能切换目标模式，无需再次访问provider', path => {
-        const {owner, state} = committed();
+    it.each([
+        ['immediate', false], ['late-replay', false], ['immediate', true], ['late-replay', true],
+    ] as const)('安全href/title更新通过%s重放后仍能切换目标模式，合成段=%s，无需再次访问provider', (path, synthetic) => {
+        const {owner, state, nodes} = committed('bilingual', {}, undefined, synthetic);
+        const controller = state.controller, generation = state.generation;
+        const neighbor = document.createElement('p'); neighbor.textContent = 'Untranslated neighbor.';
+        owner.after(neighbor);
         const original = state.sourceTextNodes![1]!.parentElement!;
         original.setAttribute('href', 'https://example.com/current'); original.setAttribute('title', 'Current');
         config.display = 0;
@@ -347,6 +393,9 @@ describe('已提交网页译文显示切换', () => {
         expect(syncTranslationDisplayMode(owner, state, 1)).toBe(true);
         expect(state.bilingualContent!.querySelector('a')!.getAttribute('href')).toBe('https://example.com/current');
         expect(state.bilingualContent!.querySelector('a')!.getAttribute('title')).toBe('Current');
+        expect(state.controller).toBe(controller); expect(state.generation).toBe(generation);
+        expect(nodes.every(node => owner.contains(node))).toBe(true);
+        expect(neighbor.textContent).toBe('Untranslated neighbor.');
     });
 
     it('真实来源变化使迟到骨架重放失败，保留宿主文本与原生命周期', () => {

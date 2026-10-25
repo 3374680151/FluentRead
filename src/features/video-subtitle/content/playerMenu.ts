@@ -1,7 +1,7 @@
 /**
  * @file src/features/video-subtitle/content/playerMenu.ts
  * 文件职责：组装播放器字幕菜单，以紧凑行呈现显示方式、字幕时间、本地 AI 字幕与下载与完整句学习入口，并在同一弹层内提供模型下载确认。
- * 主要内容：常驻标题与可滚动正文分离，显示、双语顺序、读音图标开关与校时先于次级学习入口；读音说明支持悬停和键盘聚焦，低频字幕下载默认收起；触屏安全视口按可用宽度排布，极矮时只保留关闭并暂时隔离正文焦点，正常视口只滚动自有正文显露明确聚焦的操作，桌面按播放器高度收紧；X 首层聚焦显示方式和当前操作，模型选择、校时、导出和重新识别放在可返回的选项页，复用稳定节点呈现来源、故障恢复及识别/下载进度，生成预览期间不开放完整字幕导出。
+ * 主要内容：常驻标题与可滚动正文分离，显示、带示意的双语顺序、读音图标开关与校时先于次级学习入口；单语时保留顺序偏好并说明生效条件，读音说明支持悬停和键盘聚焦且不重测菜单，保留仅译文时显式切回双语的入口，低频字幕下载默认收起；触屏安全视口按可用宽度排布，极矮时只保留关闭并暂时隔离正文焦点，正常视口只滚动自有正文显露明确聚焦的操作，桌面按播放器高度收紧；X 首层聚焦显示方式和当前操作，模型选择、校时、导出和重新识别放在可返回的选项页，复用稳定节点呈现来源、故障恢复及识别/下载进度，生成预览期间不开放完整字幕导出。
  * 模块边界：只操作 FluentRead 自己的菜单节点，不读取存储、不发起识别或绑定全局事件；运行时负责配置、请求与清理。
  */
 import type {VideoSubtitleAppearance} from '@/src/core/config/videoSubtitleAppearance';
@@ -139,6 +139,7 @@ function createModeGroup(language: UiLanguage): HTMLElement {
 
 /** 双语顺序与显示模式独立；复用稳定单选按钮，只改变排版偏好。 */
 function createSubtitleOrderRow(language: UiLanguage): HTMLElement {
+    const setting = createTextElement('div', 'fluent-read-video-menu-order-setting', '');
     const row = createTextElement('div', 'fluent-read-video-menu-row', '');
     row.appendChild(keyedText('span', 'fluent-read-video-menu-row-label', 'video.bilingualOrder', language));
     const group = createTextElement('div', 'fluent-read-video-menu-order-controls', '');
@@ -146,19 +147,35 @@ function createSubtitleOrderRow(language: UiLanguage): HTMLElement {
     group.dataset.i18nAriaKey = 'video.bilingualOrder';
     group.setAttribute('aria-label', translateVideoUi('video.bilingualOrder', language));
     for (const [order, key] of [['original-first', 'video.originalFirst'], ['translation-first', 'video.translationFirst']]) {
-        const button = keyedText('button', 'fluent-read-video-menu-mode', key, language);
+        const button = createButton('fluent-read-video-menu-mode fluent-read-video-menu-order-choice', {});
         button.type = 'button'; button.dataset.subtitleOrder = order;
         button.setAttribute('role', 'menuitemradio'); button.setAttribute('aria-checked', 'false');
+        const diagram = createTextElement('span', 'fluent-read-video-menu-order-diagram', '');
+        diagram.setAttribute('aria-hidden', 'true');
+        const original = createTextElement('span', 'fluent-read-video-menu-order-original', '');
+        const translation = createTextElement('span', 'fluent-read-video-menu-order-translation', '');
+        diagram.append(...(order === 'original-first' ? [original, translation] : [translation, original]));
+        button.append(diagram, keyedText('span', '', key, language));
         group.appendChild(button);
     }
     row.appendChild(group);
-    return row;
+    const hint = keyedText('p', 'fluent-read-video-menu-source-hint', 'video.bilingualOrderHint', language);
+    hint.dataset.subtitleOrderHint = 'true';
+    hint.hidden = true;
+    setting.append(row, hint);
+    return setting;
 }
 
-export function renderVideoSubtitleOrder(menu: HTMLElement, order: VideoSubtitleAppearance['bilingualOrder'], disabled: boolean): void {
+export function renderVideoSubtitleOrder(menu: HTMLElement, order: VideoSubtitleAppearance['bilingualOrder'], disabled: boolean, bilingual = true): void {
+    const setting = menu.querySelector<HTMLElement>('.fluent-read-video-menu-order-setting');
+    const active = String(!disabled && bilingual);
+    if (setting && setting.dataset.active !== active) setting.dataset.active = active;
+    const hint = menu.querySelector<HTMLElement>('[data-subtitle-order-hint]');
+    if (hint && hint.hidden !== (bilingual || disabled)) hint.hidden = bilingual || disabled;
     menu.querySelectorAll<HTMLButtonElement>('[data-subtitle-order]').forEach(button => {
-        button.setAttribute('aria-checked', String(button.dataset.subtitleOrder === order));
-        button.disabled = disabled;
+        const checked = String(button.dataset.subtitleOrder === order);
+        if (button.getAttribute('aria-checked') !== checked) button.setAttribute('aria-checked', checked);
+        if (button.disabled !== (disabled || !bilingual)) button.disabled = disabled || !bilingual;
     });
 }
 
@@ -290,16 +307,17 @@ function createReadingAnnotationRow(language: UiLanguage): HTMLElement {
     toggle.addEventListener('pointerenter', () => setReadingHelpOpen(row, true));
     toggle.addEventListener('pointerleave', event => {
         if (event.relatedTarget instanceof Node && explanation.contains(event.relatedTarget)) return;
-        if (document.activeElement !== toggle) setReadingHelpOpen(row, false);
+        if (document.activeElement !== toggle) scheduleReadingHelpClose(row);
     });
     toggle.addEventListener('focus', () => setReadingHelpOpen(row, true));
     toggle.addEventListener('click', () => setReadingHelpOpen(row, false));
     toggle.addEventListener('blur', () => {
-        if (!toggle.matches(':hover') && !explanation.matches(':hover')) setReadingHelpOpen(row, false);
+        if (!toggle.matches(':hover') && !explanation.matches(':hover')) scheduleReadingHelpClose(row);
     });
+    explanation.addEventListener('pointerenter', () => cancelReadingHelpClose(row));
     explanation.addEventListener('pointerleave', event => {
         if (event.relatedTarget instanceof Node && toggle.contains(event.relatedTarget)) return;
-        if (document.activeElement !== toggle) setReadingHelpOpen(row, false);
+        if (document.activeElement !== toggle) scheduleReadingHelpClose(row);
     });
     header.append(toggle);
     const status = createTextElement('span','fluent-read-video-menu-source-hint','');
@@ -310,7 +328,25 @@ function createReadingAnnotationRow(language: UiLanguage): HTMLElement {
     return row;
 }
 
+const readingHelpCloseTimers = new WeakMap<HTMLElement, ReturnType<typeof setTimeout>>();
+function cancelReadingHelpClose(row: HTMLElement): void {
+    const timer = readingHelpCloseTimers.get(row);
+    if (timer !== undefined) {clearTimeout(timer); readingHelpCloseTimers.delete(row);}
+}
+
+/** 留出跨越图标与顶层说明之间间隙的时间；重新进入任一节点会取消，明确关闭始终立即执行。 */
+function scheduleReadingHelpClose(row: HTMLElement): void {
+    const help = row.querySelector<HTMLElement>('[data-reading-help]')!;
+    if (help.hidden || readingHelpCloseTimers.has(row)) return;
+    readingHelpCloseTimers.set(row, setTimeout(() => {
+        readingHelpCloseTimers.delete(row);
+        const toggle = row.querySelector<HTMLElement>('[data-action="toggle-reading-annotation"]')!;
+        if (document.activeElement !== toggle && !toggle.matches(':hover') && !help.matches(':hover')) setReadingHelpOpen(row, false);
+    }, 120));
+}
+
 function setReadingHelpOpen(row: HTMLElement, open: boolean): void {
+    cancelReadingHelpClose(row);
     const help = row.querySelector<HTMLElement>('[data-reading-help]')!;
     if (open && row.closest('[hidden], [inert]')) return;
     // 不支持顶层提示时只使用按钮的原生 title，避免把整张说明卡挤进标题工具栏。
@@ -323,8 +359,6 @@ function setReadingHelpOpen(row: HTMLElement, open: boolean): void {
         if (!isReadingHelpPopoverOpen(help)) help.showPopover();
         positionReadingHelp(row);
     }
-    const menu = row.closest<HTMLElement>(`#${VIDEO_TRANSLATION_MENU_ID}`);
-    if (menu) syncVideoPlayerMenuLayout(menu);
 }
 
 function isReadingHelpPopoverOpen(help: HTMLElement): boolean {
@@ -409,10 +443,12 @@ export function createVideoPlayerMenu(language: UiLanguage, withLocalGeneration:
     menu.setAttribute('role', 'menu');
     menu.setAttribute('aria-label', translateVideoUi('video.menuAriaLabel', language));
     markVideoUi(menu);
-    menu.addEventListener('pointerleave', () => {
+    menu.addEventListener('pointerleave', event => {
         const row = menu.querySelector<HTMLElement>('.fluent-read-video-menu-reading')!;
         const toggle = row.querySelector('[data-action="toggle-reading-annotation"]');
-        if (document.activeElement !== toggle) setReadingHelpOpen(row, false);
+        const help = row.querySelector('[data-reading-help]');
+        if (event.relatedTarget && event.relatedTarget instanceof Node && help?.contains(event.relatedTarget)) return;
+        if (document.activeElement !== toggle) scheduleReadingHelpClose(row);
     });
 
     // 子页只切换正文，所有页面共用同一标题和关闭按钮。
@@ -426,6 +462,13 @@ export function createVideoPlayerMenu(language: UiLanguage, withLocalGeneration:
     const body = createTextElement('div', 'fluent-read-video-menu-body', '');
     const feedback = createTextElement('div', 'fluent-read-video-menu-reading-feedback', '');
     feedback.append(reading.querySelector('[data-reading-status]')!, reading.querySelector('[data-action="retry-reading-annotation"]')!);
+    const showOriginal = keyedText('button', 'fluent-read-video-menu-secondary', 'settings.translationStyle.switchToBilingual', language);
+    showOriginal.type = 'button';
+    showOriginal.dataset.readingBilingual = 'true';
+    showOriginal.dataset.action = 'show-reading-original';
+    showOriginal.setAttribute('role', 'menuitem');
+    showOriginal.hidden = true;
+    feedback.appendChild(showOriginal);
     body.appendChild(feedback);
     main.appendChild(body);
     const learning = createButton('fluent-read-video-menu-item fluent-read-video-menu-learning', {'data-action': 'open-sentence-learning', role: 'menuitem'});
@@ -617,7 +660,7 @@ export function handleVideoMenuNavigation(event: KeyboardEvent): void {
 
 /** “关闭”由总开关或隐藏字幕决定；三种显示方式只在字幕实际可见时高亮。 */
 export function renderVideoMenuMode(menu: HTMLElement, selected: VideoMenuMode, disabled: boolean, disabledReason: string): void {
-    menu.querySelectorAll<HTMLButtonElement>('[data-mode]').forEach((item) => {
+    menu.querySelectorAll<HTMLButtonElement>('.fluent-read-video-menu-mode-group [data-mode]').forEach((item) => {
         item.setAttribute('aria-checked', String(item.dataset.mode === selected));
         item.disabled = disabled;
     });

@@ -290,11 +290,11 @@ export const settingsPagePanels: Readonly<Record<string, readonly SettingsPagePa
   ],
   'settings-video': [
     {"id": "general", "labelKey": "options.panel.video", "searchTerms": "字幕 开关 翻译服务 术语库", "targetIds": []},
-    {"id": "appearance", "labelKey": "options.panel.appearance", "searchTerms": "字幕外观 显示模式 颜色 字号", "targetIds": []},
+    {"id": "appearance", "labelKey": "options.panel.appearance", "searchTerms": "字幕外观 显示模式 颜色 字号 双语顺序 双语上下顺序 原文在上 译文在上 读音标注 拉丁字母辅助读音 拼音 罗马音", "targetIds": []},
     {"id": "local", "labelKey": "options.panel.local", "searchTerms": "X 本地 AI Whisper 语音 识别", "targetIds": []},
   ],
   'settings-advanced': [
-    {"id": "recognition", "labelKey": "options.panel.recognition", "searchTerms": "页面识别 节点 段落 标题 侧栏", "targetIds": []},
+    {"id": "recognition", "labelKey": "options.panel.recognition", "searchTerms": "页面识别 节点 段落 标题 侧栏 双语上下顺序 原文在上 译文在上", "targetIds": []},
     {"id": "requests", "labelKey": "options.panel.requests", "searchTerms": "并发 限流 重试 性能 密钥 恢复 退避 AI 请求 超时 timeout 等待 慢模型", "targetIds": []},
     {"id": "cache", "labelKey": "options.panel.cache", "searchTerms": "缓存 容量 条数 存储 清除", "targetIds": []},
   ],

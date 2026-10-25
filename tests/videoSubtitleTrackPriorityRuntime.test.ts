@@ -678,6 +678,23 @@ describe('public mounted player menu entry semantics', () => {
     await settle();
     expect((ports.config as unknown as Config).videoSubtitleDisplayMode).toBe('original-only');
     expect(menu.querySelector('[data-subtitle-order="original-first"]')?.getAttribute('aria-checked')).toBe('true');
+    expect([...menu.querySelectorAll<HTMLButtonElement>('[data-subtitle-order]')].every(button => button.disabled)).toBe(true);
+    expect(menu.querySelector<HTMLElement>('[data-subtitle-order-hint]')?.hidden).toBe(false);
+    const savedPatches = ports.patch.mock.calls.length;
+    clickMenu(f, '[data-subtitle-order="translation-first"]'); await settle();
+    expect(ports.patch).toHaveBeenCalledTimes(savedPatches);
+    clickMenu(f, '.fluent-read-video-menu-mode-group [data-mode="bilingual"]'); await settle();
+    expect([...menu.querySelectorAll<HTMLButtonElement>('[data-subtitle-order]')].every(button => !button.disabled)).toBe(true);
+    expect(menu.querySelector<HTMLElement>('[data-subtitle-order-hint]')?.hidden).toBe(true);
+    expect(menu.querySelector('[data-subtitle-order="original-first"]')?.getAttribute('aria-checked')).toBe('true');
+    f.changeConfig({videoSubtitleDisplayMode: 'translation-only', videoSubtitleAppearance: {...appearance, readingAnnotation: true}});
+    await settle();
+    expect(menu.querySelector<HTMLButtonElement>('[data-reading-bilingual]')?.hidden).toBe(false);
+    expect((ports.config as unknown as Config).videoSubtitleDisplayMode).toBe('translation-only');
+    clickMenu(f, '[data-action="show-reading-original"]'); await settle();
+    expect((ports.config as unknown as Config).videoSubtitleDisplayMode).toBe('bilingual');
+    expect((ports.config as unknown as Config).videoSubtitleAppearance.readingAnnotation).toBe(true);
+    expect(menu.querySelector<HTMLButtonElement>('[data-reading-bilingual]')?.hidden).toBe(true);
   });
 
   it('fetches an uncaptured YouTube track for export while hidden and reuses that captured track when captions reopen', async () => {

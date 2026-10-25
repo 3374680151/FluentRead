@@ -138,6 +138,7 @@ function state(overrides: Partial<VideoAiMenuState> = {}): VideoAiMenuState {
 
 afterEach(() => {
   vi.unstubAllGlobals();
+  vi.useRealTimers();
 });
 
 describe('video player menu composition', () => {
@@ -147,17 +148,41 @@ describe('video player menu composition', () => {
     const menu = createVideoPlayerMenu('zh-CN', compact);
     const choices = [...menu.querySelectorAll<HTMLButtonElement>('[data-subtitle-order]')];
     expect(choices.map(button => button.textContent)).toEqual(['原文在上', '译文在上']);
+    expect(choices.map(button => [...button.querySelectorAll('.fluent-read-video-menu-order-diagram > span')].map(line => line.className)))
+      .toEqual([['fluent-read-video-menu-order-original', 'fluent-read-video-menu-order-translation'], ['fluent-read-video-menu-order-translation', 'fluent-read-video-menu-order-original']]);
+    expect(choices.every(button => button.querySelector('.fluent-read-video-menu-order-diagram')?.getAttribute('aria-hidden') === 'true')).toBe(true);
     renderVideoSubtitleOrder(menu, 'original-first', false);
     expect(choices.map(button => button.getAttribute('aria-checked'))).toEqual(['true', 'false']);
     renderVideoSubtitleOrder(menu, 'translation-first', false);
     expect(choices.map(button => button.getAttribute('aria-checked'))).toEqual(['false', 'true']);
+    const attributeWrites = choices.map(button => vi.spyOn(button, 'setAttribute'));
+    renderVideoSubtitleOrder(menu, 'translation-first', false);
+    expect(attributeWrites.every(spy => spy.mock.calls.length === 0)).toBe(true);
+    attributeWrites.forEach(spy => spy.mockRestore());
     expect(choices.every(button => button.getAttribute('role') === 'menuitemradio')).toBe(true);
     refreshVideoUiText(menu, 'en-US');
     expect(choices.map(button => button.textContent)).toEqual(['Original above', 'Translation above']);
     expect(menu.querySelector('[data-subtitle-order]')).toBe(choices[0]);
     expect(menu.querySelector('.fluent-read-video-menu-order-controls')?.getAttribute('aria-label')).toBe('Bilingual order');
+    renderVideoSubtitleOrder(menu, 'translation-first', false, false);
+    expect(choices.every(button => button.disabled)).toBe(true);
+    const hint = menu.querySelector<HTMLElement>('[data-subtitle-order-hint]')!;
+    expect(hint.hidden).toBe(false);
+    expect(hint.textContent).toBe('Applies to bilingual subtitles; your chosen order is kept');
+    expect(choices.map(button => button.getAttribute('aria-checked'))).toEqual(['false', 'true']);
+    expect(menu.querySelector('.fluent-read-video-menu-order-setting')?.getAttribute('data-active')).toBe('false');
+    renderVideoSubtitleOrder(menu, 'translation-first', false, true);
+    expect(choices.every(button => !button.disabled)).toBe(true);
+    expect(hint.hidden).toBe(true);
     renderVideoSubtitleOrder(menu, 'translation-first', true);
     expect(choices.every(button => button.disabled)).toBe(true);
+    expect(hint.hidden).toBe(true);
+    const showOriginal = menu.querySelector<HTMLButtonElement>('[data-reading-bilingual]')!;
+    expect(showOriginal.dataset.action).toBe('show-reading-original');
+    expect(showOriginal.hasAttribute('data-mode')).toBe(false);
+    expect(showOriginal.getAttribute('role')).toBe('menuitem');
+    renderVideoMenuMode(menu, 'translation-only', false, '');
+    expect(showOriginal.hasAttribute('aria-checked')).toBe(false);
   });
 
   it.each([false, true])('keeps subtitle downloads collapsed until requested (local generation: %s)', withLocalGeneration => {
@@ -220,6 +245,7 @@ describe('video player menu composition', () => {
   });
 
   it('uses a header reading icon and reveals its help on hover or focus without changing the preference', () => {
+    vi.useFakeTimers();
     const {document, window} = parseHTML('<!doctype html><body></body>');
     vi.stubGlobal('document', document);
     const menu = createVideoPlayerMenu('zh-CN', false);
@@ -244,6 +270,7 @@ describe('video player menu composition', () => {
     expect(details.querySelector('[lang="ja"]')?.textContent).toBe('今日はいい天気ですね。');
     expect(details.querySelector('[lang="ja-Latn"]')?.textContent).toBe('kyō wa ii tenki desu ne.');
     menu.dispatchEvent(new window.Event('pointerleave'));
+    vi.advanceTimersByTime(120);
     expect(details.hidden).toBe(true);
     toggle.dispatchEvent(new window.Event('focus'));
     expect(details.hidden).toBe(false);
@@ -302,6 +329,7 @@ describe('video player menu composition', () => {
   });
 
   it('keeps help during pointer transfers and retained focus, then closes when both leave', () => {
+    vi.useFakeTimers();
     const {document, window} = parseHTML('<!doctype html><body></body>');
     vi.stubGlobal('document', document);
     vi.stubGlobal('Node', window.Node);
@@ -320,6 +348,7 @@ describe('video player menu composition', () => {
     const open = () => toggle.dispatchEvent(new window.Event('pointerenter'));
     open();
     leave(toggle, help);
+    leave(menu, help.querySelector('p')!);
     leave(help, toggle);
     expect(help.hidden).toBe(false);
     expect(popover.hide).not.toHaveBeenCalled();
@@ -330,9 +359,11 @@ describe('video player menu composition', () => {
     expect(help.hidden).toBe(false);
     active = null;
     leave(toggle);
+    vi.advanceTimersByTime(120);
     expect(help.hidden).toBe(true);
     open();
     leave(help);
+    vi.advanceTimersByTime(120);
     expect(help.hidden).toBe(true);
     open();
     popover.hover(true, false);
@@ -343,9 +374,59 @@ describe('video player menu composition', () => {
     expect(help.hidden).toBe(false);
     popover.hover(false, false);
     toggle.dispatchEvent(new window.Event('blur'));
+    vi.advanceTimersByTime(120);
     expect(help.hidden).toBe(true);
     expect(popover.hide).toHaveBeenCalledTimes(3);
     expect(toggle.getAttribute('aria-checked')).toBe('false');
+  });
+
+  it('opens and closes the top-layer reading help without measuring the player menu', () => {
+    vi.useFakeTimers();
+    const {document, window} = parseHTML('<!doctype html><body><div id="player"></div></body>');
+    vi.stubGlobal('document', document);
+    const menu = createVideoPlayerMenu('en-US', false);
+    const player = document.getElementById('player')!;
+    player.appendChild(menu);
+    Object.defineProperties(player, {clientWidth: {value: 800}, clientHeight: {value: 450}});
+    const measureMenu = vi.fn(() => 300);
+    Object.defineProperty(menu, 'scrollHeight', {get: measureMenu});
+    menu.hidden = false;
+    mockReadingHelpPopover(menu);
+    const toggle = menu.querySelector<HTMLButtonElement>('[data-action="toggle-reading-annotation"]')!;
+    toggle.dispatchEvent(new window.Event('pointerenter'));
+    menu.dispatchEvent(new window.Event('pointerleave'));
+    vi.advanceTimersByTime(120);
+    expect(measureMenu).not.toHaveBeenCalled();
+    expect(menu.querySelector<HTMLElement>('[data-reading-help]')!.hidden).toBe(true);
+  });
+
+  it('keeps reading help across the pointer gap and cancels pending dismissal on explicit close', () => {
+    vi.useFakeTimers();
+    const {document, window} = parseHTML('<!doctype html><body></body>');
+    vi.stubGlobal('document', document);
+    vi.stubGlobal('Node', window.Node);
+    const menu = createVideoPlayerMenu('en-US', false); menu.hidden = false;
+    const popover = mockReadingHelpPopover(menu);
+    const toggle = menu.querySelector<HTMLButtonElement>('[data-action="toggle-reading-annotation"]')!;
+    const help = menu.querySelector<HTMLElement>('[data-reading-help]')!;
+    toggle.dispatchEvent(new window.Event('pointerenter'));
+    toggle.dispatchEvent(new window.Event('pointerleave'));
+    menu.dispatchEvent(new window.Event('pointerleave'));
+    vi.advanceTimersByTime(60);
+    expect(help.hidden).toBe(false);
+    help.dispatchEvent(new window.Event('pointerenter'));
+    vi.advanceTimersByTime(120);
+    expect(help.hidden).toBe(false);
+    expect(popover.hide).not.toHaveBeenCalled();
+    help.dispatchEvent(new window.Event('pointerleave'));
+    expect(closeVideoMenuDisclosure(menu)).toBe(true);
+    expect(help.hidden).toBe(true);
+    toggle.dispatchEvent(new window.Event('pointerenter'));
+    vi.advanceTimersByTime(120);
+    expect(help.hidden).toBe(false);
+    toggle.dispatchEvent(new window.Event('pointerleave'));
+    vi.advanceTimersByTime(120);
+    expect(help.hidden).toBe(true);
   });
 
   it('fits help inside a panned narrow visual viewport and places it below an icon near the top', () => {

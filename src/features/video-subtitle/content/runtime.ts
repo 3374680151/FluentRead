@@ -885,7 +885,7 @@ export function mountVideoSubtitleTranslation(): () => void {
     renderVideoModelPrompt(menu, choice && {options: VIDEO_LOCAL_TRANSCRIPTION_MODELS, ...choice}, language);
     const selectedMode: VideoMenuMode = enabled && visible ? normalizeVideoSubtitleDisplayMode(config.videoSubtitleDisplayMode) : 'off';
     renderVideoMenuMode(menu, selectedMode, !config.on, status);
-    renderVideoSubtitleOrder(menu, config.videoSubtitleAppearance.bilingualOrder, !enabled);
+    renderVideoSubtitleOrder(menu, config.videoSubtitleAppearance.bilingualOrder, !enabled || !visible, selectedMode === 'bilingual');
     const service = menu.querySelector<HTMLElement>('[data-service-label]');
     if (service) service.textContent = localizeVideoUiText(getVideoServiceLabel(config.videoService || config.service), language);
     refreshVideoUiText(menu, language);
@@ -1044,6 +1044,7 @@ export function mountVideoSubtitleTranslation(): () => void {
     event.stopPropagation();
 
     if (handleVideoMenuDisclosure(menu, target.dataset.action)) return;
+    if (target.dataset.action === 'show-reading-original') {selectMenuMode('bilingual'); return;}
     if (reading.handleAction(target.dataset.action)) return;
 
     if (target.dataset.action?.startsWith('download-') && isAiFullActive() && aiFullPhase !== 'ready') {

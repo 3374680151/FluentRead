@@ -61,6 +61,7 @@ export function refreshBilingualTranslationSkeleton(
         targetLanguage: replay.targetLanguage,
         style: replay.style,
         longParagraphLineBreak: replay.longParagraphLineBreak,
+        translationBeforeOriginal: replay.translationBeforeOriginal,
         sourceText: replay.sources.join('\n'),
         ...(import.meta.env.BROWSER !== 'userscript' ? {personalCorrectionId: replay.personalCorrectionId} : {}),
     });
