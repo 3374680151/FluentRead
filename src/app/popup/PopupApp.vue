@@ -188,6 +188,7 @@
               </template>
               <button class="display-mode-button page-font-entry" :class="{'is-browser-default': config.browserDefaultTranslationFont}" type="button" data-testid="page-font-entry"
                 :data-font-state="pageFontButton.state" :aria-label="pageFontButton.ariaLabel" :aria-pressed="config.browserDefaultTranslationFont"
+                :aria-description="pageFontState.error ? pageFontButton.label : undefined"
                 :aria-busy="pageFontState.busy" :disabled="pageFontButton.disabled" :onClick="pageFontButton.toggle">
                 <svg :data-font-style="config.browserDefaultTranslationFont ? 'sans' : 'serif'" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
                   <path v-if="config.browserDefaultTranslationFont" d="m3 18 4.5-12L12 18M4.5 14h6M21 10v8M21 14a3.5 4 0 1 0-7 0 3.5 4 0 0 0 7 0" />
@@ -217,7 +218,6 @@
         </div>
       </div>
 
-      <p v-if="pageFontState.error && pageFontEntryVisible" class="notice error" role="alert" data-testid="page-font-error" data-i18n-ignore>{{ t(pageFontState.error) }} {{ t('popup.pageFont.retryAction') }}</p>
       <p v-if="notice" class="notice" :class="noticeType" :role="noticeType === 'error' ? 'alert' : 'status'" :aria-live="noticeType === 'error' ? 'assertive' : 'polite'">{{ notice }}</p>
     </section>
 

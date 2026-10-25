@@ -278,7 +278,8 @@ describe('实际 Popup 缓存模板与页面操作',()=>{
     vi.mocked(sender).mockRejectedValueOnce(Error('synthetic background persistence failure'));
     const entry=()=>button('page-font-entry');await eventOf(entry())();await drain();
     expect(entry().getAttribute('aria-pressed')).toBe('false');expect(entry().getAttribute('data-font-state')).toBe('error');
-    expect(entry().hasAttribute('disabled')).toBe(false);expect(button('page-font-error').textContent).toContain(zhCNMessages['popup.pageFont.changeError']);
+    expect(entry().hasAttribute('disabled')).toBe(false);expect(button('page-font-error')).toBeNull();
+    expect(entry().getAttribute('aria-description')).toContain(zhCNMessages['popup.pageFont.changeError']);
     await eventOf(entry())();await drain();expect(entry().getAttribute('aria-pressed')).toBe('true');expect(button('page-font-error')).toBeNull();
     expect(messages).toHaveLength(1);expect(messages[0].config).toEqual({browserDefaultTranslationFont:true});expect(records.get('local:config')).toMatchObject({browserDefaultTranslationFont:true});
   });

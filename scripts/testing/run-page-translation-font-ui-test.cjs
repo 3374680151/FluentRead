@@ -199,6 +199,7 @@ async function main() {
       }, enabled);
       assert.equal(await popup.getByTestId('page-font-entry').locator('svg').getAttribute('data-font-style'), enabled ? 'sans' : 'serif', 'Aa 应以字体造型表达当前状态');
       assert.equal(await popup.locator('.drawer-surface:visible').count(), 0, 'Aa 字体切换不应打开设置抽屉');
+      assert.equal(await popup.getByTestId('page-font-error').count(), 0, '字体状态不得在卡片下方追加说明');
     };
     await waitPopup();
     await assertFontButton(false);
