@@ -14,6 +14,32 @@ const text=(sourceText:string,bbox=box(10,10,90,30),sourceBoxes?:ReturnType<type
 const fixture=(overrides:any={})=>({name:'actual-quality',width:400,height:300,expectedSource:['WAIT FOR ME','WAIT FOR ME','GO NOW'],expectedAnchors:['WAIT FOR ME','GO NOW'],anchorOccurrences:{'WAIT FOR ME':2,'GO NOW':1},regions:[{id:'line-1',bbox:box(10,10,90,30)}],forbiddenRegions:[{id:'robot',bbox:box(200,100,300,250)}],...overrides});
 const naturalRoot=new URL('./fixtures/manga-natural/',import.meta.url);
 const naturalManifest=JSON.parse(readFileSync(new URL('manifest.json',naturalRoot),'utf8'));
+const runnerAst=ts.createSourceFile('runner.cjs',readFileSync(new URL('../scripts/testing/run-manga-translation-test.cjs',import.meta.url),'utf8'),ts.ScriptTarget.Latest,true,ts.ScriptKind.JS);
+describe('普通图片质量矩阵使用独立的真实入口',()=>{
+    it('拒绝把真实站点、其他阅读模式、无字页或其他OCR引擎混入普通Paddle质量统计',()=>{
+        const admission=runnerAst.statements.find(node=>ts.isIfStatement(node)&&node.expression.getText(runnerAst)==='ordinaryImageQuality')!.getText(runnerAst);
+        const base:any={assert:require('node:assert/strict'),ordinaryImageQuality:true,qualityManifest:{},qualityFixtures:[{sourceLanguage:'en'},{sourceLanguage:'ja'},{sourceLanguage:'auto'}],prefetchPages:0,offlineModels:null,preloadModels:null,blockedOfficial:false,blockedAll:false};
+        const modes=['liveSite','liveTranslation','readerSmoke','surfaceReaderTest','segmentReaderTest','baseline','errorRecoveryTest','readAheadTest','scrollStabilityTest','scrollIntentTest','cacheNavigationTest','tieredCacheTest','pageFeedbackTest'];
+        for(const mode of modes)base[mode]=false;
+        expect(()=>runInNewContext(admission,base)).not.toThrow();
+        for(const mode of modes)expect(()=>runInNewContext(admission,{...base,[mode]:true})).toThrow();
+        for(const overrides of [{qualityManifest:null},{prefetchPages:1},{offlineModels:'/fixed-models'},{preloadModels:'/fixed-models'},{blockedOfficial:true},{blockedAll:true},{qualityFixtures:[{sourceLanguage:'en',expectedNoText:true}]},{qualityFixtures:[{sourceLanguage:'ru'}]},{qualityFixtures:[{sourceLanguage:'ko'}]}])
+            expect(()=>runInNewContext(admission,{...base,...overrides})).toThrow();
+        expect(()=>runInNewContext(admission,{...base,ordinaryImageQuality:false,liveSite:true,qualityManifest:null})).not.toThrow();
+    });
+    it('真实普通按钮须命中且位于视口内才允许点击，不能借用漫画入口',async()=>{
+        const toggle=runnerAst.statements.find(node=>ts.isFunctionDeclaration(node)&&node.name?.text==='toggle')!.getText(runnerAst);
+        for(const point of [{x:120,y:80,viewport:{width:800,height:600},hit:true},{x:120,y:80,viewport:{width:800,height:600},hit:false},{x:120,y:601,viewport:{width:800,height:600},hit:true}]){
+            const clicks:number[][]=[];let reads=0;
+            const sandbox:any={assert:require('node:assert/strict'),ordinaryImageQuality:true,activateVisible:async()=>undefined,
+                page:{locator:()=>({first:()=>({boundingBox:async()=>({x:0,y:0,width:600,height:900})})}),mouse:{move:async()=>undefined,click:async(...args:number[])=>{clicks.push(args);}}},
+                imageUi:async()=>++reads===1?true:point,wait:async(predicate:()=>Promise<unknown>)=>{expect(await predicate()).toBe(true);},ball:()=>{throw new Error('Must use ordinary image controls');}};
+            const run=runInNewContext(`(${toggle})`,sandbox);
+            if(point.hit&&point.y<point.viewport.height){await run();expect(clicks).toEqual([[120,80]]);}
+            else{await expect(run()).rejects.toThrow('visible and hit-testable');expect(clicks).toEqual([]);}
+        }
+    });
+});
 const generalParagraphFixture=()=>{
     const regions=[
         {id:'main-right',text:'列の続き',anchor:'列の続き',bbox:box(125,20,145,140),vertical:true},
@@ -101,19 +127,26 @@ describe('真实漫画runner多轮layout采集的有界容量',()=>{
         visit(ast);expect(initializer).not.toBe('');expect(observer).not.toBe('');
         const limit=runInNewContext(initializer,{qualityFixtures:Array(32),pipelineRounds:5});
         expect(limit).toBeGreaterThanOrEqual(160);expect(limit).toBeLessThanOrEqual(168);
-        const response={lines:[{text:'受控译文',sourceText:'actual source',bbox:box(10,10,90,30)}]};
+        const baselineResponse={lines:[{text:'受控译文',sourceText:'actual source',bbox:box(10,10,90,30)}]};
+        let response:any=baselineResponse;
         const chrome={runtime:{sendMessage:(_message:unknown,callback?:Function)=>{if(callback)callback(response);return Promise.resolve(response);},onMessage:{addListener:()=>undefined}}};
         const sandbox:any={chrome,fetch:()=>{throw new Error('Layout trace replay must not fetch');}};
         const observe=runInNewContext(`(${observer})`,sandbox);
         observe({live:false,trace:false,traceLayout:true,layoutTraceLimit:limit});
         for(let index=0;index<limit+3;index++){
-            const message={type:'FLUENT_READ_IMAGE_TRANSLATE_OFFSCREEN',requestId:String(index)};
+            response=index===0?{success:true,lines:[],image:'data:image/png;base64,actual-source'}:index===1?{success:true,lines:[{text:'08:45',sourceText:'08:45',bbox:box(10,10,90,30)}],mangaPatches:{patches:[]}}:baselineResponse;
+            if(index===2)response={success:true,lines:[],image:'data:image/png;base64,different-source'};
+            if(index===3)response={success:false,lines:[],image:'data:image/png;base64,actual-source'};
+            if(index===4)response={success:true,lines:[],mangaPatches:{patches:[]}};
+            const message={type:'FLUENT_READ_IMAGE_TRANSLATE_OFFSCREEN',requestId:String(index),manga:index!==4,image:'data:image/png;base64,actual-source'};
             if(index%2)chrome.runtime.sendMessage(message,(value:unknown)=>expect(value).toBe(response));
             else expect(await chrome.runtime.sendMessage(message)).toBe(response);
         }
         const results=sandbox.__mangaTest.layoutResults;
         expect(results).toHaveLength(limit);expect(results[159].requestId).toBe('159');
         expect(results[159].lines[0].sourceText).toBe('actual source');
+        expect(results.slice(0,6).map((result:any)=>result.noBitmap)).toEqual([true,true,false,false,false,false]);
+        for(const result of results.slice(0,2))expect(evaluateQualityFixture(fixture(),{texts:result.lines.map((line:any)=>line.sourceText),lines:result.lines}).anchors.every((anchor:any)=>!anchor.found)).toBe(true);
         await chrome.runtime.sendMessage({type:'UNRELATED',requestId:'host'});
         expect(results).toHaveLength(limit);
     });
@@ -338,5 +371,25 @@ describe('固定漫画结构场景进入常规质量回归',()=>{
         expect(result).toMatchObject({scenes:5,fullSourceAnchors:29,negativeCases:51,allAssertionsPassed:true});
         expect(result.results.map((row:any)=>row.scene)).toEqual(['narrow-inset-card-dialogue','midband-crossing-detached-cards','bound-spread-gutter-caption','multisize-margin-callouts','photographed-perspective-note']);
         expect(readFileSync(manifest)).toEqual(before);
+    });
+});
+
+describe('固定彩色文字场景进入常规质量回归',()=>{
+    it('无需模型校验八类颜色/透明度输入，保留漏尾字、误报与合段失败门槛',()=>{
+        const manifest=new URL('./fixtures/manga-chromatic/manifest.json',import.meta.url),before=readFileSync(manifest);
+        const result=JSON.parse(execFileSync(process.execPath,[fileURLToPath(new URL('../scripts/testing/check-manga-chromatic-fixtures.cjs',import.meta.url))],{encoding:'utf8',stdio:'pipe'}));
+        expect(result).toMatchObject({passed:true,counts:{scenes:8,anchors:23,perfectTruthReplays:8,singleCharacterMisreadRejected:23,artInjectionsRejected:8,extraTextOutsideArtRejected:7,independentGroupsConflationRejected:7,coloredTailTruncationRejected:1,wordlessFalseTextRejected:1}});
+        expect(readFileSync(manifest)).toEqual(before);
+        const baselineBytes=readFileSync(new URL('./fixtures/manga-chromatic/first-ocr-baseline.json',import.meta.url));
+        expect(createHash('sha256').update(baselineBytes).digest('hex')).toBe('f9ad54079eda32540b460e142f992f0df0bc1d5bf5ec80c7423f0e9c647a8fc0');
+        const baseline=JSON.parse(baselineBytes.toString()),fixtures=JSON.parse(before.toString()).fixtures;
+        expect(baseline.qualitySummary.anchors).toEqual({total:23,matched:14,failed:9});expect(baseline.passingScenes).toHaveLength(3);
+        expect(baseline.scenes.map((scene:any)=>scene.scene)).toEqual(fixtures.map((f:any)=>f.name));
+        for(const f of fixtures){
+            const scene=baseline.scenes.find((scene:any)=>scene.scene===f.name);
+            const quality=evaluateQualityFixture(f,{texts:scene.texts,lines:scene.ocrLines}),order=evaluateQualityReadingOrder(f,scene.texts);
+            expect(scene.expectedSource).toEqual(f.expectedSource);expect(quality.anchors).toEqual(scene.anchors);
+            expect([...quality.qualityFailures,...order.qualityFailures]).toEqual(scene.qualityFailures);
+        }
     });
 });

@@ -59,6 +59,9 @@ if(recoveryLongDetails||recoveryRtl)assert.ok(errorRecoveryTest,'Recovery long-d
 const prefetchPages=Number(arg('prefetch-pages','0'));
 const explicitPipelineInputs=arg('pipeline-inputs',null)?.split(',').map(file=>path.resolve(file));
 const qualityManifestPath=arg('quality-manifest',null);
+const qualityProfile=arg('quality-profile','manga');
+assert.ok(['manga','image'].includes(qualityProfile),'Quality profile must be manga or image');
+const ordinaryImageQuality=qualityProfile==='image';
 assert.ok(!qualityManifestPath||!explicitPipelineInputs,'Choose either --quality-manifest or --pipeline-inputs');
 const qualityManifest=qualityManifestPath?JSON.parse(fs.readFileSync(path.resolve(qualityManifestPath),'utf8')):null;
 const qualityFixtures=qualityManifest?.fixtures;
@@ -80,6 +83,12 @@ if(qualityManifest){
     }
 }
 const pipelineInputs=qualityFixtures?.map(fixture=>fixture.input)||explicitPipelineInputs;
+if(qualityManifest)assert.ok(fs.existsSync(path.join(extensionDir,'manifest.json')),'Quality matrix requires an existing built extension manifest before browser launch');
+if(ordinaryImageQuality)assert.ok(qualityManifest&&!liveSite&&!liveTranslation&&!readerSmoke&&!surfaceReaderTest&&!segmentReaderTest
+    &&!baseline&&!errorRecoveryTest&&!readAheadTest&&!scrollStabilityTest&&!scrollIntentTest&&!cacheNavigationTest&&!tieredCacheTest&&!pageFeedbackTest&&prefetchPages===0
+    &&!offlineModels&&!preloadModels&&!blockedOfficial&&!blockedAll
+    &&qualityFixtures.every(fixture=>!fixture.expectedNoText&&['en','ja','auto'].includes(fixture.sourceLanguage)),
+    'Ordinary Paddle quality requires a controlled nonempty en/ja/auto corpus and shared OCR cache, without other reader modes, prefetch or legacy model-source diagnostics');
 if(errorRecoveryTest)assert.ok(!liveSite&&!liveTranslation&&!readerSmoke&&!canvasReaderTest&&!backgroundReaderTest&&!segmentReaderTest&&!pipelineInputs
     &&!readAheadTest&&!scrollStabilityTest&&!scrollIntentTest&&!cacheNavigationTest&&!tieredCacheTest&&!pageFeedbackTest&&prefetchPages===0,
     'Error recovery uses only its controlled fixture with prefetch disabled, without live/pipeline/other reader modes');
@@ -157,7 +166,7 @@ let profile; let launchAttempted = false;
 fs.mkdirSync(artifacts, {recursive: true});
 const report = {site: liveSite ? 'live MANGA Plus' : 'controlled MANGA Plus reader fixture',
     translation: liveTranslation ? 'live Google' : 'deterministic Google text transport',
-    ocr: ['ru','ko'].includes(sourceLanguage) ? 'real production Tesseract with manga cleanup and typesetting' : 'real production PaddleOCR', cases: [], screenshots: [], errors: [], hostErrors: [], pageErrors: [], consoleErrors: []};
+    ocr: ordinaryImageQuality ? 'real production PaddleOCR ordinary-image profile' : ['ru','ko'].includes(sourceLanguage) ? 'real production Tesseract with manga cleanup and typesetting' : 'real production PaddleOCR', qualityProfile, cases: [], screenshots: [], errors: [], hostErrors: [], pageErrors: [], consoleErrors: []};
 if(errorRecoveryTest){
     report.site=`controlled ${errorRecoverySurface} recovery fixture using production reader discovery`;
     report.errorRecovery={surface:errorRecoverySurface,fixtureUrl:targetUrl,sourceSelector:readerSelector,
@@ -475,6 +484,14 @@ async function verifySegmentReader() {
 }
 async function toggle() {
     await activateVisible(page);
+    if(ordinaryImageQuality){
+        const image=page.locator('.zao-image').first(),bounds=await image.boundingBox();assert.ok(bounds);
+        await page.mouse.move(bounds.x+Math.min(bounds.width/2,150),Math.max(5,bounds.y+Math.min(80,bounds.height/2)));
+        await wait(async()=>await imageUi(`return [...this.querySelectorAll('.fr-image-controls:not([hidden]) .fluent-read-image-translation-button')].some(b=>getComputedStyle(b).display!=='none'&&b.getBoundingClientRect().width>0)`),10000);
+        const point=await imageUi(`const b=[...this.querySelectorAll('.fr-image-controls:not([hidden]) .fluent-read-image-translation-button')].find(b=>getComputedStyle(b).display!=='none'&&b.getBoundingClientRect().width>0);const r=b.getBoundingClientRect(),x=r.x+r.width/2,y=r.y+r.height/2,hit=this.elementFromPoint(x,y);return {x,y,viewport:{width:innerWidth,height:innerHeight},hit:hit===b||b.contains(hit)};`);
+        assert.ok(point.hit&&point.x>=0&&point.x<point.viewport.width&&point.y>=0&&point.y<point.viewport.height,'Ordinary action is visible and hit-testable');
+        await page.mouse.click(point.x,point.y);return;
+    }
     const point=await ball(`const b=this.querySelector('.floating-ball-manga');if(!b)return null;const r=b.getBoundingClientRect(),clipped=getComputedStyle(b).clipPath!=='none',left=this.querySelector('.fr-floating-ball').dataset.position==='left';return {x:r.x+r.width*(clipped?(left ? .75 : .25):.5),y:r.y+r.height/2}`);
     assert.ok(point,'Manga button exists');await page.mouse.move(point.x,point.y);
     await wait(async()=>await ball('return this.querySelector(".fr-floating-ball").classList.contains("floating-ball-expanded")'),3000);
@@ -634,6 +651,11 @@ async function patch(config) {
     },config);
 }
 async function assertQuietReading() {
+    if(ordinaryImageQuality){
+        assert.equal(Boolean(await mangaEntry('return !!this.querySelector(".fr-manga-entry")')),false,'Ordinary mode does not open manga panels');
+        assert.notEqual(await imageUi('return [...this.querySelectorAll(".fr-image-feedback")].some(e=>!e.hidden&&e.dataset.manga==="true")'),true,'Ordinary mode does not use manga status');
+        return;
+    }
     assert.equal(await mangaEntry('return !!this.querySelector(".fr-manga-entry")'),false,'No automatic reader panel');
     assert.notEqual(await imageUi('return [...this.querySelectorAll(".fr-image-feedback")].some(e=>!e.hidden && (e.dataset.manga!=="true" || e.dataset.phase!=="loading" || !!e.querySelector("button")))'),true,'Only noninteractive per-page manga status may appear');
     assert.notEqual(await imageUi('return [...this.querySelectorAll(".fr-image-controls")].some(e=>!e.hidden && getComputedStyle(e).display!=="none")'),true,'No per-image original, text or cancel controls while reading');
@@ -989,7 +1011,8 @@ async function verifyPipelinePerformance(extensionId) {
             const image=document.querySelector('.zao-image');
             new MutationObserver(()=>{const change={at:Date.now(),opacity:image.style.opacity};globalThis.__pipelineDisplay.changes.push(change);if(change.opacity==='0')requestAnimationFrame(()=>change.presentedAt=Date.now());}).observe(image,{attributes:true,attributeFilter:['style']});
         });
-        await wait(async()=>!!await ball(`return this.querySelector('.floating-ball-manga')`),30000);
+        if(ordinaryImageQuality)await page.mouse.move(10,10);
+        else await wait(async()=>!!await ball(`return this.querySelector('.floating-ball-manga')`),30000);
         const before=await ops();const start=Date.now();
         await modelObserver.command('Runtime.evaluate',{expression:'globalThis.__pipelineSamples.workers=[];globalThis.__pipelineSamples.runs=[];globalThis.__pipelineSamples.encodes=[];globalThis.__pipelineSamples.reads=[];globalThis.__pipelineSamples.sessions=[];globalThis.__pipelineSamples.canvasCalls={};globalThis.__pipelineSamples.yields=[];globalThis.__pipelineSamples.gpuSubmissions=0'});
         const measured=await require('./local-model-browser-helpers.cjs').measureBrowser(launched.context,`manga-round-${round+1}`,artifacts,async()=>{
@@ -1002,8 +1025,8 @@ async function verifyPipelinePerformance(extensionId) {
             if(!animation.reducedMotion)assert.ok(new Set(animation.frames.map(frame=>frame.transform)).size>1,'Spinner keeps rotating when decorative animations are disabled');
             assert.ok(animation.frames.every((frame,i,frames)=>!i || frame.at-frames[i-1].at<500),'Page heartbeat stays responsive during real inference');
             await screenshot(`${caseName}-loading-${round+1}`);
-            if(fixture?.expectedNoText) {
-                // 无字页合法完成时保留原图；同样等待真实请求返回，误识别成对白仍记录为质量失败。
+            if(fixture) {
+                // 以真实响应决定是否保留原图：漏识别或只识别到无需改写的数字仍须完成全部质量统计。
                 await wait(async()=>await worker.evaluate(index=>{
                     const id=globalThis.__mangaTest.operations[index];
                     return !!id&&globalThis.__mangaTest.layoutResults?.some(result=>result.requestId===id);
@@ -1018,20 +1041,27 @@ async function verifyPipelinePerformance(extensionId) {
         const progress=await worker.evaluate(id=>globalThis.__mangaTest.progress.filter(p=>p.requestId===id),requestId);
         const textBatches=await worker.evaluate(index=>globalThis.__mangaTest.textBatches.slice(index),batchStart);
         const texts=textBatches.flat();
+        const layout=fixture?await worker.evaluate(id=>globalThis.__mangaTest.layoutResults.find(result=>result.requestId===id),requestId):null;
+        const observedNoBitmap=layout?.noBitmap===true;
         const sampled=await modelObserver.command('Runtime.evaluate',{expression:'globalThis.__pipelineSamples',returnByValue:true});
         const displayedBitmap=await imageUi(`const surface=this.querySelector('.fluent-read-image-translation-bitmap');return surface?.tagName==='CANVAS'?surface.toDataURL('image/png'):surface?.src`);
-        const translated=displayedBitmap||(fixture?.expectedNoText?data:undefined);
+        const assertOriginalWithoutBitmap=async(bitmap)=>{
+            assert.ok(!bitmap,'A no-bitmap response leaves no translated surface');
+            assert.deepEqual(await page.locator('.zao-image').first().evaluate(image=>({src:image.src,srcset:image.getAttribute('srcset'),sizes:image.getAttribute('sizes'),style:image.getAttribute('style')})),sourceState,'A no-bitmap response preserves the visible original source and styles');
+            assert.equal(await page.locator('.zao-image').first().evaluate(image=>{const r=image.getBoundingClientRect(),s=getComputedStyle(image);return s.display!=='none'&&s.visibility==='visible'&&Number(s.opacity)>0&&r.width>0&&r.height>0&&r.left<innerWidth&&r.right>0&&r.top<innerHeight&&r.bottom>0;}),true,'The original remains visible in the viewport without a translated surface');
+        };
+        if(observedNoBitmap)await assertOriginalWithoutBitmap(displayedBitmap);
+        const translated=displayedBitmap||(observedNoBitmap?data:undefined);
         assert.ok(translated?.startsWith('data:image/png;base64,'),'Lossless translated output exists');
         const output=path.join(artifacts,`${caseName}-round-${round+1}-translated.png`);
         fs.writeFileSync(output,Buffer.from(translated.split(',')[1],'base64'));
         const display=await page.evaluate(()=>globalThis.__pipelineDisplay);
         const result={input,scene:caseName,sourceLanguage:fixture?.sourceLanguage||sourceLanguage,round,cold:report.pipeline.length===0,totalMs:end-start,start,display,requestId,progress,texts,...sampled.result.value,output,resources:measured};
         report.pipeline.push(result);
-        if(!fixture?.expectedNoText)assert.ok(texts.length>0,'Actual text recognition ran');
+        if(!fixture)assert.ok(texts.length>0,'Actual text recognition ran');
         if(fixture){
             result.expectedSource=fixture.expectedSource;
-            const layout=await worker.evaluate(id=>globalThis.__mangaTest.layoutResults.find(result=>result.requestId===id),requestId);
-            assert.ok(layout,'Quality scene captures its actual offscreen OCR layout');result.ocrLines=layout.lines;
+            assert.ok(layout,'Quality scene captures its actual offscreen OCR layout');result.ocrLines=layout.lines;result.observedNoBitmap=observedNoBitmap;
             // 正锚点、重复次数、负区域与无字页均保留失败，再完成后续场景；不以期望文字代替识别值。
             Object.assign(result,evaluateQualityFixture(fixture,{texts,lines:layout.lines}));
             if(fixture.expectedNoText) {
@@ -1056,8 +1086,10 @@ async function verifyPipelinePerformance(extensionId) {
         if(fixture){
             assert.deepEqual(await page.locator('.zao-image').first().evaluate(image=>({src:image.src,srcset:image.getAttribute('srcset'),sizes:image.getAttribute('sizes'),style:image.getAttribute('style')})),sourceState,'Restoring original preserves source content and styles');
             const operations=await ops(),requests=await worker.evaluate(()=>globalThis.__mangaTest.requests.length);
-            await toggle();await wait(async()=>fixture.expectedNoText?await imageUi(`return !!this.querySelector('.fr-image-feedback[data-phase="translated"]')`):await page.locator('.zao-image').first().evaluate(i=>i.style.opacity==='0'));
-            const restored=(await imageUi(`const surface=this.querySelector('.fluent-read-image-translation-bitmap');return surface?.tagName==='CANVAS'?surface.toDataURL('image/png'):surface?.src`))||(fixture.expectedNoText?data:undefined);
+            await toggle();await wait(async()=>observedNoBitmap?await imageUi(`return !!this.querySelector('.fr-image-feedback[data-phase="translated"]')`):await page.locator('.zao-image').first().evaluate(i=>i.style.opacity==='0'));
+            const redisplayedBitmap=await imageUi(`const surface=this.querySelector('.fluent-read-image-translation-bitmap');return surface?.tagName==='CANVAS'?surface.toDataURL('image/png'):surface?.src`);
+            if(observedNoBitmap)await assertOriginalWithoutBitmap(redisplayedBitmap);
+            const restored=redisplayedBitmap||(observedNoBitmap?data:undefined);
             assert.equal(restored,translated,'Cached redisplay preserves exact translated bitmap');
             assert.equal(await ops(),operations,'Cached redisplay issues no OCR operation');
             assert.equal(await worker.evaluate(()=>globalThis.__mangaTest.requests.length),requests,'Cached redisplay issues no text transport');
@@ -1503,7 +1535,8 @@ await import('./mangaInferenceWorker.real.js');self.removeEventListener('message
     const options=popup,reopened=popup,modelSettings=popup;
     await gotoVisible(popup,`chrome-extension://${extensionId}/popup.html`);
     await patch({on:true,uiLanguage:'zh-CN',uiLanguageSetupCompleted:true,disableImageTranslator:false,
-        imageTranslationMangaEnabled:true,imageTranslationMangaDownloadConfirmed:true,imageTranslationMangaPromptEnabled:false,imageTranslationHoverEnabled:false,disableFloatingBall:false,
+        imageTranslationMangaEnabled:!ordinaryImageQuality,imageTranslationMangaDownloadConfirmed:true,imageTranslationMangaPromptEnabled:false,imageTranslationHoverEnabled:ordinaryImageQuality,disableFloatingBall:ordinaryImageQuality,
+        ...(ordinaryImageQuality?{imageTranslationOcrEngine:'paddle'}:{}),
         imageTranslationMangaPrefetchPages:prefetchPages,
         service:'google',from:sourceLanguage,to:targetLanguage,useCache:true,enableAIContext:false,animations:false});
     await worker.evaluate(({live,trace,traceLayout,layoutTraceLimit})=>{
@@ -1515,7 +1548,7 @@ await import('./mangaInferenceWorker.real.js');self.removeEventListener('message
             chrome.runtime.sendMessage=function(...args){
                 const message=args[0],observe=response=>{
                     if(message?.type==='FLUENT_READ_IMAGE_TRANSLATE_OFFSCREEN'&&Array.isArray(response?.lines)&&test.layoutResults.length<layoutTraceLimit)
-                        test.layoutResults.push({requestId:message.requestId,lines:response.lines.map(({text,sourceText,bbox,fontSize,sourceBoxes,vertical})=>({text,sourceText,bbox,fontSize,sourceBoxes,vertical}))});
+                        test.layoutResults.push({requestId:message.requestId,noBitmap:response.success===true&&message.manga===true&&(Array.isArray(response.mangaPatches?.patches)&&response.mangaPatches.patches.length===0||response.lines.length===0&&typeof response.image==='string'&&response.image===message.image),lines:response.lines.map(({text,sourceText,bbox,fontSize,sourceBoxes,vertical})=>({text,sourceText,bbox,fontSize,sourceBoxes,vertical}))});
                     return response;
                 };
                 const last=args.length-1,callback=args[last];
@@ -1619,7 +1652,7 @@ await import('./mangaInferenceWorker.real.js');self.removeEventListener('message
         await importInput.waitFor({state:'attached'});
         if(useModelCache){
             const needsPaddle=(qualityFixtures?.map(fixture=>fixture.sourceLanguage)||[sourceLanguage]).some(language=>!['ru','ko'].includes(language));
-            const kinds=needsPaddle?['ocr','inpaint']:['inpaint'];
+            const kinds=ordinaryImageQuality?['ocr']:needsPaddle?['ocr','inpaint']:['inpaint'];
             preparedModels=await ensureImageTranslationModelFiles({directory:modelCacheDir,kinds,sourceDirectories:[modelCacheDir]});
             report.modelCache=preparedModels;
         }
@@ -1712,7 +1745,7 @@ await import('./mangaInferenceWorker.real.js');self.removeEventListener('message
         addEventListener('scroll',()=>capture('scroll'),true);
         document.addEventListener('load',event=>{if(event.target.matches?.(selector))capture('load:'+event.target.id);},true);
     },readerSelector);
-    await wait(async()=>!!await ball(`return this.querySelector('.floating-ball-manga')`),30000);
+    if(!ordinaryImageQuality)await wait(async()=>!!await ball(`return this.querySelector('.floating-ball-manga')`),30000);
     if(segmentReaderTest){await verifySegmentReader();report.status='passed';return;}
     if(surfaceReaderTest){await verifyCanvasReader();report.status='passed';return;}
     if(imageTurnKey){await verifyPagedImageReader();report.status='passed';return;}

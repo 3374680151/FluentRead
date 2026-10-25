@@ -1,7 +1,7 @@
 /**
  * @file src/features/image-translation/services/inpainting.ts
  * 文件职责：依据有效 OCR 文本框在像素缓冲区中修复原文字，保留修复区域以外的图像内容。
- * 主要内容：按源行框及有界边缘修补，保留行间图案；相接簇用链表连接成员后一次展开，避免重复复制和参数展开；仅为局部范围分配去重蒙版和分层队列，按预乘透明度扩散；默认保留输入，也可显式复用调用方独占的像素缓冲。
+ * 主要内容：按源行框及有界边缘修补，保留行间图案；相接簇用链表连接成员后一次展开，避免重复复制和参数展开；全部八邻域已知边界为同一非透明颜色时等价填充去重蒙版并省去队列，否则按预乘透明度逐层修补；默认保留输入，也可显式复用调用方独占的像素缓冲。
  * 模块边界：本模块是无 DOM、无网络的轻量像素算法，不进行 OCR 或译文绘制，也不宣称能够重建复杂纹理；输入和输出保持原图尺寸，无法取得已知边界时保留原像素。
  */
 import type {OcrLine} from '@/src/shared/image/types';
@@ -107,6 +107,19 @@ function repairCluster(result: Uint8ClampedArray, imageWidth: number, imageHeigh
         }
     }
 
+    // 仅接受完整的实际扩散边界；触图边或全透明边界继续原路，避免补造像素或改变隐藏 RGB 规范化。
+    const uniform = bounds.left > 0 && bounds.top > 0 && bounds.right < imageWidth && bounds.bottom < imageHeight
+        ? uniformKnownBoundary(result, imageWidth, mask, left, top, width, rectangles) : undefined;
+    if (uniform !== undefined) {
+        // 只扫描去重后的局部蒙版一次；不扩张、不填行间孔洞，也不为纯色簇分配逐像素队列。
+        for (let index = 0; index < mask.length; index += 1) {
+            if (mask[index] !== 1) continue;
+            const offset = ((Math.floor(index / width) + top) * imageWidth + index % width + left) * 4;
+            for (let channel = 0; channel < 4; channel += 1) result[offset + channel] = uniform[channel];
+        }
+        return;
+    }
+
     const queue = new Uint32Array(maskedCount);
     let tail = 0;
     for (const rectangle of rectangles) {
@@ -181,4 +194,32 @@ function repairCluster(result: Uint8ClampedArray, imageWidth: number, imageHeigh
             }
         }
     }
+}
+
+/** 并集的八邻域边界等于成员矩形一像素外周扣除并集；跳过重叠周、保留内孔，仅按周长检查相同 RGBA。 */
+function uniformKnownBoundary(result: Uint8ClampedArray, imageWidth: number, mask: Uint8Array,
+    left: number, top: number, width: number, rectangles: MaskRectangle[]): [number, number, number, number] | undefined {
+    let color: [number, number, number, number] | undefined;
+    const matches = (x: number, y: number) => {
+        if (mask[(y - top) * width + x - left] !== 0) return true;
+        const offset = (y * imageWidth + x) * 4;
+        if (color === undefined) {
+            if (result[offset + 3] === 0) return false;
+            color = [result[offset], result[offset + 1], result[offset + 2], result[offset + 3]];
+        } else {
+            for (let channel = 0; channel < 4; channel += 1) {
+                if (result[offset + channel] !== color[channel]) return false;
+            }
+        }
+        return true;
+    };
+    for (const rectangle of rectangles) {
+        for (let x = rectangle.left - 1; x <= rectangle.right; x += 1) {
+            if (!matches(x, rectangle.top - 1) || !matches(x, rectangle.bottom)) return;
+        }
+        for (let y = rectangle.top; y < rectangle.bottom; y += 1) {
+            if (!matches(rectangle.left - 1, y) || !matches(rectangle.right, y)) return;
+        }
+    }
+    return color;
 }
