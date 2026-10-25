@@ -1,7 +1,7 @@
 /**
  * @file src/core/config/videoSubtitleAppearance.ts
  * 文件职责：定义视频字幕外观 registry、默认值、配置归一化和播放器 CSS 变量契约。
- * 主要内容：提供可扩展字幕皮肤、字号/位置/背景/行距/宽度等有界参数与默认关闭的逐字高亮、读音标注开关，并把配置转换为隔离 UI 可消费的 CSS 变量。
+ * 主要内容：提供可扩展字幕皮肤、字号/位置/背景/行距/宽度等有界参数、双语上下顺序与默认关闭的逐字高亮、读音标注开关，并把配置转换为隔离 UI 可消费的 CSS 变量。
  * 模块边界：只处理纯配置数据，不读取播放器、DOM 或浏览器存储；持久化由 Config/store 负责，实际挂载由 content UI 负责。
  */
 
@@ -18,12 +18,15 @@ export const VIDEO_SUBTITLE_SKINS = [
 
 export type VideoSubtitleSkinId = typeof VIDEO_SUBTITLE_SKINS[number]['id'];
 export type VideoSubtitlePosition = 'bottom' | 'center' | 'top';
+export type VideoSubtitleBilingualOrder = 'original-first' | 'translation-first';
 
 export interface VideoSubtitleAppearance {
     skin: VideoSubtitleSkinId;
     textColor: string;
     translationColor: string;
     position: VideoSubtitlePosition;
+    /** 双语上下顺序：读音始终紧跟原文，默认原文在上。 */
+    bilingualOrder: VideoSubtitleBilingualOrder;
     bottomOffset: number;
     autoBottom: boolean;
     backgroundOpacity: number;
@@ -43,6 +46,7 @@ export const DEFAULT_VIDEO_SUBTITLE_APPEARANCE: VideoSubtitleAppearance = {
     textColor: '#ffffff',
     translationColor: '#ffe45c',
     position: 'bottom',
+    bilingualOrder: 'original-first',
     bottomOffset: 10,
     autoBottom: true,
     backgroundOpacity: 56,
@@ -85,6 +89,7 @@ export function normalizeVideoSubtitleAppearance(value: unknown): VideoSubtitleA
         textColor: normalizeColor(source.textColor, skinPreset.textColor),
         translationColor: normalizeColor(source.translationColor, skinPreset.translationColor),
         position,
+        bilingualOrder: source.bilingualOrder === 'translation-first' ? 'translation-first' : 'original-first',
         bottomOffset,
         // 旧默认偏移升级为自动贴底，已调整的偏移及显式手动选择继续保留。
         autoBottom: typeof source.autoBottom === 'boolean' ? source.autoBottom : bottomOffset === 10,
@@ -104,6 +109,7 @@ export function getVideoSubtitleAppearanceCssVars(value: unknown): Record<string
         '--fluent-read-video-subtitle-text-color': appearance.textColor,
         '--fluent-read-video-subtitle-translation-color': appearance.translationColor,
         '--fluent-read-video-subtitle-position': appearance.position,
+        '--fluent-read-video-subtitle-translation-order': appearance.bilingualOrder === 'translation-first' ? '0' : '3',
         '--fluent-read-video-subtitle-bottom-offset': `${appearance.bottomOffset}%`,
         '--fluent-read-video-subtitle-background': `rgba(${skin.background}, ${appearance.backgroundOpacity / 100})`,
         '--fluent-read-video-subtitle-line-spacing': String(appearance.lineSpacing),

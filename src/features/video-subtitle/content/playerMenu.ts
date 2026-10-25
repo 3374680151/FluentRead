@@ -1,9 +1,10 @@
 /**
  * @file src/features/video-subtitle/content/playerMenu.ts
  * 文件职责：组装播放器字幕菜单，以紧凑行呈现显示方式、字幕时间、本地 AI 字幕与下载与完整句学习入口，并在同一弹层内提供模型下载确认。
- * 主要内容：常驻标题与可滚动正文分离，显示、读音图标开关与校时先于次级学习入口；读音说明支持悬停和键盘聚焦，低频字幕下载默认收起；触屏安全视口按可用宽度排布，极矮时只保留关闭并暂时隔离正文焦点，正常视口只滚动自有正文显露明确聚焦的操作，桌面按播放器高度收紧；X 首层聚焦显示方式和当前操作，模型选择、校时、导出和重新识别放在可返回的选项页，复用稳定节点呈现来源、故障恢复及识别/下载进度，生成预览期间不开放完整字幕导出。
+ * 主要内容：常驻标题与可滚动正文分离，显示、双语顺序、读音图标开关与校时先于次级学习入口；读音说明支持悬停和键盘聚焦，低频字幕下载默认收起；触屏安全视口按可用宽度排布，极矮时只保留关闭并暂时隔离正文焦点，正常视口只滚动自有正文显露明确聚焦的操作，桌面按播放器高度收紧；X 首层聚焦显示方式和当前操作，模型选择、校时、导出和重新识别放在可返回的选项页，复用稳定节点呈现来源、故障恢复及识别/下载进度，生成预览期间不开放完整字幕导出。
  * 模块边界：只操作 FluentRead 自己的菜单节点，不读取存储、不发起识别或绑定全局事件；运行时负责配置、请求与清理。
  */
+import type {VideoSubtitleAppearance} from '@/src/core/config/videoSubtitleAppearance';
 import type {VideoSubtitleDisplayMode} from '@/src/core/config/model';
 import {
     createTextElement, markVideoUi, translateVideoUi, localizeVideoUiText,
@@ -134,6 +135,31 @@ function createModeGroup(language: UiLanguage): HTMLElement {
         group.appendChild(item);
     }
     return group;
+}
+
+/** 双语顺序与显示模式独立；复用稳定单选按钮，只改变排版偏好。 */
+function createSubtitleOrderRow(language: UiLanguage): HTMLElement {
+    const row = createTextElement('div', 'fluent-read-video-menu-row', '');
+    row.appendChild(keyedText('span', 'fluent-read-video-menu-row-label', 'video.bilingualOrder', language));
+    const group = createTextElement('div', 'fluent-read-video-menu-order-controls', '');
+    group.setAttribute('role', 'group');
+    group.dataset.i18nAriaKey = 'video.bilingualOrder';
+    group.setAttribute('aria-label', translateVideoUi('video.bilingualOrder', language));
+    for (const [order, key] of [['original-first', 'video.originalFirst'], ['translation-first', 'video.translationFirst']]) {
+        const button = keyedText('button', 'fluent-read-video-menu-mode', key, language);
+        button.type = 'button'; button.dataset.subtitleOrder = order;
+        button.setAttribute('role', 'menuitemradio'); button.setAttribute('aria-checked', 'false');
+        group.appendChild(button);
+    }
+    row.appendChild(group);
+    return row;
+}
+
+export function renderVideoSubtitleOrder(menu: HTMLElement, order: VideoSubtitleAppearance['bilingualOrder'], disabled: boolean): void {
+    menu.querySelectorAll<HTMLButtonElement>('[data-subtitle-order]').forEach(button => {
+        button.setAttribute('aria-checked', String(button.dataset.subtitleOrder === order));
+        button.disabled = disabled;
+    });
 }
 
 function createTimingRow(language: UiLanguage): HTMLElement {
@@ -418,7 +444,7 @@ export function createVideoPlayerMenu(language: UiLanguage, withLocalGeneration:
         const label = keyedText('span', '', 'video.subtitleTools', language);
         delete more.dataset.i18nKey;
         more.replaceChildren(label, createIcon('next'));
-        watch.append(createModeGroup(language), createSourceStatus(language), primary, more);
+        watch.append(createModeGroup(language), createSubtitleOrderRow(language), createSourceStatus(language), primary, more);
 
         const tools = createTextElement('div', 'fluent-read-video-menu-tools', '');
         tools.id = 'fluent-read-video-menu-tools';
@@ -437,7 +463,7 @@ export function createVideoPlayerMenu(language: UiLanguage, withLocalGeneration:
     }
 
     const display = createTextElement('div', 'fluent-read-video-menu-section fluent-read-video-menu-display', '');
-    display.append(createModeGroup(language), createTimingRow(language));
+    display.append(createModeGroup(language), createSubtitleOrderRow(language), createTimingRow(language));
     const actions = createDownloadDisclosure(language);
     actions.classList.add('fluent-read-video-menu-actions');
     const nativeHint = keyedText('p', 'fluent-read-video-menu-source-hint fluent-read-video-native-fullscreen-hint', 'video.nativeFullscreenHint', language);
@@ -571,7 +597,7 @@ export function handleVideoMenuNavigation(event: KeyboardEvent): void {
     const keys = ['ArrowDown', 'ArrowUp', 'ArrowLeft', 'ArrowRight', 'Home', 'End'];
     if (!keys.includes(event.key)) return;
     const horizontal = event.key === 'ArrowLeft' || event.key === 'ArrowRight';
-    const scope = horizontal ? event.target.closest('.fluent-read-video-menu-mode-group') : menu;
+    const scope = horizontal ? event.target.closest('.fluent-read-video-menu-mode-group, .fluent-read-video-menu-order-controls') : menu;
     if (!scope) return;
     const buttons = Array.from(scope.querySelectorAll<HTMLButtonElement>('button'))
         .filter(button => !button.disabled && !button.closest('[hidden], [inert]')
