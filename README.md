@@ -8,7 +8,7 @@
 
 An open-source browser extension for bilingual translation.
 
-[Install](#installation) · [Website](https://read.thinkstu.com/en/) · [User guide](https://read.thinkstu.com/en/guide/) · [Privacy policy](https://read.thinkstu.com/en/guide/privacy) · [简体中文](./misc/README_ZH.md) · [LINUX DO Community](https://linux.do) · [GPL-3.0](./LICENSE)
+[Install](#installation) · [Website](https://read.thinkstu.com/en/) · [User guide](https://read.thinkstu.com/en/guide/) · [Sponsorship](#sponsorship) · [Privacy policy](https://read.thinkstu.com/en/guide/privacy) · [简体中文](./misc/README_ZH.md) · [LINUX DO Community](https://linux.do) · [GPL-3.0](./LICENSE)
 
 </div>
 
@@ -49,6 +49,14 @@ See the [user guide](https://read.thinkstu.com/en/guide/) for instructions and s
 3. Choose “Translate page.” Enable selection translation and other tools in settings as needed.
 
 Store updates may arrive at different times. The userscript provides core webpage translation features. See the [installation guide](https://read.thinkstu.com/en/guide/getting-started) for browser and feature availability.
+
+## Sponsorship
+
+The project is currently funded mainly out of pocket, with tens of thousands of US dollars spent each month on API tokens for open-source development. We believe FluentRead can make the world a little better.
+
+<a href="mailto:a1914493943@gmail.com?subject=FluentRead%20sponsorship"><img src="./docs/public/support/sponsor-placeholder-en.svg" width="480" height="128" alt="Your brand here — become a FluentRead sponsor" /></a>
+
+[Email us](mailto:a1914493943@gmail.com?subject=FluentRead%20sponsorship) · [Add on WeChat](https://read.thinkstu.com/support/wechat-contact.jpg)
 
 ## Local development
 

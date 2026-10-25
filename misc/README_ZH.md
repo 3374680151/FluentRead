@@ -8,7 +8,7 @@
 
 一款开源的浏览器双语翻译插件。
 
-[安装](#安装) · [官网](https://read.thinkstu.com/) · [使用指南](https://read.thinkstu.com/guide/) · [隐私政策](https://read.thinkstu.com/guide/privacy) · [English](../README.md) · [LINUX DO 社区](https://linux.do) · [GPL-3.0](../LICENSE)
+[安装](#安装) · [官网](https://read.thinkstu.com/) · [使用指南](https://read.thinkstu.com/guide/) · [赞助合作](#企业与项目赞助) · [隐私政策](https://read.thinkstu.com/guide/privacy) · [English](../README.md) · [LINUX DO 社区](https://linux.do) · [GPL-3.0](../LICENSE)
 
 </div>
 
@@ -49,6 +49,14 @@
 3. 点击“翻译页面”。划词翻译及其他功能可在设置中开启。
 
 各浏览器商店的版本更新可能存在时间差。油猴脚本提供核心网页翻译能力；完整支持范围见[安装指南](https://read.thinkstu.com/guide/getting-started)。
+
+## 企业与项目赞助
+
+项目目前主要由个人支持，每月为开源开发投入数万美元的 API Token 费用。我们相信，流畅阅读能为世界带来更多美好。
+
+<a href="mailto:a1914493943@gmail.com?subject=FluentRead%20sponsorship"><img src="../docs/public/support/sponsor-placeholder-zh.svg" width="480" height="128" alt="虚位以待，成为流畅阅读赞助伙伴" /></a>
+
+[邮件联系](mailto:a1914493943@gmail.com?subject=FluentRead%20sponsorship) · [添加微信](https://read.thinkstu.com/support/wechat-contact.jpg)
 
 ## 本地开发
 
