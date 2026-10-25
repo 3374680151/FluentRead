@@ -2,12 +2,13 @@
  * @file src/core/config/translationAppearance.ts
  * 文件职责：定义网页双语译文的样式预设注册表，以及用户对译文颜色、独立背景、字号和自定义 CSS 声明等外观的微调契约。
  * 主要内容：维护预设的稳定编号、页面类名、旧版分组与设置页分类，并标注预设是否使用线条或底色、是否逐行绘制、是否悬停才显示；提供外观默认值、
- * 存储与导入值归一化、精选色板和既有颜色库的纯函数换算，选择颜色预设时仅清理冲突配色，并把外观转换为 CSS 声明和页面样式表文本，供设置预览与内容脚本共用。
+ * 存储与导入值归一化、精选色板和既有颜色库的纯函数换算，选择颜色预设时仅清理冲突配色，并把外观转换为 CSS 声明和页面样式表文本，供设置预览与内容脚本共用；
+ * 不透明背景或自选纸面底色另提供黑白正文配色，仅供自带纸面的预设使用，其他类别不消费此变量，显式文字颜色仍保留优先级。
  * 模块边界：只处理纯数据与字符串，不访问 DOM、浏览器存储或配置仓库；预设的视觉规则位于 src/ui/styles/translation-display.css，
  * 页面样式表由 content composition root 注入，设置界面只消费这里导出的元数据与声明。
  */
 
-import {inputToRGB, rgbToHex} from '@ctrl/tinycolor';
+import {inputToRGB, readability, rgbToHex} from '@ctrl/tinycolor';
 
 export type TranslationStyleCategory = 'text' | 'color' | 'line' | 'mark' | 'card' | 'fun';
 export type TranslationStyleLegacyGroup = 'basic' | 'underline' | 'card' | 'highlight' | 'background' | 'special' | 'pro' | 'transparent' | 'fun';
@@ -320,6 +321,7 @@ export const TRANSLATION_APPEARANCE_VARIABLES = {
     fillFaint: '--fluent-read-translation-fill-faint',
     surface: '--fluent-read-translation-surface',
     surfaceDeep: '--fluent-read-translation-surface-deep',
+    surfaceInk: '--fluent-read-translation-surface-ink',
 } as const;
 
 /** 页面样式表只命中 FluentRead 自建且拥有的双语译文容器，悬浮翻译与全文翻译共用。 */
@@ -466,6 +468,34 @@ export interface TranslationAppearanceDeclaration {
     readonly value: string;
 }
 
+/** 只对能够确定的纯色纸面配正文；复杂 CSS 保留用户声明，不以旧纯色猜测图层或透明合成。 */
+function getTranslationSurfaceInk(declarations: readonly TranslationAppearanceDeclaration[], fillColor: string): string {
+    let surface = fillColor ? mixWithWhite(fillColor, 0.24) : '';
+    let hasImage = false;
+    for (const {property, value} of declarations) {
+        if (property !== 'background' && property !== 'background-color') continue;
+        const cssValue = value.trim().toLowerCase();
+        // TinyColor 的函数解析较宽松，先约束为完整颜色，避免从渐变或无效尾巴里提取 rgb。
+        const simpleSyntax = /^(?:#[\da-f]{3,8}|[a-z]+|(?:rgba?|hsla?)\([+\-\d\s.,%]+\))$/u.test(cssValue);
+        const color = simpleSyntax ? inputToRGB(cssValue) : null;
+        const alpha = /^(?:rgba?|hsla?)\([^,()]*,[^,()]*,[^,()]*,\s*([+-]?(?:\d+(?:\.\d*)?|\.\d+))(%?)\s*\)$/u.exec(cssValue);
+        // CSS 钳制超界 alpha；库的 boundAlpha 会把超界值回退为 1，不能把透明背景误判为不透明。
+        if (color && alpha) color.a = Math.min(1, Math.max(0, Number(alpha[1]) / (alpha[2] ? 100 : 1)));
+        if (color?.ok && (!/^[a-z]+$/u.test(cssValue) || color.format === 'name')) {
+            if (property === 'background') hasImage = false;
+            surface = color.a === 1 && !hasImage ? `#${rgbToHex(color.r, color.g, color.b, false)}` : '';
+        } else if (/^(?:inherit|initial|unset|revert(?:-layer)?|currentcolor)$/u.test(cssValue)
+            || /^(?:color|color-mix|oklab|oklch|lab|lch|hwb|rgba?|hsla?)\(.*\)$/u.test(cssValue)
+            || (property === 'background' && (cssValue === 'none' || /^[a-z-]+\(.*\)$/u.test(cssValue)))) {
+            surface = '';
+            // initial/unset 和颜色简写会清空 background-image；继承、回滚与复杂图层仍不能猜测。
+            if (property === 'background') hasImage = !/^(?:none|initial|unset|currentcolor)$/u.test(cssValue);
+        }
+        // 其余无效值由浏览器忽略；不能抹掉前一条仍会生效的纯色背景。
+    }
+    return surface ? (readability(surface, '#000') >= readability(surface, '#fff') ? '#000000' : '#ffffff') : '';
+}
+
 /** 只输出用户改动过的声明；默认外观返回空数组，网页和预设保持原样。 */
 export function getTranslationAppearanceDeclarations(value: unknown): TranslationAppearanceDeclaration[] {
     const appearance = normalizeTranslationAppearance(value);
@@ -495,6 +525,8 @@ export function getTranslationAppearanceDeclarations(value: unknown): Translatio
         declarations.push({property: 'opacity', value: String(appearance.opacity / 100)});
     }
     declarations.push(...parseTranslationCustomCss(appearance.customCss).declarations);
+    const surfaceInk = getTranslationSurfaceInk(declarations, appearance.fillColor);
+    if (surfaceInk) declarations.push({property: TRANSLATION_APPEARANCE_VARIABLES.surfaceInk, value: surfaceInk});
     // 显式文字色也要覆盖渐变预设的透明填色；currentColor 使用最终 color，包括随后输入的自定义 CSS 色值。
     if (declarations.some(({property}) => property === 'color')) {
         declarations.push({property: '-webkit-text-fill-color', value: 'currentColor'});
@@ -504,7 +536,13 @@ export function getTranslationAppearanceDeclarations(value: unknown): Translatio
 
 /** 设置页预览以内联样式应用同一组声明，保证与网页效果一致。 */
 export function getTranslationAppearanceStyle(value: unknown): Record<string, string> {
-    return Object.fromEntries(getTranslationAppearanceDeclarations(value).map(({property, value: cssValue}) => [property, cssValue]));
+    const style: Record<string, string> = {};
+    for (const {property, value: cssValue} of getTranslationAppearanceDeclarations(value)) {
+        // 重复简写要回到最终声明的位置，避免 Vue 按对象键顺序安装时反转 background/background-color 的覆盖次序。
+        delete style[property];
+        style[property] = cssValue;
+    }
+    return style;
 }
 
 /**

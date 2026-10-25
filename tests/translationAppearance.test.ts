@@ -280,6 +280,7 @@ describe('译文外观声明与页面样式表', () => {
             {property: 'font-weight', value: '700'},
             {property: 'font-family', value: TRANSLATION_FONT_FAMILY_OPTIONS[3].cssValue},
             {property: 'opacity', value: '0.8'},
+            {property: '--fluent-read-translation-surface-ink', value: '#000000'},
             {property: '-webkit-text-fill-color', value: 'currentColor'},
         ]);
         expect(getTranslationAppearanceStyle({fillColor: '#facc15', fontWeight: 'normal'})).toEqual({
@@ -289,7 +290,93 @@ describe('译文外观声明与页面样式表', () => {
             '--fluent-read-translation-surface': '#fffae8',
             '--fluent-read-translation-surface-deep': '#fef3c7',
             'font-weight': '400',
+            '--fluent-read-translation-surface-ink': '#000000',
         });
+    });
+
+    it('不透明背景选择黑白高对比正文，同时保留用户文字与实际背景声明', () => {
+        const style = getTranslationAppearanceStyle({
+            textColor: '#ef4776', backgroundColor: '#ffffff',
+            customCss: 'background: navy; background-color: rgb(255, 248, 204); color: rebeccapurple',
+        });
+        expect(style).toMatchObject({
+            background: 'navy', 'background-color': 'rgb(255, 248, 204)',
+            color: 'rebeccapurple', '-webkit-text-fill-color': 'currentColor',
+            '--fluent-read-translation-surface-ink': '#000000',
+        });
+        expect(getTranslationAppearanceStyle({customCss: 'background-color: #fff; background: navy'}))
+            .toMatchObject({'--fluent-read-translation-surface-ink': '#ffffff'});
+        expect(buildTranslationAppearanceCss({backgroundColor: '#123456'}))
+            .toContain('--fluent-read-translation-surface-ink: #ffffff !important;');
+    });
+
+    it.each(['transparent', 'inherit', 'linear-gradient(red, blue)', 'rgba(255, 255, 255, 0.5)', 'rgba(0, 0, 0, 50%)',
+        'rgba(0, 0, 0, -0.1)', 'hsla(0, 0%, 0%, -10%)', 'rgb(0, 0, 0, .5)', 'oklch(0.8 0.1 200)', 'none'])
+    ('最终复杂或透明背景 %s 不借用先前纯色配正文', (background) => {
+        const style = getTranslationAppearanceStyle({
+            backgroundColor: '#ffffff', customCss: `background-color: navy; background: ${background}`,
+        });
+        expect(style.background).toBe(background);
+        expect(style).not.toHaveProperty('--fluent-read-translation-surface-ink');
+    });
+
+    it('无背景微调保留原预设，底色微调使用浅纸面黑字', () => {
+        expect(getTranslationAppearanceStyle({fillColor: '#4ade80'}))
+            .toHaveProperty('--fluent-read-translation-surface-ink', '#000000');
+        expect(getTranslationAppearanceStyle(undefined)).toEqual({});
+    });
+
+    it.each([
+        {background: 'rgba(255, 255, 255, 1)', ink: '#000000'},
+        {background: 'rgba(0, 0, 0, 100%)', ink: '#ffffff'},
+        {background: 'rgba(0, 0, 0, 2)', ink: '#ffffff'},
+        {background: 'hsl(240, 100%, 10%)', ink: '#ffffff'},
+        {background: 'hsla(0, 0%, 100%, 1)', ink: '#000000'},
+        {background: '#000f', ink: '#ffffff'},
+        {background: '#ffffffff', ink: '#000000'},
+    ])('不透明CSS背景 $background 使用 $ink 正文', ({background, ink}) => {
+        expect(getTranslationAppearanceStyle({customCss: `background: ${background}`}))
+            .toHaveProperty('--fluent-read-translation-surface-ink', ink);
+    });
+
+    it('无效背景不覆盖前面纯色，显式图层直到完整背景重置才恢复纯色配对', () => {
+        for (const invalid of ['invalid-color', 'abc', '#abcde', 'rgb(1, 2, 3) nonsense']) {
+            expect(getTranslationAppearanceStyle({backgroundColor: 'navy', customCss: `background: ${invalid}`}))
+                .toHaveProperty('--fluent-read-translation-surface-ink', '#ffffff');
+        }
+        expect(getTranslationAppearanceStyle({customCss: 'background: linear-gradient(red, blue); background-color: white'}))
+            .not.toHaveProperty('--fluent-read-translation-surface-ink');
+        expect(getTranslationAppearanceStyle({customCss: 'background: linear-gradient(red, blue); background: white'}))
+            .toHaveProperty('--fluent-read-translation-surface-ink', '#000000');
+        expect(getTranslationAppearanceStyle({customCss: 'background: none; background-color: navy'}))
+            .toHaveProperty('--fluent-read-translation-surface-ink', '#ffffff');
+        expect(getTranslationAppearanceStyle({customCss: 'background-color: inherit'}))
+            .not.toHaveProperty('--fluent-read-translation-surface-ink');
+        expect(getTranslationAppearanceStyle({backgroundColor: 'navy', customCss: 'background-color: invalid-color'}))
+            .toHaveProperty('--fluent-read-translation-surface-ink', '#ffffff');
+    });
+
+    it.each(['none', 'initial', 'unset', 'currentcolor'])('背景重置 %s 清空图层，后续纯色可以重新配对正文', (reset) => {
+        expect(getTranslationAppearanceStyle({
+            customCss: `background: linear-gradient(red, blue); background: ${reset}; background-color: white`,
+        })).toHaveProperty('--fluent-read-translation-surface-ink', '#000000');
+        expect(getTranslationAppearanceStyle({customCss: `background: ${reset}`}))
+            .not.toHaveProperty('--fluent-read-translation-surface-ink');
+    });
+
+    it('预览对象保留重复背景的最终声明次序，与网页样式表配对一致', () => {
+        const dark = getTranslationAppearanceStyle({
+            backgroundColor: '#fff', customCss: 'background-color: #fff; background: #000',
+        });
+        expect(Object.keys(dark).filter(key => key === 'background' || key === 'background-color'))
+            .toEqual(['background-color', 'background']);
+        expect(dark).toHaveProperty('--fluent-read-translation-surface-ink', '#ffffff');
+        const light = getTranslationAppearanceStyle({
+            backgroundColor: '#fff', customCss: 'background-color: #000; background: #000; background-color: #fff',
+        });
+        expect(Object.keys(light).filter(key => key === 'background' || key === 'background-color'))
+            .toEqual(['background', 'background-color']);
+        expect(light).toHaveProperty('--fluent-read-translation-surface-ink', '#000000');
     });
 
     it('页面样式表只命中自有双语容器，并以 !important 胜过预设和宿主样式', () => {

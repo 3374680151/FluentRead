@@ -161,8 +161,10 @@ describe('两点选取', () => {
         controller.toggle();
         f.click(controller, f.text(), 0, {clientX: 900});
         expect(f.states.mock.calls).toEqual([['start']]);
+        expect(f.rejected).toHaveBeenLastCalledWith('text-miss');
         f.click(controller, f.text(), 1);
         f.click(controller, f.text(), 1);
+        expect(f.rejected).toHaveBeenLastCalledWith('same-point');
         expect(f.complete).not.toHaveBeenCalled();
         expect(controller.active).toBe(true);
         f.click(controller, f.text(), 8);
@@ -555,6 +557,8 @@ describe('两点选取', () => {
         const f = fixture(`<p id="first">${'x'.repeat(5000)}</p>`);
         const controller = f.create(undefined, false);
         controller.toggle();
+        f.click(controller, f.text(), 0, {clientX: 900});
+        f.click(controller, f.text(), 0);
         f.click(controller, f.text(), 0);
         f.click(controller, f.text(), 4500);
         expect(controller.active).toBe(true);
