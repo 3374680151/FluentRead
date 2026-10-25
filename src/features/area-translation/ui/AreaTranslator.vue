@@ -1,7 +1,7 @@
 <!--
  * @file src/features/area-translation/ui/AreaTranslator.vue
  * 文件职责：提供独立圈选阅读工具，按配置的快捷键（默认 Shift+Z）进入选区模式，松开鼠标后展示可拖动、可核对、可复制的原文与译文卡片。
- * 主要内容：相同译文保留原文且不重复展示；由可信快捷键或右键命令按需挂载，管理选择、截图、识别、翻译、结果和失败状态；截图后保留阅读卡片，页面滚动或缩放不丢失结果；缺少语言包时一键下载并显示进度条和百分比，随后续接原截图，重试复用同一截图，取消或新选区使旧请求失效。
+ * 主要内容：尚未确认的圈选与文字/局部选择共享指针会话互斥；相同译文保留原文且不重复展示；由可信快捷键或右键命令按需挂载，管理选择、截图、识别、翻译、结果和失败状态；截图后保留阅读卡片，页面滚动或缩放不丢失结果；缺少语言包时一键下载并显示进度条和百分比，随后续接原截图，重试复用同一截图，取消或新选区使旧请求失效。
  * 模块边界：组件只调用圈选客户端，不执行 OCR 或网络请求；截图权限归后台，像素只在封闭 Shadow UI 展示，所有页面监听、异步状态与临时截图在关闭或卸载时清理。
  -->
 <template>
@@ -73,6 +73,7 @@
 </template>
 
 <script setup lang="ts">
+import {claimPointerSelectionSession} from '@/src/shared/dom/pointerSelectionSession';
 import {hasDistinctTranslation} from '@/src/core/translation/result';
 import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue';
 import browser from 'webextension-polyfill';
@@ -126,6 +127,7 @@ const progressStage = ref<ImageTranslationStage>('recognizing');
 const isSelecting = computed(() => phase.value === 'selecting');
 let startPoint: AreaPoint | null = null;
 let activePointerId: number | null = null;
+let releasePointerSession: (() => void) | undefined;
 let translationRequestId = 0;
 let translationAbortController: AbortController | null = null;
 let systemThemeMedia: MediaQueryList | null = null;
@@ -153,6 +155,8 @@ function isInsideExtensionUi(target: EventTarget | null): boolean {
 }
 function isEnabled(): boolean { return config.on !== false && config.selectionAreaEnabled === true; }
 function clearResult(): void {
+  releasePointerSession?.();
+  releasePointerSession = undefined;
   stopPanelDrag();
   panelPosition.value = null;
   translationRequestId += 1;
@@ -178,6 +182,7 @@ function beginSelection(): boolean {
   if (!isEnabled()) return false;
   viewport.value = {width: window.innerWidth, height: window.innerHeight};
   phase.value = 'selecting';
+  releasePointerSession = claimPointerSelectionSession(clearResult);
   return true;
 }
 function handleKeydown(event: KeyboardEvent): void {

@@ -1,4 +1,5 @@
 import {beforeEach, describe, expect, it, vi} from 'vitest';
+import {claimPointerSelectionSession} from '@/src/shared/dom/pointerSelectionSession';
 import {services} from '@/src/core/config/catalog';
 import type {Config} from '@/src/core/config/model';
 import type {QuickTranslationProfile} from '@/src/core/config/quickTranslation';
@@ -61,6 +62,22 @@ function config(): Config {
 }
 
 describe('快捷翻译 content composition', () => {
+    it('额外悬停或全文方案实际执行前取消未确认指针选择，局部入口保留自身切换语义', () => {
+        mountConfiguredQuickTranslation(config(), {} as any, () => false, new AbortController().signal);
+        const cancel = vi.fn();
+        const release = claimPointerSelectionSession(cancel);
+        mocks.mountedDependencies!.runSection(profile({action: 'section'}));
+        expect(cancel).not.toHaveBeenCalled();
+        mocks.mountedDependencies!.runHover(profile(), 12, 34);
+        expect(cancel).toHaveBeenCalledOnce();
+        release();
+        const cancelNext = vi.fn();
+        const releaseNext = claimPointerSelectionSession(cancelNext);
+        mocks.mountedDependencies!.runFullPage(profile({action: 'full-page'}));
+        expect(cancelNext).toHaveBeenCalledOnce();
+        releaseNext();
+    });
+
     beforeEach(() => {
         vi.clearAllMocks();
         mocks.mountedDependencies = null;

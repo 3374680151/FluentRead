@@ -149,13 +149,13 @@ When source text changes, full-page translation waits for about 1.8 seconds of s
 
 #### Tune how paragraphs are handled
 
-**Advanced settings** offers a few more controls over webpage translation. Each one applies from the next translation:
+**Advanced settings** offers a few more controls over webpage translation. Bilingual order applies immediately; other changes apply to the next translation:
 
 - **Sidebar translation**: also translate sidebars and navigation while reading main content; headers and footers stay untouched.
 - **Minimum characters per paragraph**: skip paragraphs shorter than this length to cut requests for tiny fragments. Length counts characters, so `hello` counts as 5.
 - **Characters translated without scrolling**: translate this many characters from the top of the page right away; the rest follows your reading progress. Set it to 0 to rely on the viewport alone.
 - **Line breaks in long paragraphs**: insert a line break at the end of each sentence in long translated paragraphs.
-- **Translation before original**: in bilingual mode, place the translation above each original paragraph instead of below it.
+- **Bilingual order**: choose **Original above / Translation above**. Original above is the default. Changes reuse existing translations and apply immediately without translating again. Translation-only mode keeps your chosen order for a return to bilingual display; use **Switch to bilingual** beside the setting to return.
 
 :::
 
