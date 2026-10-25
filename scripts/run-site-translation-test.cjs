@@ -165,6 +165,10 @@ function parseArgs(argv) {
     throw new Error(`case ${args.case} 配置无效：\n- ${configErrors.join('\n- ')}`);
   }
   if (!normalized.modes.includes(args.mode)) throw new Error(`case ${args.case} 不支持 ${args.mode} 模式`);
+  if (!args.controlledProvider && (normalized.coverageRules.some(rule => rule.sourcePartition) ||
+      normalized.hoverTargets.some(target => target.sourcePartition))) {
+    throw new Error(`case ${args.case} 的 sourcePartition 完整正文契约必须使用 --controlled-provider；不能跳过完整来源验收`);
+  }
 
   return {
     ...caseConfig,
@@ -1836,9 +1840,20 @@ function reconcileForbiddenContractState(initial, current) {
       initial.count = current.count;
       return null;
     }
-    const currentSignatures = new Set(current.signatures.map((signature) => JSON.stringify(signature)));
-    const missingBaseline = initial.signatures.some((signature) =>
-      !currentSignatures.has(JSON.stringify(signature)));
+    const currentSignatures = new Map();
+    for (const signature of current.signatures) {
+      const key = JSON.stringify(signature);
+      currentSignatures.set(key, (currentSignatures.get(key) || 0) + 1);
+    }
+    // Relative times and publisher labels can repeat. Each baseline node needs
+    // its own matching occurrence; one survivor cannot account for two originals.
+    const missingBaseline = initial.signatures.some((signature) => {
+      const key = JSON.stringify(signature);
+      const remaining = currentSignatures.get(key) || 0;
+      if (!remaining) return true;
+      currentSignatures.set(key, remaining - 1);
+      return false;
+    });
     if (current.count < initial.count || missingBaseline) {
       return `动态 forbidden DOM 基线丢失：${JSON.stringify({
         before: diagnosticState(initial),
@@ -2255,15 +2270,54 @@ async function readFullPageState(page, selector, requiredSelectors, fullCoverage
   });
 }
 
-function findHoverTextPointInPage({selector, index}) {
+function findHoverTextPointInPage({selector, index, textIncludes = []}) {
   const target = document.querySelectorAll(selector)[index];
   if (!target?.isConnected) return null;
   const excluded = '[data-fr-translation-owned="true"], .fluent-read-bilingual-content, ' +
     '.fluent-read-loading, .fluent-read-retry-wrapper, [hidden], [aria-hidden="true"], [inert]';
   const hitPolicyForText = (parent, x, y) => {
     const hit = document.elementFromPoint(x, y);
-    if (!hit || hit.closest(excluded)) return null;
-    if (target.contains(hit) && (hit === parent || hit.contains(parent))) return 'direct-text';
+    if (!hit) return null;
+    if (!hit.closest(excluded) && target.contains(hit) && (hit === parent || hit.contains(parent))) return 'direct-text';
+    // Google News /home 的空整卡链接与可读标题是同一卡片的兄弟。
+    // 只接受已观察到的三层命中栈；aria-hidden 的例外只属于这个空链接自身。
+    if (typeof location !== 'undefined' && location.hostname === 'news.google.com' && location.pathname === '/home' &&
+      parent === target && target.matches('main a[href^="./read/"]:not([aria-hidden="true"])')) {
+      const wrapper = hit.parentElement;
+      const card = target.parentElement;
+      const barrier = 'dialog, [role="dialog"], [role="alertdialog"], [aria-modal="true"], button, [role="button"], ' +
+        'input, textarea, select, [contenteditable]:not([contenteditable="false"]), [role="textbox"], [role="combobox"], [role="searchbox"]';
+      const nonAriaExcluded = '[data-fr-translation-owned="true"], .fluent-read-bilingual-content, ' +
+        '.fluent-read-loading, .fluent-read-retry-wrapper, [hidden], [inert]';
+      const href = target.getAttribute('href');
+      const destination = target.getAttribute('target');
+      const stack = document.elementsFromPoint?.(x, y);
+      if (!hit.matches('a[aria-hidden="true"][tabindex="-1"]') || hit.childNodes.length ||
+        !wrapper?.matches('div') || wrapper.childNodes.length !== 1 || wrapper.firstChild !== hit ||
+        !card?.matches('div') || wrapper.parentElement !== card || card.firstElementChild !== wrapper ||
+        hit.closest(nonAriaExcluded) || wrapper.closest(excluded) ||
+        [hit, wrapper, target].some(owner => owner.closest(barrier)) ||
+        !href || hit.getAttribute('href') !== href || destination !== '_blank' || hit.getAttribute('target') !== destination ||
+        !stack || stack[0] !== hit || stack[1] !== wrapper || stack[2] !== target) return null;
+      const paintlessStretchedBox = owner => {
+        const style = getComputedStyle(owner);
+        const transparent = style.backgroundColor === 'transparent' || /^rgba\(\s*0\s*,\s*0\s*,\s*0\s*,\s*0\s*\)$/u.test(style.backgroundColor);
+        return style.position === 'absolute' && ['left', 'right', 'top', 'bottom'].every(key => style[key] === '0px') &&
+          transparent && style.backgroundImage === 'none' && style.boxShadow === 'none' && style.filter === 'none' &&
+          (!style.backdropFilter || style.backdropFilter === 'none') && style.opacity === '1' &&
+          ['borderTopWidth', 'borderRightWidth', 'borderBottomWidth', 'borderLeftWidth', 'outlineWidth'].every(key => style[key] === '0px');
+      };
+      if (![hit, wrapper].every(paintlessStretchedBox)) return null;
+      for (const owner of [hit, wrapper, target, card]) {
+        for (const pseudo of ['::before', '::after']) {
+          const content = getComputedStyle(owner, pseudo).content;
+          if (content !== 'none' && content !== 'normal' && content !== '') return null;
+        }
+      }
+      // 目的地也是稳定性的一部分；同一文字下的链接更新会重置既有 200ms 计时。
+      return `google-news-stretched-link:${JSON.stringify([href, destination])}`;
+    }
+    if (hit.closest(excluded)) return null;
     // PH 首页把产品名链接的空 span 拉伸到整张卡片。仅识别已观察到的结构，
     // 且命中栈第二项必须是当前介绍的原文 parent，不能穿过其他遮罩或控件。
     if (typeof location === 'undefined' || location.hostname !== 'www.producthunt.com' || location.pathname !== '/' ||
@@ -2300,6 +2354,8 @@ function findHoverTextPointInPage({selector, index}) {
     const currentIndex = textIndex++;
     const parent = textNode.parentElement;
     if (!parent || parent.closest(excluded) || !textNode.textContent?.trim()) continue;
+    const originalText = textNode.textContent.replace(/\s+/gu, ' ').trim();
+    if (!textIncludes.every(fragment => originalText.includes(fragment))) continue;
     const style = getComputedStyle(parent);
     if (style.display === 'none' || style.visibility === 'hidden') continue;
     const range = document.createRange();
@@ -2426,7 +2482,8 @@ async function toggleHover(page, target, targetConfig, expectedCount, timeout, a
   await target.scrollIntoViewIfNeeded();
   // 还原译文会改变布局，宿主也可能继续滚动或播放入场动画。固定等待后取外框
   // 坐标会落到空白容器；按键前等待真实原文行稳定并保持命中，按键只发送一次。
-  const {x, y} = await waitForHoverPointer(page, targetConfig, timeout, prepareClickText);
+  const point = await waitForHoverPointer(page, targetConfig, timeout, prepareClickText);
+  const {x, y} = point;
   await page.keyboard.down('Control');
   await page.keyboard.up('Control');
   try {
@@ -2458,6 +2515,7 @@ async function toggleHover(page, target, targetConfig, expectedCount, timeout, a
     }, {targetSelector: selector, targetIndex: index, point: {x, y}});
     throw new Error(`${error.message}\n悬浮 case 诊断（${JSON.stringify(targetConfig)}，第 ${attempt} 次，期望 wrapper=${expectedCount}）：${JSON.stringify(diagnostics)}`);
   }
+  return point;
 }
 
 function findHoverTargetInPage({
@@ -2785,6 +2843,26 @@ async function captureEvidence(page, outputPath) {
   }
 }
 
+async function captureSourcePartitionLedger(page, configs, controlledProvider) {
+  const partitions = configs.filter(config => config.sourcePartition);
+  if (!partitions.length) return null;
+  if (typeof controlledProvider?.captureSourcePartitions !== 'function' ||
+      typeof controlledProvider?.assertSourcePartitions !== 'function') {
+    throw new Error('sourcePartition 完整正文契约必须使用支持来源 ledger 的 --controlled-provider');
+  }
+  const ledger = await controlledProvider.captureSourcePartitions(page, partitions);
+  if (!ledger || typeof ledger !== 'object') throw new Error('sourcePartition 未捕获有效的原生正文基线 ledger');
+  return ledger;
+}
+
+async function verifySourcePartitionLedger(page, ledger, controlledProvider, phase, restored = false) {
+  if (ledger === null) return undefined;
+  if (!ledger || typeof controlledProvider?.assertSourcePartitions !== 'function') {
+    throw new Error(`${phase} sourcePartition 原生正文 ledger 或校验器缺失`);
+  }
+  return controlledProvider.assertSourcePartitions(page, ledger, phase, {restored});
+}
+
 async function runHoverCase(page, hoverTargets, requiredSelectors, pageContract, timeout, artifactsDir, prepareClickText, controlledProvider) {
   const initialUrl = page.url();
   const results = [];
@@ -2800,9 +2878,13 @@ async function runHoverCase(page, hoverTargets, requiredSelectors, pageContract,
     const target = targets.nth(runtimeTargetConfig.index);
     const counts = [];
     const neighborCounts = [];
+    const hoverTextPoints = [];
+    const sourcePartitionEvidence = [];
+    const sourcePartitionLedger = await captureSourcePartitionLedger(page, [runtimeTargetConfig], controlledProvider);
 
     for (const expected of [1, 0, 1]) {
-      await toggleHover(page, target, runtimeTargetConfig, expected, timeout, counts.length + 1, prepareClickText);
+      const point = await toggleHover(page, target, runtimeTargetConfig, expected, timeout, counts.length + 1, prepareClickText);
+      if (runtimeTargetConfig.textIncludes?.length) hoverTextPoints.push(point);
       counts.push(await target.locator('.fluent-read-bilingual-content').count());
       const neighborCount = await targets.evaluateAll((nodes, activeIndex) => nodes.reduce((count, node, index) =>
         count + (index === activeIndex ? 0 : node.querySelectorAll('.fluent-read-bilingual-content').length), 0), runtimeTargetConfig.index);
@@ -2820,6 +2902,8 @@ async function runHoverCase(page, hoverTargets, requiredSelectors, pageContract,
       );
       if (expected === 1 && controlledProvider) await controlledProvider.assertPage(page, `${targetConfig.name} 悬浮第 ${counts.length} 次切换`);
       if (expected === 0) await assertRequiredRestored(page, pageContract, `${targetConfig.name} 悬浮恢复`);
+      if (sourcePartitionLedger) sourcePartitionEvidence.push(await verifySourcePartitionLedger(page,
+        sourcePartitionLedger, controlledProvider, `${targetConfig.name} 悬浮第 ${counts.length} 次切换`, expected === 0));
       if (artifactsDir && expected === 1) {
         const suffix = counts.length === 1 ? 'first' : 'final';
         await captureEvidence(page, path.join(artifactsDir, `hover-${targetNumber + 1}-${targetConfig.name}-${suffix}.png`));
@@ -2838,6 +2922,8 @@ async function runHoverCase(page, hoverTargets, requiredSelectors, pageContract,
       counts,
       neighborCounts,
       translationText,
+      ...(hoverTextPoints.length ? {hoverTextPoints} : {}),
+      ...(sourcePartitionLedger ? {sourcePartitionEvidence} : {}),
     });
 
     // 为下一个语义类型清场，避免前一个 H1 的译文让全局 wrapper 计数
@@ -2846,6 +2932,8 @@ async function runHoverCase(page, hoverTargets, requiredSelectors, pageContract,
       await toggleHover(page, target, runtimeTargetConfig, 0, timeout, 4, prepareClickText);
       await assertWrapperUniqueness(page, 0, `${targetConfig.name} 悬浮目标清场`);
       await assertRequiredRestored(page, pageContract, `${targetConfig.name} 悬浮目标清场`);
+      if (sourcePartitionLedger) sourcePartitionEvidence.push(await verifySourcePartitionLedger(page,
+        sourcePartitionLedger, controlledProvider, `${targetConfig.name} 悬浮目标清场`, true));
     }
   }
 
@@ -2946,6 +3034,7 @@ async function runFullTranslationPass(context, pass) {
     readCompletion,
     previousCompletionSessionId,
     controlledProvider,
+    sourcePartitionLedger = null,
   } = context;
   const first = pass === 'first';
   const phase = first ? '全文首次翻译' : '全文再次翻译';
@@ -3024,7 +3113,9 @@ async function runFullTranslationPass(context, pass) {
       first ? 'full-first-translation.png' : 'full-final-translation.png'));
   }
   const controlledAttribution = controlledProvider ? await controlledProvider.assertPage(page, phase) : undefined;
-  return {target, pageState, coverage, interactions, completionIdentity, targetReadiness, finalTargetReadiness, controlledAttribution};
+  const sourcePartitions = await verifySourcePartitionLedger(page, sourcePartitionLedger, controlledProvider, phase);
+  return {target, pageState, coverage, interactions, completionIdentity, targetReadiness, finalTargetReadiness,
+    controlledAttribution, sourcePartitions};
 }
 
 async function runFullCase(
@@ -3054,6 +3145,7 @@ async function runFullCase(
   const runtimeCoverageRules = withMandatoryHeadingCoverage(coverageRules,
     skipUnscopedH1Coverage ||
     pageContract.forbiddenState.some(({selector}) => /(?:^|[\s>+~,(])h1\b/iu.test(selector)), fullPageScope);
+  const sourcePartitionLedger = await captureSourcePartitionLedger(page, runtimeCoverageRules, controlledProvider);
   await installCoverageTracker(page, runtimeCoverageRules);
   const passContext = {
     page,
@@ -3071,6 +3163,7 @@ async function runFullCase(
     initialUrl,
     readCompletion,
     controlledProvider,
+    sourcePartitionLedger,
   };
   const firstPass = await runFullTranslationPass(passContext, 'first');
   passContext.previousCompletionSessionId = firstPass.completionIdentity.sessionId;
@@ -3096,6 +3189,8 @@ async function runFullCase(
   );
   const restoredCoverage = await readCoverageRestoration(page);
   assertCoverageRestoration(restoredCoverage, '全文恢复');
+  const restoredSourcePartitions = await verifySourcePartitionLedger(page, sourcePartitionLedger,
+    controlledProvider, '全文恢复', true);
   await resetCoverageTracker(page);
   reportProgress('全文恢复完成');
 
@@ -3106,6 +3201,7 @@ async function runFullCase(
       ? 'all eligible nodes matching configured coverage selectors loaded at the start of each translation pass; does not claim the end of an infinite feed'
       : 'finite page through its stable bottom',
     controlledAttribution: [firstPass.controlledAttribution, secondPass.controlledAttribution],
+    ...(sourcePartitionLedger ? {sourcePartitions: [firstPass.sourcePartitions, secondPass.sourcePartitions], restoredSourcePartitions} : {}),
     translated: firstPass.target,
     translatedPage: firstPass.pageState,
     coverage: firstPass.coverage,
@@ -3622,6 +3718,8 @@ module.exports = {
   readFullPageFailureSnapshotInPage,
   waitForFullTargetReadiness,
   runFullCase,
+  captureSourcePartitionLedger,
+  verifySourcePartitionLedger,
   beginCoverageCompletionPass,
   verifyCoverageUnchanged,
   isNaturalLanguageText,

@@ -22,7 +22,7 @@ const require = createRequire(import.meta.url);
 const {installStabilityProbeInPage, assertStableSnapshot, runStabilityProbes, runNativeCommentToggle} = require('../scripts/site-translation/stability-probes.cjs');
 const {MarionetteClient, parseArgs: parseFirefoxArgs, assertPageSnapshot} = require('../scripts/testing/run-web-stability-firefox-test.cjs');
 const {parseArgs: parseNativeFeedArgs, installNativeFeedTracker, assertNativeSnapshot} = require('../scripts/testing/run-web-native-feed-test.cjs');
-const {encodeControlledTranslation, decodeControlledTranslationText, isControlledTranslationForSource, readControlledPageEvidenceInPage, assertControlledPageEvidence} = require('../scripts/site-translation/controlled-provider.cjs');
+const {encodeControlledTranslation, decodeControlledTranslationText, isControlledTranslationForSource, readControlledPageEvidenceInPage, assertControlledPageEvidence, captureSourcePartitions, assertSourcePartitions} = require('../scripts/site-translation/controlled-provider.cjs');
 const key = '__testStabilityProbe';
 const wrapper = '.fluent-read-bilingual-content';
 const source = 'This paragraph is a complete source passage with a protected ';
@@ -680,6 +680,77 @@ describe('controlled provider attribution', () => {
       link.textContent='Aug 15, 2026 extra';expect(()=>assertControlledPageEvidence(readControlledPageEvidenceInPage(),'time-substring')).toThrow('complete source');
     }finally{vi.unstubAllGlobals()}
   });
+  describe('CNN protected metadata literals', () => {
+    const selectors = ['.byline__name', '.timestamp__time-since', 'figcaption.image_large-elevate__credit', 'figcaption.image-elevate__credit'];
+    const literals = ['Author Alpha', 'Oct 25, 2026', 'Nova Image Archive', 'Survey Team Collection'];
+    const path = '/2026/10/25/science/original-authored-fixture';
+    function fixture(url: string) {
+      const {document, window} = parseHTML(`<html><body>
+        <div id="byline-owner">By <span class="byline__name">Author Alpha</span><span class="timestamp__time-since">Oct 25, 2026</span></div>
+        <article><div id="caption-owner" class="image_large-elevate__metadata"><div itemprop="caption" class="image_large-elevate__caption">The blue cloud surrounds a small group of bright stars.</div><figcaption class="image_large-elevate__credit">Nova Image Archive</figcaption></div>
+        <div id="related-caption-owner" class="image-elevate__metadata"><div itemprop="caption" class="image-elevate__caption">A related image shows a wider field around the cloud.</div><figcaption class="image-elevate__credit">Survey Team Collection</figcaption></div></article>
+        </body></html>`);
+      Object.defineProperty(document, 'baseURI', {value: url});
+      vi.stubGlobal('document', document);vi.stubGlobal('Node', window.Node);vi.stubGlobal('location', new URL(url));
+      const core = createTranslationCore({url: new URL(url)});
+      const rendered = ['#byline-owner', '#caption-owner', '#related-caption-owner'].map(selector => {
+        const owner = document.querySelector<HTMLElement>(selector)!;
+        const snapshot = createTranslationSourceSnapshot(owner, core.shouldStayOriginal, undefined, undefined, core.shouldOmitFromTranslation);
+        const output = appendBilingualTranslation(owner, applyTranslationsToSnapshot(snapshot,
+          snapshot.slots.map(slot => encodeControlledTranslation(slot.source))), {sourceSkeleton: snapshot.clone});
+        return {owner, snapshot, output};
+      });
+      return {document, core, rendered};
+    }
+    function literalNode(output: Element, text: string) {
+      const walk = output.ownerDocument.createTreeWalker(output, 4);
+      while (walk.nextNode()) if (walk.currentNode.nodeValue === text) return walk.currentNode as Text;
+      throw new Error(`Missing expected literal Text node: ${text}`);
+    }
+    it.each(['https://www.cnn.com', 'http://www.cnn.com', 'https://edition.cnn.com', 'http://edition.cnn.com'])(
+      'matches the actual CNN protection declaration and complete caption source at %s', origin => {
+        try {
+          const {document, core, rendered} = fixture(origin + path);
+          const rule = websiteRules.find(item => item.id === 'cnn-news')!;
+          expect(rule.match).toMatchObject({hosts: ['www.cnn.com', 'edition.cnn.com'], paths: ['/20*/*']});
+          expect(rule.protect).toEqual(selectors);
+          selectors.forEach(selector => expect(core.shouldStayOriginal(document.querySelector(selector)!), selector).toBe(true));
+          const source = rendered.flatMap(item => item.snapshot.slots.map(slot => slot.source)).join(' ');
+          expect(source).toContain('The blue cloud surrounds');
+          expect(source).toContain('A related image shows');
+          for (const literal of literals) expect(source).not.toContain(literal);
+          const evidence = readControlledPageEvidenceInPage();
+          expect(evidence.flatMap((row: any) => row.protectedMatches)).toEqual(literals.map(text =>
+            expect.objectContaining({text, matched: true})));
+          expect(evidence.flatMap((row: any) => row.omittedParts)).toEqual([]);
+          expect(assertControlledPageEvidence(evidence, 'cnn-protected-literals')).toMatchObject({owners: 3});
+        } finally {vi.unstubAllGlobals();}
+      });
+    it.each(['damaged-credit', 'missing-credit', 'ordinary-span', 'near-name-class', 'other-host', 'lookalike-host',
+      'other-path', 'missing-path-separator', 'other-protocol', 'missing-caption'])(
+      'keeps CNN complete-source validation strict for %s', variant => {
+        try {
+          const url = 'https://www.cnn.com' + path;
+          const {document, rendered} = fixture(url);
+          const caption = rendered[1]!;
+          if (variant === 'damaged-credit') literalNode(caption.output, literals[2]!).nodeValue = 'Changed image archive';
+          if (variant === 'missing-credit') literalNode(caption.output, literals[2]!).remove();
+          if (variant === 'ordinary-span') {
+            const original = caption.owner.querySelector('figcaption')!, plain = document.createElement('span');
+            plain.textContent = original.textContent;original.replaceWith(plain);
+          }
+          if (variant === 'near-name-class') caption.owner.querySelector('figcaption')!.className = 'image_credit';
+          if (variant === 'other-host') vi.stubGlobal('location', new URL('https://ordinary.example' + path));
+          if (variant === 'lookalike-host') vi.stubGlobal('location', new URL('https://www.cnn.com.evil.example' + path));
+          if (variant === 'other-path') vi.stubGlobal('location', new URL('https://www.cnn.com/style/article'));
+          if (variant === 'missing-path-separator') vi.stubGlobal('location', new URL('https://www.cnn.com/2026'));
+          if (variant === 'other-protocol') vi.stubGlobal('location', new URL('ftp://www.cnn.com' + path));
+          if (variant === 'missing-caption') literalNode(caption.output,
+            encodeControlledTranslation(caption.snapshot.slots[0]!.source)).remove();
+          expect(() => assertControlledPageEvidence(readControlledPageEvidenceInPage(), variant)).toThrow('complete source');
+        } finally {vi.unstubAllGlobals();}
+      });
+  });
   it('matches Ubuntu manpage command tokens using the actual site adapter and retains the surrounding linked prose', () => {
     const path='/manpages/noble/man8/apt.8.html';
     const {document,window}=parseHTML('<html><body><main id="manpage-content"><section class="Sh"><p class="Pp"><b>apt</b> provides a high-level commandline interface for the\n    package management system. It is intended for interactive usage compared to <a href="/manpages/noble/man8/apt-get.8.html"><b>apt-get</b>(8)</a> and\n    <a href="/manpages/noble/man8/apt-cache.8.html"><b>apt-cache</b>(8)</a>.</p></section></main></body></html>');
@@ -857,5 +928,152 @@ describe('native public feed evidence negative controls', () => {
   ])('rejects %s', (_label, change, reason) => {
     const state = validState(); change(state);
     expect(() => assertNativeSnapshot(state, {translated: true, ids: [1], phase: 'negative'})).toThrow(reason);
+  });
+});
+
+describe('controlled native source partitions', () => {
+  let document: Document;
+  const page = {evaluate: async (fn: (value: unknown) => unknown, value: unknown) => fn(value)};
+  const configs = [{name: 'inline-game-body', selector: '#body', sourcePartition: {excludeSelectors: ['h2']}}];
+  const bodyText = 'Opening complete sentence.\nMiddle complete sentence.\nClosing complete sentence.';
+  const addWrapper = (owner: Element, text: string) => {
+    const wrapper = document.createElement('span');
+    wrapper.className = 'fluent-read-bilingual-content';
+    wrapper.setAttribute('data-fr-translation-owned', 'true');
+    wrapper.textContent = encodeControlledTranslation(text);
+    owner.append(wrapper);
+    return wrapper;
+  };
+  const renderBody = (text = bodyText) => {
+    const root = document.querySelector('#body')!;
+    const segment = document.createElement('span');
+    segment.setAttribute('data-fr-translation-segment', 'true');
+    const sourceNodes = [...root.childNodes].filter(node => node !== root.querySelector('h2'));
+    root.append(segment);
+    sourceNodes.forEach(node => segment.append(node));
+    return {segment, wrapper: addWrapper(segment, text)};
+  };
+  beforeEach(() => {
+    ({document} = parseHTML('<html><body><div id="outside">Outside complete sentence.</div><div id="body"><h2>Excluded heading</h2><strong>Opening complete sentence.</strong><br>Middle complete sentence.<br><em>Closing complete sentence.</em></div></body></html>') as unknown as {document: Document});
+    vi.stubGlobal('document', document);
+  });
+  afterEach(() => {
+    delete (globalThis as Record<string, unknown>).__fluentReadControlledSourcePartitionsV1;
+    vi.unstubAllGlobals();
+  });
+
+  it('binds complete native Text and BR source before rendering through two passes and exact restoration', async () => {
+    const ledger = await captureSourcePartitions(page, configs);
+    expect(Object.keys(ledger)).toEqual([]);
+    let rendered = renderBody();
+    addWrapper(document.querySelector('h2')!, 'Excluded heading');
+    expect(await assertSourcePartitions(page, ledger, 'first')).toEqual([{
+      name: 'inline-game-body', selector: '#body', index: 0, sourcePartsCount: 5,
+      expectedSource: bodyText, ownerCount: 1, completeSourceMatched: true, restored: false,
+    }]);
+    rendered.wrapper.remove();
+    rendered.segment.replaceWith(...rendered.segment.childNodes);
+    expect(await assertSourcePartitions(page, ledger, 'restored', {restored: true})).toMatchObject([{ownerCount: 0, restored: true}]);
+    rendered = renderBody();
+    expect(await assertSourcePartitions(page, ledger, 'second')).toMatchObject([{ownerCount: 1, completeSourceMatched: true}]);
+    expect(JSON.stringify(await assertSourcePartitions(page, ledger, 'serializable'))).not.toContain('WeakRef');
+  });
+
+  it('does not let only a descendant heading or a correct wrapper outside the container prove the body', async () => {
+    const ledger = await captureSourcePartitions(page, configs);
+    addWrapper(document.querySelector('h2')!, 'Excluded heading');
+    await expect(assertSourcePartitions(page, ledger, 'heading-only')).rejects.toThrow('owners missing');
+    const outside = document.querySelector('#outside')!;
+    outside.textContent = bodyText;
+    addWrapper(outside, bodyText);
+    expect(assertControlledPageEvidence(readControlledPageEvidenceInPage(), 'old-owner-gate')).toMatchObject({owners: 2});
+    await expect(assertSourcePartitions(page, ledger, 'wrong-container')).rejects.toThrow('owners missing');
+  });
+
+  it('rejects legitimate partial owners even when each existing wrapper matches all of its own source', async () => {
+    const ledger = await captureSourcePartitions(page, configs);
+    addWrapper(document.querySelector('strong')!, 'Opening complete sentence.');
+    addWrapper(document.querySelector('em')!, 'Closing complete sentence.');
+    expect(assertControlledPageEvidence(readControlledPageEvidenceInPage(), 'partial-own-source')).toMatchObject({owners: 2});
+    await expect(assertSourcePartitions(page, ledger, 'missing-middle')).rejects.toThrow('complete partition source');
+  });
+
+  it.each([
+    ['partial response', 'Opening complete sentence.'],
+    ['keywords without middle', 'Opening complete sentence.\nClosing complete sentence.'],
+    ['reordered response', 'Closing complete sentence.\nMiddle complete sentence.\nOpening complete sentence.'],
+    ['duplicated response', bodyText + '\n' + bodyText],
+  ])('rejects %s rather than checking a keyword or prefix', async (_label, output) => {
+    const ledger = await captureSourcePartitions(page, configs);
+    renderBody(output);
+    await expect(assertSourcePartitions(page, ledger, 'incomplete-or-reordered')).rejects.toThrow('complete source');
+  });
+
+  it('rejects duplicate complete owners and changed native source without accepting stale output', async () => {
+    const ledger = await captureSourcePartitions(page, configs);
+    const rendered = renderBody();
+    const duplicate = addWrapper(rendered.segment, bodyText);
+    expect(assertControlledPageEvidence(readControlledPageEvidenceInPage(), 'duplicates-own-source')).toMatchObject({owners: 2});
+    await expect(assertSourcePartitions(page, ledger, 'duplicate-owner')).rejects.toThrow('complete partition source');
+    duplicate.remove();
+    rendered.segment.querySelector('strong')!.textContent = 'A newly changed opening sentence.';
+    await expect(assertSourcePartitions(page, ledger, 'changed-source')).rejects.toThrow('native partition source changed');
+  });
+
+  it('rejects restored wrappers, loading/retry markers and synthetic source containers', async () => {
+    const ledger = await captureSourcePartitions(page, configs);
+    const rendered = renderBody();
+    await expect(assertSourcePartitions(page, ledger, 'residual-wrapper', {restored: true})).rejects.toThrow('translation artifacts');
+    rendered.wrapper.remove();
+    await expect(assertSourcePartitions(page, ledger, 'residual-segment', {restored: true})).rejects.toThrow('translation artifacts');
+    rendered.segment.replaceWith(...rendered.segment.childNodes);
+    for (const className of ['fluent-read-loading', 'fluent-read-retry-wrapper']) {
+      const marker = document.createElement('span'); marker.className = className;
+      document.querySelector('#body')!.append(marker);
+      await expect(assertSourcePartitions(page, ledger, className, {restored: true})).rejects.toThrow('translation artifacts');
+      marker.remove();
+    }
+  });
+
+  it.each([
+    ['class', 'fluent-read-bilingual-content'],
+    ['class', 'fluent-read-loading'],
+    ['class', 'fluent-read-retry-wrapper'],
+    ['data-fr-translation-owned', 'true'],
+    ['data-fr-translation-segment', 'true'],
+  ])('rejects a partition root carrying %s=%s during capture or restoration', async (attribute, value) => {
+    const root = document.querySelector('#body')!;
+    root.setAttribute(attribute, value);
+    await expect(captureSourcePartitions(page, configs)).rejects.toThrow('baseline already has translation artifacts');
+    root.removeAttribute(attribute);
+    const ledger = await captureSourcePartitions(page, configs);
+    root.setAttribute(attribute, value);
+    await expect(assertSourcePartitions(page, ledger, 'root-artifact', {restored: true})).rejects.toThrow('translation artifacts');
+  });
+
+  it('keeps protected literal failures in the existing complete-source gate', async () => {
+    document.querySelector('#body')!.innerHTML = '<h2>Excluded heading</h2><span id="literal-owner">Readable text <code>KEEP_TOKEN</code> and final words.</span>';
+    const ledger = await captureSourcePartitions(page, configs);
+    const owner = document.querySelector('#literal-owner')!;
+    const wrapper = addWrapper(owner, 'Readable text  and final words.');
+    wrapper.innerHTML = encodeControlledTranslation('Readable text ') + '<code>KEEP_TOKEN</code>' + encodeControlledTranslation(' and final words.');
+    expect(await assertSourcePartitions(page, ledger, 'protected')).toMatchObject([{completeSourceMatched: true}]);
+    wrapper.querySelector('code')!.textContent = 'WRONG_TOKEN';
+    await expect(assertSourcePartitions(page, ledger, 'changed-literal')).rejects.toThrow('complete source');
+  });
+
+  it('rejects late baselines, empty partitions, replaced containers and forged or cross-page ledgers', async () => {
+    const ledger = await captureSourcePartitions(page, configs);
+    await expect(assertSourcePartitions(page, {}, 'forged')).rejects.toThrow('does not belong');
+    await expect(assertSourcePartitions({...page}, ledger, 'other-page')).rejects.toThrow('does not belong');
+    const root = document.querySelector('#body')!;
+    root.replaceWith(root.cloneNode(true));
+    await expect(assertSourcePartitions(page, ledger, 'replaced')).rejects.toThrow('container changed');
+    renderBody();
+    await expect(captureSourcePartitions(page, configs)).rejects.toThrow('baseline already has translation artifacts');
+    document.querySelector('#body')!.innerHTML = '<h2>Only an excluded heading</h2>';
+    await expect(captureSourcePartitions(page, configs)).rejects.toThrow('not native source');
+    await expect(captureSourcePartitions(page, [{selector: '#missing'}])).rejects.toThrow('container missing');
+    await expect(captureSourcePartitions(page, [])).rejects.toThrow('require configurations');
   });
 });

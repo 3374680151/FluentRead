@@ -76,7 +76,7 @@ function isControlledTranslationForSource(output, source, sourceParts = [source]
 
 // 页面证据只投影实际 DOM。保护子树通过原标签/文本/href 与译文骨架配对，
 // 不能把未编码的普通正文当作成功；任何漏槽、换源或额外正文都会使完整比较失败。
-function readControlledPageEvidenceInPage() {
+function readControlledPageEvidenceInPage(options) {
   const artifact = '.fluent-read-bilingual-content,.fluent-read-loading,.fluent-read-retry-wrapper,[data-fr-translation-owned="true"]';
   const formulaSelector = 'math,mjx-container,.MathJax,.MathJax_Display,.MathJax_SVG,.MathJax_CHTML,.katex,.mwe-math-element,.ltx_Math';
   const protectedSelector = `code,pre,kbd,samp,var,time,[role="timer"],${formulaSelector},svg,[translate="no"],.notranslate,[data-notranslate="true"],sup.reference`;
@@ -84,8 +84,14 @@ function readControlledPageEvidenceInPage() {
   const formulaAuxiliary = '.MJX_Assistive_MathML,mjx-assistive-mml,.katex-mathml,annotation,annotation-xml';
   // A URL/domain alone in a real link is an identifier skeleton; arbitrary anchor prose is not.
   const linkIdentifier = /^(?:https?:\/\/\S+|(?:[a-z0-9-]+\.)+[a-z]{2,}(?:[:/?#]\S*)?|\S+@\S+\.\S+|@[\p{L}\p{N}_-]+|u\/[\p{L}\p{N}_-]+|#[0-9]+)$/iu;
+  // CNN's /20*/* glob permits * across slashes, exactly as the production compiler does.
+  // These remain literal skeletons: neither a date nor a credit is omitted from evidence.
+  const cnnArticle = ['http:', 'https:'].includes(globalThis.location?.protocol) &&
+    ['www.cnn.com', 'edition.cnn.com'].includes(globalThis.location?.hostname) &&
+    /^\/20[\s\S]*\/[\s\S]*$/u.test(globalThis.location?.pathname || '');
   // The production GitHub adapter explicitly protects these custom time elements without role=timer.
-  const siteProtected = globalThis.location?.hostname === 'github.com' ? 'relative-time,time-ago,local-time' : '';
+  const siteProtected = globalThis.location?.hostname === 'github.com' ? 'relative-time,time-ago,local-time'
+    : cnnArticle ? '.byline__name,.timestamp__time-since,figcaption.image_large-elevate__credit,figcaption.image-elevate__credit' : '';
   const ubuntuManpage = globalThis.location?.hostname === 'manpages.ubuntu.com' && /^\/manpages\/[^/]+\/man[0-9][^/]*\/[^/]+\.html$/u.test(globalThis.location?.pathname || '');
   // Match the SQLite documentation profile exactly; ordinary page buttons are not protected prose.
   const sqliteDocument = ['sqlite.org', 'www.sqlite.org'].includes(globalThis.location?.hostname) &&
@@ -112,7 +118,69 @@ function readControlledPageEvidenceInPage() {
     }
     return parts;
   };
-  return [...document.querySelectorAll('.fluent-read-bilingual-content')].map((wrapper, index) => {
+  // Optional source partitions bind the complete native Text/BR corpus before
+  // translation. They do not infer missing source from whichever owners rendered.
+  const partitionRequest = options?.sourcePartition;
+  const partitionKey = '__fluentReadControlledSourcePartitionsV1';
+  const partitionArtifact = `${artifact},[data-fr-translation-segment="true"]`;
+  const projectPartition = (root, excludeSelectors) => {
+    const copy = root.cloneNode(true);
+    const live = [...root.querySelectorAll('*')], clones = [...copy.querySelectorAll('*')];
+    const contexts = new WeakMap(clones.map((node, index) => [node, live[index]]));
+    live.forEach((node, index) => {
+      if (node.closest(artifact)) return;
+      let omit = node.matches(omitted) || excludeSelectors.some(selector => node.matches(selector));
+      try {
+        const style = node.ownerDocument.defaultView?.getComputedStyle?.(node);
+        if (style?.display === 'none' || style?.visibility === 'hidden' || style?.visibility === 'collapse') omit = true;
+        if (style && (style.position === 'absolute' || style.position === 'fixed') &&
+            (style.overflow === 'hidden' || style.overflow === 'clip' || (style.overflowX === 'hidden' && style.overflowY === 'hidden'))) {
+          const clip = style.clip?.replace(/[\s,]+/gu, ' ').trim();
+          if ((/^rect\((0(?:px)?|1px) \1 \1 \1\)$/u.test(clip ?? '') || style.clipPath?.replace(/\s+/gu, '') === 'inset(50%)') &&
+              /^(?:0(?:\.\d+)?|1(?:\.0+)?)px$/u.test(style.width) && /^(?:0(?:\.\d+)?|1(?:\.0+)?)px$/u.test(style.height)) omit = true;
+        }
+      } catch { /* Missing styles never exempt source text. */ }
+      if (bingOmitted && node.matches(bingOmitted)) omit = true;
+      if (omit) clones[index].remove();
+    });
+    copy.querySelectorAll(artifact).forEach(node => node.remove());
+    copy.querySelectorAll('[data-fr-translation-segment="true"]').forEach(node => node.replaceWith(...node.childNodes));
+    for (const node of copy.querySelectorAll('*')) {
+      if (copy.contains(node) && isProtected(node, contexts.get(node))) node.remove();
+    }
+    return textNodes(copy, root.closest('a[href]')?.getAttribute('href') ?? null).map(part => part.text);
+  };
+  const partitionRows = (root, excludeSelectors, selector) => [...root.querySelectorAll(selector)].filter(node =>
+    !excludeSelectors.some(excluded => [...root.querySelectorAll(excluded)].some(ancestor => ancestor.contains(node))));
+  let partitionBindings;
+  if (partitionRequest) {
+    const ledgers = globalThis[partitionKey] ??= new Map();
+    if (partitionRequest.operation === 'capture') {
+      if (!Array.isArray(partitionRequest.configs) || !partitionRequest.configs.length) throw new Error('Source partitions require configurations');
+      const records = partitionRequest.configs.flatMap(config => {
+        const excludeSelectors = config.sourcePartition?.excludeSelectors ?? [];
+        const roots = [...document.querySelectorAll(config.selector)];
+        if (!roots.length) throw new Error(`Source partition container missing: ${config.selector}`);
+        return roots.map((root, index) => {
+          if (excludeSelectors.some(selector => root.matches(selector))) throw new Error('Source partition excludes its entire container');
+          if (root.matches(partitionArtifact) || partitionRows(root, excludeSelectors, partitionArtifact).length) {
+            throw new Error('Source partition baseline already has translation artifacts');
+          }
+          const sourceParts = projectPartition(root, excludeSelectors);
+          if (!sourceParts.join('').trim() || sourceParts.join('').includes('测试译文：')) throw new Error('Source partition baseline is not native source');
+          return {name: config.name || config.selector, selector: config.selector, index, excludeSelectors,
+            root: new WeakRef(root), sourceParts};
+        });
+      });
+      ledgers.set(partitionRequest.id, records);
+      if (ledgers.size > 128) ledgers.delete(ledgers.keys().next().value);
+      return records.map(({root: _root, ...record}) => record);
+    }
+    partitionBindings = ledgers.get(partitionRequest.id);
+    if (!partitionBindings) throw new Error('Source partition ledger unavailable');
+  }
+  const wrappers = [...document.querySelectorAll('.fluent-read-bilingual-content')];
+  const evidence = wrappers.map((wrapper, index) => {
     const owner = wrapper.parentElement;
     const source = owner.cloneNode(true), translated = wrapper.cloneNode(true);
     // Visibility must come from connected source elements: cloning loses class-dependent CSS.
@@ -169,6 +237,59 @@ function readControlledPageEvidenceInPage() {
     const sourceTextNodes = textNodes(source, inheritedLink), outputTextNodes = textNodes(translated, inheritedLink);
     const sourceParts = sourceTextNodes.map(node => node.text);
     return {index, owner: owner.localName, source: sourceParts.join(''), sourceParts, output: outputTextNodes.map(node => node.text).join(''), sourceTextNodes, outputTextNodes, protectedMatches, omittedParts, sourceHtml: source.outerHTML.slice(0, 4000)};
+  });
+  if (!partitionBindings) return evidence;
+  return partitionBindings.map(record => {
+    const root = record.root.deref();
+    if (!root?.isConnected || document.querySelectorAll(record.selector)[record.index] !== root) {
+      throw new Error(`Source partition native container changed: ${record.selector}/${record.index}`);
+    }
+    const selected = new Set(partitionRows(root, record.excludeSelectors, '.fluent-read-bilingual-content'));
+    return {name: record.name, selector: record.selector, index: record.index,
+      sourceParts: projectPartition(root, record.excludeSelectors),
+      artifacts: Number(root.matches(partitionArtifact)) + partitionRows(root, record.excludeSelectors, partitionArtifact).length,
+      owners: evidence.filter((_row, index) => selected.has(wrappers[index]))};
+  });
+}
+
+const sourcePartitionLedgers = new WeakMap();
+async function captureSourcePartitions(page, configs) {
+  const id = require('node:crypto').randomUUID();
+  const expected = await page.evaluate(readControlledPageEvidenceInPage,
+    {sourcePartition: {operation: 'capture', id, configs}});
+  const ledger = Object.freeze({});
+  sourcePartitionLedgers.set(ledger, {page, id, expected});
+  return ledger;
+}
+
+async function assertSourcePartitions(page, ledger, phase, {restored = false} = {}) {
+  const binding = ledger && sourcePartitionLedgers.get(ledger);
+  if (!binding || binding.page !== page) throw new Error(`${phase}: source partition ledger does not belong to this page`);
+  const current = await page.evaluate(readControlledPageEvidenceInPage,
+    {sourcePartition: {operation: 'read', id: binding.id}});
+  const normalize = text => text.replace(/\s+/gu, ' ').trim();
+  const sameSource = (left, right) => [left.join(''), left.join(' ')].some(a =>
+    [right.join(''), right.join(' ')].some(b => normalize(a) === normalize(b)));
+  if (current.length !== binding.expected.length) throw new Error(`${phase}: source partition count changed`);
+  return current.map((state, index) => {
+    const expected = binding.expected[index];
+    const label = `${phase}/${expected.selector}/${expected.index}`;
+    if (restored && (state.artifacts !== 0 || state.owners.length !== 0)) {
+      throw new Error(`${label}: restored partition still has translation artifacts`);
+    }
+    if (!sameSource(state.sourceParts, expected.sourceParts)) throw new Error(`${label}: complete native partition source changed`);
+    if (!restored) {
+      assertControlledPageEvidence(state.owners, label);
+      const ownerParts = state.owners.flatMap(owner => owner.sourceParts);
+      if (!sameSource(ownerParts, expected.sourceParts) || !['', ' '].some(separator =>
+        isControlledTranslationForSource(state.owners.map(owner => owner.output).join(separator),
+          expected.sourceParts.join(''), expected.sourceParts))) {
+        throw new Error(`${label}: translation owners do not match complete partition source`);
+      }
+    }
+    return {name: expected.name, selector: expected.selector, index: expected.index,
+      sourcePartsCount: expected.sourceParts.length, expectedSource: expected.sourceParts.join(''),
+      ownerCount: state.owners.length, completeSourceMatched: true, restored};
   });
 }
 
@@ -258,6 +379,8 @@ async function installControlledProvider(context, createPage, timeout) {
     } finally {await popup.close();}
   } catch (error) {context.off('serviceworker', onWorker); throw error;}
   return {
+    captureSourcePartitions,
+    assertSourcePartitions,
     async assertPage(page, phase) {
       return assertControlledPageEvidence(await page.evaluate(readControlledPageEvidenceInPage), phase);
     },
@@ -277,4 +400,4 @@ async function installControlledProvider(context, createPage, timeout) {
   };
 }
 
-module.exports = {installControlledProvider, encodeControlledTranslation, decodeControlledTranslationText, isControlledTranslationForSource, readControlledPageEvidenceInPage, assertControlledPageEvidence};
+module.exports = {installControlledProvider, encodeControlledTranslation, decodeControlledTranslationText, isControlledTranslationForSource, readControlledPageEvidenceInPage, assertControlledPageEvidence, captureSourcePartitions, assertSourcePartitions};

@@ -22,6 +22,16 @@ function normalizeSelectorList(value, fallback) {
   return [...new Set(raw.map((selector) => String(selector).trim()).filter(Boolean))];
 }
 
+function normalizeSourcePartition(value) {
+  if (value === undefined) return undefined;
+  if (!value || typeof value !== 'object' || Array.isArray(value) ||
+      Object.keys(value).some(key => key !== 'excludeSelectors') || !Array.isArray(value.excludeSelectors) ||
+      value.excludeSelectors.some(selector => typeof selector !== 'string' || !selector.trim())) {
+    throw new Error('sourcePartition 必须仅声明 excludeSelectors selector 数组');
+  }
+  return {excludeSelectors: normalizeSelectorList(value.excludeSelectors)};
+}
+
 function validateMutableForbiddenSelectors(caseName, forbiddenSelectors, dynamicForbiddenSelectors, mutableSelectors) {
   const invalid = mutableSelectors.filter((selector) =>
     !HOST_MUTABLE_FORBIDDEN_SELECTORS.has(selector) ||
@@ -57,11 +67,18 @@ function normalizeHoverTargets(value, options = {}) {
     const sourceIncludes = Object.prototype.hasOwnProperty.call(target || {}, 'sourceIncludes')
       ? normalizeSelectorList(target.sourceIncludes)
       : normalizeSelectorList(matchingRule?.sourceIncludes).slice(0, 1);
+    if (target?.textIncludes !== undefined && (!Array.isArray(target.textIncludes) || !target.textIncludes.length ||
+        target.textIncludes.some(value => typeof value !== 'string' || !value.trim()))) {
+      throw new Error('hover target textIncludes 必须是非空原文 Text 片段数组');
+    }
+    const sourcePartition = normalizeSourcePartition(target?.sourcePartition ?? matchingRule?.sourcePartition);
     return {
       name: String(target?.name || `target-${index + 1}`).trim(),
       selector,
       index: target?.index === undefined ? 0 : Number(target.index),
       sourceIncludes,
+      ...(target?.textIncludes === undefined ? {} : {textIncludes: normalizeSelectorList(target.textIncludes)}),
+      ...(sourcePartition ? {sourcePartition} : {}),
     };
   }).filter((target) => target.name && target.selector && Number.isInteger(target.index) && target.index >= 0);
   const selectors = new Set(normalized.map(({selector}) => selector));
@@ -72,6 +89,7 @@ function normalizeHoverTargets(value, options = {}) {
       selector: rule.selector,
       index: 0,
       sourceIncludes: rule.sourceIncludes.slice(0, 1),
+      ...(rule.sourcePartition ? {sourcePartition: rule.sourcePartition} : {}),
     });
     selectors.add(rule.selector);
   }
@@ -122,6 +140,7 @@ function normalizeCoverageRules(value, legacySelectors = []) {
     trackDynamic: rule?.trackDynamic === true,
     ...(rule?.minTextLength === undefined ? {} : {minTextLength: Number(rule.minTextLength)}),
     sourceIncludes: normalizeSelectorList(rule?.sourceIncludes),
+    ...(rule?.sourcePartition === undefined ? {} : {sourcePartition: normalizeSourcePartition(rule.sourcePartition)}),
   }));
 }
 
@@ -161,6 +180,9 @@ function validateCoverageRules(caseName, rules, options = {}) {
     }
     if (rule.sourceIncludes.some((value) => !value.trim())) {
       errors.push(`${label} sourceIncludes 不得包含空字符串`);
+    }
+    if (rule.sourcePartition && rule.trackDynamic) {
+      errors.push(`${label} sourcePartition 固定基线不得启用 trackDynamic`);
     }
   }
   return errors;

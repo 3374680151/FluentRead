@@ -97,7 +97,7 @@ describe('网站正文规则目录', () => {
         const core = new TranslationCandidateCore({url, adapters});
         const adapter = adapterById.get('steam-store')!;
         const original = document.body.innerHTML;
-        const owner = document.querySelector('#long-body')!;
+        const owner = document.querySelector<HTMLElement>('#long-body')!;
         const snapshot = createTranslationSourceSnapshot(owner, core.shouldStayOriginal);
         const source = snapshot.slots.map(slot => slot.source).join('\n');
         for (const text of ['This long review explains', 'how careful teamwork helps', 'Another line keeps',
@@ -227,7 +227,7 @@ describe('网站正文规则目录', () => {
             for (const text of fixture.sourceAssertions.required) expect(source).toContain(text);
             for (const text of fixture.sourceAssertions.forbidden) expect(source).not.toContain(text);
             for (const selector of ['#quote-body', '#nested-body']) {
-                const node = document.querySelector(selector)!;
+                const node = document.querySelector<HTMLElement>(selector)!;
                 const html = node.innerHTML;
                 const snapshot = createTranslationSourceSnapshot(node, core.shouldStayOriginal);
                 expect(snapshot.slots.map(slot => slot.source).join(' ')).toContain(node.querySelector('a')!.textContent);

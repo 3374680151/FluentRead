@@ -49,7 +49,7 @@ const {
   assertFreshProductionExtension: (extensionDir: string, projectRoot: string) => unknown;
   waitForHostMathRendering: (page: unknown, timeout: number) => Promise<unknown>;
   waitForStableTarget: (page: unknown, selector: string, timeout: number) => Promise<void>;
-  findHoverTextPointInPage: (target: {selector: string; index: number}) => {x: number; y: number; text: string} | null;
+  findHoverTextPointInPage: (target: {selector: string; index: number; textIncludes?: string[]}) => {x: number; y: number; text: string} | null;
   toggleHover: (page: unknown, target: unknown, config: {selector: string; index: number}, count: number, timeout: number,
     attempt?: number, prepareClickText?: string) => Promise<void>;
   assertPageContract: (
@@ -96,15 +96,18 @@ const {
     requiresPhrase?: boolean;
     minTextLength?: number;
     sourceIncludes: string[];
+    sourcePartition?: {excludeSelectors: string[]};
   }>;
   normalizeHoverTargets: (targets: unknown[], options?: string | {
     fallbackSelector?: string;
-    coverageRules?: Array<{name: string; selector: string; sourceIncludes: string[]}>;
+    coverageRules?: Array<{name: string; selector: string; sourceIncludes: string[]; sourcePartition?: {excludeSelectors: string[]}}>;
   }) => Array<{
     name: string;
     selector: string;
     index: number;
     sourceIncludes: string[];
+    textIncludes?: string[];
+    sourcePartition?: {excludeSelectors: string[]};
   }>;
   normalizeInteractionScenarios: (scenarios: unknown[]) => Array<{
     name: string;
@@ -1327,6 +1330,160 @@ describe('site translation coverage contract', () => {
     }
   });
 
+  it('targets the explicit original body Text instead of a descendant H2 and rechecks changed text', () => {
+    const {document} = parseHTML('<html><body><div id="body"><h2>About This Game</h2><strong>Many ways to play.</strong><br><span id="prose">When it comes to diversity of heroes, every player can find a role.</span></div></body></html>');
+    let textParent: Element | null = null;
+    Object.defineProperty(document, 'createRange', {value: () => ({
+      selectNodeContents(node: Node) {textParent = node.parentElement;},
+      getClientRects: () => [{left: 20, right: 220, top: 140, bottom: 160, width: 200, height: 20}],
+    })});
+    Object.defineProperty(document, 'elementFromPoint', {value: () => textParent});
+    vi.stubGlobal('document', document);vi.stubGlobal('window', {innerWidth: 1280, innerHeight: 900});
+    vi.stubGlobal('getComputedStyle', () => ({display: 'inline', visibility: 'visible'}));
+    try {
+      expect(findHoverTextPointInPage({selector: '#body', index: 0})?.text).toBe('About This Game');
+      const config = {selector: '#body', index: 0, textIncludes: ['When it comes to diversity of heroes']};
+      expect(findHoverTextPointInPage(config)?.text).toBe('When it comes to diversity of heroes, every player can find a role.');
+      document.querySelector('#prose')!.textContent = 'A different source replaced the intended body.';
+      expect(findHoverTextPointInPage(config)).toBeNull();
+      document.querySelector('#body')!.innerHTML = '<h2>About This Game</h2>';
+      expect(findHoverTextPointInPage(config)).toBeNull();
+    } finally {vi.unstubAllGlobals();}
+  });
+
+  function googleNewsHoverFixture(mode = 'transparent') {
+    const {document} = parseHTML('<html><body><main><section>' +
+      '<div id="card"><div id="stretch"><a id="news-overlay" href="./read/fixture-story?hl=en-US" target="_blank" aria-hidden="true" tabindex="-1"></a></div>' +
+      '<div>Fixture publisher</div><a id="headline" href="./read/fixture-story?hl=en-US" target="_blank">A readable headline from the current card</a><time>2 hours ago</time></div>' +
+      '<div><div id="other-stretch"><a id="other-news-overlay" href="./read/fixture-story?hl=en-US" target="_blank" aria-hidden="true" tabindex="-1"></a></div><a href="./read/fixture-story?hl=en-US" target="_blank">A different card</a></div>' +
+      '</section></main><div id="news-dialog" role="dialog">Sign in</div><div id="other-mask"></div></body></html>');
+    const target = document.querySelector('#headline')!;
+    const overlay = document.querySelector('#news-overlay')!;
+    const wrapper = document.querySelector('#stretch')!;
+    const card = document.querySelector('#card')!;
+    const dialog = document.querySelector('#news-dialog')!;
+    const mask = document.querySelector('#other-mask')!;
+    let covered = mode === 'dialog';
+    if (mode === 'text-in-overlay') overlay.textContent = 'A covering label';
+    if (mode === 'child-in-overlay') overlay.innerHTML = '<span></span>';
+    if (mode === 'extra-wrapper-text') wrapper.append(' ');
+    if (mode === 'extra-wrapper-node') wrapper.append(document.createElement('span'));
+    if (mode === 'different-href') overlay.setAttribute('href', './read/different-story?hl=en-US');
+    if (mode === 'different-query') overlay.setAttribute('href', './read/fixture-story?hl=fr');
+    if (mode === 'different-target') overlay.setAttribute('target', '_self');
+    if (mode === 'missing-target') target.removeAttribute('target');
+    if (mode === 'wrong-tabindex') overlay.setAttribute('tabindex', '0');
+    if (mode === 'missing-aria-hidden') overlay.removeAttribute('aria-hidden');
+    if (mode === 'topic-link') {target.setAttribute('href', './topics/fixture'); overlay.setAttribute('href', './topics/fixture');}
+    if (mode === 'nested-title') target.innerHTML = '<span>A readable headline from the current card</span>';
+    if (mode === 'dialog-ancestor') card.setAttribute('role', 'dialog');
+    if (mode === 'editor-ancestor') card.setAttribute('contenteditable', 'true');
+    if (mode === 'textbox-ancestor') card.setAttribute('role', 'textbox');
+    if (mode === 'button-wrapper') wrapper.setAttribute('role', 'button');
+    if (mode === 'hidden-ancestor') card.setAttribute('aria-hidden', 'true');
+    if (mode === 'hidden-overlay') overlay.setAttribute('hidden', '');
+    if (mode === 'inert-overlay') overlay.setAttribute('inert', '');
+    if (mode === 'owned-overlay') overlay.setAttribute('data-fr-translation-owned', 'true');
+    if (mode === 'not-first-wrapper') card.prepend(document.createElement('span'));
+    const candidateOverlay = mode === 'cross-card' ? document.querySelector('#other-news-overlay')! : overlay;
+    const stack = () => covered ? [dialog, overlay, wrapper, target] :
+      mode === 'intervening-mask' ? [candidateOverlay, mask, wrapper, target] :
+        mode === 'missing-headline' ? [candidateOverlay, wrapper, card] :
+          mode === 'stack-disagrees' ? [mask, candidateOverlay, wrapper, target] : [candidateOverlay, candidateOverlay.parentElement, target, card];
+    Object.defineProperty(document, 'createRange', {value: () => ({
+      selectNodeContents: vi.fn(),
+      getClientRects: () => [{left: 20, right: 220, top: 140, bottom: 160, width: 200, height: 20}],
+    })});
+    Object.defineProperty(document, 'elementFromPoint', {value: () => mode === 'stack-disagrees' ? candidateOverlay : stack()[0]});
+    Object.defineProperty(document, 'elementsFromPoint', {value: stack});
+    Object.defineProperty(target, 'getBoundingClientRect', {value: () => ({
+      x: 20, y: 140, left: 20, right: 220, top: 140, bottom: 160, width: 200, height: 20,
+    })});
+    vi.stubGlobal('document', document);
+    vi.stubGlobal('window', {innerWidth: 1280, innerHeight: 900});
+    vi.stubGlobal('innerWidth', 1280);
+    vi.stubGlobal('innerHeight', 900);
+    vi.stubGlobal('location', new URL(mode === 'other-host' ? 'https://example.com/home' :
+      mode === 'other-subdomain' ? 'https://www.news.google.com/home' :
+        mode === 'search-path' ? 'https://news.google.com/search' :
+          mode === 'article-path' ? 'https://news.google.com/read/fixture-story' : 'https://news.google.com/home?hl=en-US'));
+    vi.stubGlobal('getComputedStyle', (element: Element, pseudo?: string) => pseudo ? {
+      content: mode === 'overlay-pseudo' && element === overlay || mode === 'wrapper-pseudo' && element === wrapper ||
+        mode === 'headline-pseudo' && element === target || mode === 'card-pseudo' && element === card ? '""' : 'none',
+    } : {
+      display: 'block', visibility: 'visible', opacity: '1',
+      position: mode === 'static-overlay' && element === overlay || mode === 'static-wrapper' && element === wrapper ? 'static' : 'absolute',
+      left: mode === 'offset-overlay' && element === overlay ? '1px' : '0px', right: '0px', top: '0px', bottom: '0px',
+      backgroundColor: mode === 'opaque-overlay' && element === overlay || mode === 'opaque-wrapper' && element === wrapper ? 'rgb(255, 255, 255)' : 'rgba(0, 0, 0, 0)',
+      backgroundImage: mode === 'background-image' && element === overlay ? 'url("cover.png")' : 'none',
+      boxShadow: mode === 'shadow' && element === wrapper ? '0 0 4px black' : 'none',
+      filter: mode === 'filter' && element === wrapper ? 'blur(1px)' : 'none',
+      backdropFilter: mode === 'backdrop' && element === overlay ? 'blur(1px)' : 'none',
+      borderTopWidth: mode === 'border' && element === overlay ? '1px' : '0px',
+      borderRightWidth: '0px', borderBottomWidth: '0px', borderLeftWidth: '0px',
+      outlineWidth: mode === 'outline' && element === wrapper ? '1px' : '0px',
+    });
+    return {document, cover: () => {covered = true;}, changeDestination: () => {overlay.setAttribute('href', './read/changed-after-pointer');}};
+  }
+
+  it('uses only the observed Google News empty same-destination link stack, preserving host DOM and 200ms stability', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    const {document} = googleNewsHoverFixture();
+    const html = document.body.innerHTML;
+    const page = {
+      evaluate: async (fn: (arg: unknown) => unknown, arg: unknown) => fn(arg),
+      mouse: {move: vi.fn()}, keyboard: {down: vi.fn(), up: vi.fn()},
+      waitForTimeout: async (ms: number) => {vi.advanceTimersByTime(ms);}, waitForFunction: vi.fn(),
+    };
+    try {
+      expect(findHoverTextPointInPage({selector: '#headline', index: 0})).toMatchObject({
+        x: 90, y: 150, text: 'A readable headline from the current card',
+        hitPolicy: 'google-news-stretched-link:["./read/fixture-story?hl=en-US","_blank"]',
+      });
+      await toggleHover(page, {scrollIntoViewIfNeeded: async () => undefined}, {selector: '#headline', index: 0}, 1, 500);
+      expect(Date.now()).toBeGreaterThanOrEqual(200);
+      expect(page.keyboard.down.mock.calls).toEqual([['Control']]);
+      expect(page.keyboard.up.mock.calls).toEqual([['Control']]);
+      expect(document.body.innerHTML).toBe(html);
+    } finally {vi.unstubAllGlobals(); vi.useRealTimers();}
+  });
+
+  it.each(['text-in-overlay', 'child-in-overlay', 'extra-wrapper-text', 'extra-wrapper-node', 'different-href',
+    'different-query', 'different-target', 'missing-target', 'wrong-tabindex', 'missing-aria-hidden', 'topic-link',
+    'nested-title', 'dialog', 'dialog-ancestor', 'editor-ancestor', 'textbox-ancestor', 'button-wrapper',
+    'hidden-ancestor', 'hidden-overlay', 'inert-overlay', 'owned-overlay', 'not-first-wrapper', 'cross-card',
+    'intervening-mask', 'missing-headline', 'stack-disagrees', 'other-host', 'other-subdomain', 'search-path', 'article-path',
+    'opaque-overlay', 'opaque-wrapper', 'static-overlay', 'static-wrapper', 'offset-overlay', 'background-image',
+    'shadow', 'filter', 'backdrop', 'border', 'outline', 'overlay-pseudo', 'wrapper-pseudo', 'headline-pseudo', 'card-pseudo'])
+  ('rejects the Google News stretched-link exception for %s', mode => {
+    const {document} = googleNewsHoverFixture(mode);
+    const html = document.body.innerHTML;
+    try {
+      expect(findHoverTextPointInPage({selector: '#headline', index: 0})).toBeNull();
+      expect(document.body.innerHTML).toBe(html);
+    } finally {vi.unstubAllGlobals();}
+  });
+
+  it.each(['cover', 'changeDestination'] as const)
+  ('rechecks Google News after pointer movement and sends zero hotkeys for %s', async action => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    const fixture = googleNewsHoverFixture();
+    const page = {
+      evaluate: async (fn: (arg: unknown) => unknown, arg: unknown) => fn(arg),
+      mouse: {move: vi.fn(async () => {fixture[action]();})}, keyboard: {down: vi.fn(), up: vi.fn()},
+      waitForTimeout: async (ms: number) => {vi.advanceTimersByTime(ms);},
+    };
+    try {
+      await expect(toggleHover(page, {scrollIntoViewIfNeeded: async () => undefined},
+        {selector: '#headline', index: 0}, 1, 300)).rejects.toThrow('悬浮原文没有稳定且可命中的位置');
+      expect(page.mouse.move).toHaveBeenCalledOnce();
+      expect(page.keyboard.down).not.toHaveBeenCalled();
+      expect(page.keyboard.up).not.toHaveBeenCalled();
+    } finally {vi.unstubAllGlobals(); vi.useRealTimers();}
+  });
+
   function productHuntHoverFixture(mode = 'transparent') {
     const {document} = parseHTML('<html><body><main><div data-test="homepage-section-today">' +
       '<section data-container><div><span><a href="/products/first"><span id="overlay" data-target="true"></span>1. First Product</a></span>' +
@@ -1805,6 +1962,32 @@ describe('site translation coverage contract', () => {
     })).toContain('可选 forbidden DOM 在静态 contract 后出现');
   });
 
+  it.each(['changed-duplicate', 'clean-appended-node', 'owned-original'])(
+    'preserves every duplicate dynamic forbidden occurrence for %s', async mode => {
+      const {document, window} = parseHTML('<html><body><main><time>2 hours ago</time><time>2 hours ago</time></main></body></html>');
+      const url = 'https://news.google.com/home';
+      vi.stubGlobal('document', document);vi.stubGlobal('Node', window.Node);vi.stubGlobal('location', new URL(url));
+      const page = {
+        evaluate: async (fn: (argument: unknown) => unknown, argument: unknown) => fn(argument),
+        url: () => url,
+      };
+      try {
+        const baseline = await capturePageContract(page, [], ['main time'], [], ['main time'], []);
+        expect(baseline.forbiddenState[0].signatures).toHaveLength(2);
+        const second = document.querySelectorAll('time')[1]!;
+        if (mode === 'changed-duplicate') second.textContent = 'A damaged relative timestamp';
+        if (mode === 'clean-appended-node') {
+          const appended = document.createElement('time');appended.textContent = '5 hours ago';
+          document.querySelector('main')!.append(appended);
+        }
+        if (mode === 'owned-original') second.setAttribute('data-fr-translation-owned', 'true');
+        const check = assertPageContract(page, baseline, [], url, mode);
+        if (mode === 'clean-appended-node') await expect(check).resolves.toBeDefined();
+        else await expect(check).rejects.toThrow(mode === 'owned-original'
+          ? 'forbidden DOM 出现译文' : '动态 forbidden DOM 基线丢失');
+      } finally {vi.unstubAllGlobals();}
+    });
+
   it('allows only explicitly mutable dynamic forbidden roots to finish host rendering', () => {
     const mutable = {
       selector: '.MathJax_Display',
@@ -2278,6 +2461,58 @@ describe('site translation coverage contract', () => {
       selector: 'main h1',
       sourceIncludes: ['Expected title', 'Second page sample'],
     }], {coverageRules})[0].sourceIncludes).toEqual(['Expected title', 'Second page sample']);
+  });
+
+  it('inherits a fixed sourcePartition into its hover target and keeps Text-range targeting separate', () => {
+    const coverageRules = normalizeCoverageRules([{name: 'body', selector: '#body', kind: 'content',
+      sourceIncludes: ['An entire body fragment'], sourcePartition: {excludeSelectors: ['h2']}}]);
+    const targets = normalizeHoverTargets([{name: 'body', selector: '#body', textIncludes: [' Actual text line ']}], {coverageRules});
+    expect(targets[0]).toMatchObject({sourceIncludes: ['An entire body fragment'], textIncludes: ['Actual text line'],
+      sourcePartition: {excludeSelectors: ['h2']}});
+    expect(validateCoverageRules('dynamic-partition', normalizeCoverageRules([{name: 'body', selector: '#body',
+      kind: 'content', trackDynamic: true, sourcePartition: {excludeSelectors: ['h2']}}])))
+      .toContain('dynamic-partition.coverageRules[0] sourcePartition 固定基线不得启用 trackDynamic');
+    for (const sourcePartition of [null, true, {}, {excludeSelectors: 'h2'}, {excludeSelectors: ['']},
+      {excludeSelectors: ['h2'], ignoreEverything: true}]) {
+      expect(() => normalizeCoverageRules([{name: 'body', selector: '#body', sourcePartition}])).toThrow('sourcePartition');
+    }
+    for (const textIncludes of [[], [''], true, 'A line']) {
+      expect(() => normalizeHoverTargets([{name: 'body', selector: '#body', textIncludes}])).toThrow('textIncludes');
+    }
+  });
+
+  it.each(['hover', 'full'])('fails fast for the Steam %s partition contract without a controlled provider', mode => {
+    const {parseArgs} = require('../scripts/run-site-translation-test.cjs');
+    const args = ['--case', 'steam-dota2-product', '--mode', mode, '--extension-dir', '/isolated/extension',
+      '--playwright-root', '/isolated/deps', '--runtime-diagnostics-helper', '/isolated/diagnostics.cjs', '--allow-network'];
+    expect(() => parseArgs(args)).toThrow('sourcePartition 完整正文契约必须使用 --controlled-provider');
+    const config = parseArgs([...args, '--controlled-provider']);
+    expect(config.coverageRules.find((rule: {name: string}) => rule.name === 'game-body').sourcePartition)
+      .toEqual({excludeSelectors: ['h2']});
+    expect(config.hoverTargets.find((target: {name: string}) => target.name === 'game-body')).toMatchObject({
+      textIncludes: ['When it comes to diversity of heroes'], sourcePartition: {excludeSelectors: ['h2']},
+    });
+  });
+
+  it('requires a real partition ledger and carries the same baseline through translate, restore and retranslate', async () => {
+    const {captureSourcePartitionLedger, verifySourcePartitionLedger} = require('../scripts/run-site-translation-test.cjs');
+    const page = {}, ledger = Object.freeze({});
+    const configs = [{name: 'body', selector: '#body', sourcePartition: {excludeSelectors: ['h2']}}];
+    await expect(captureSourcePartitionLedger(page, [], undefined)).resolves.toBeNull();
+    await expect(captureSourcePartitionLedger(page, configs, undefined)).rejects.toThrow('--controlled-provider');
+    const provider = {captureSourcePartitions: vi.fn(async () => ledger), assertSourcePartitions: vi.fn(async () => [])};
+    expect(await captureSourcePartitionLedger(page, configs, provider)).toBe(ledger);
+    for (const [phase, restored] of [['first', false], ['restore', true], ['second', false]] as const) {
+      await verifySourcePartitionLedger(page, ledger, provider, phase, restored);
+    }
+    expect(provider.captureSourcePartitions).toHaveBeenCalledOnce();
+    expect(provider.assertSourcePartitions.mock.calls).toEqual([
+      [page, ledger, 'first', {restored: false}], [page, ledger, 'restore', {restored: true}],
+      [page, ledger, 'second', {restored: false}],
+    ]);
+    await expect(captureSourcePartitionLedger(page, configs, {...provider, captureSourcePartitions: async () => null}))
+      .rejects.toThrow('原生正文基线 ledger');
+    await expect(verifySourcePartitionLedger(page, undefined, provider, 'lost-baseline')).rejects.toThrow('ledger');
   });
 
   it('counts late dynamic nodes and fails if any observed node is untranslated', () => {
