@@ -1,32 +1,25 @@
 # Use Chrome’s local translation
 
-Chrome’s built-in translation uses an on-device model. Check that your browser supports the language pair and prepare its model before translating.
+Chrome’s built-in AI translator processes text on your device. The first use of a language pair requires an internet connection to download its model.
 
 <GuideVisual kind="chrome-local" en />
 
 ## Prepare a language pair
 
-1. Open **Settings → General → Basic settings** and set **Default webpage translation provider** to **Chrome built-in AI translation**. Confirm your source and target languages.
-2. Click **Configure provider**, then click **Check connection** in the connection settings.
-3. Keep settings open while the model downloads; the status shows a progress bar and percentage.
-4. Return to the webpage and retry translation.
+1. Open **Settings → General → Basics** and select **Chrome built-in AI translation** as the default page service.
+2. Choose the source and target languages. Open **Configure service** and choose **Check connection**.
+3. If a model download starts, keep settings open until it finishes.
+4. Return to the webpage and translate again.
 
-Preparation applies to the current language pair. Another pair may need its own preparation. If automatic source detection fails, specify the source language and retry.
-
-<details class="guide-details">
-<summary>Why is it unavailable?</summary>
+Models are prepared for specific language pairs. A different pair may need another download. If automatic language detection fails, select the source language yourself.
 
 ## Why is it unavailable?
 
-Availability depends on Chrome version, device, browser policy, language, and download status. Not every computer supports every language. Check your connection and browser updates; use another service if preparation is unavailable.
+Availability depends on your Chrome version, device, management policy, and language support. Update Chrome, check the selected languages, and stay online for the initial download. You can use another translation service while the model is unavailable.
 
-Initial downloads require a network connection. A language that has not been prepared is not yet ready for offline use.
-
-For deeper diagnosis, see [Chrome’s local model help](https://developer.chrome.com/docs/ai/debug-built-in-model).
-
-</details>
+For further checks, follow [Chrome’s model troubleshooting guide](https://developer.chrome.com/docs/ai/debug-built-in-model).
 
 ## Related guides
 
-- [All guides](/en/docs/)
-- [Troubleshooting](/en/guide/faq)
+- [Choose a translation service](/en/config/translation-engines)
+- [Data and privacy](/en/guide/privacy)

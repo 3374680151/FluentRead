@@ -78,6 +78,7 @@ export default defineConfig({
         resolve(__dirname, 'docs/.vitepress/theme/GuideLayout.vue'),
         resolve(__dirname, 'docs/.vitepress/theme/GuideVisual.vue'),
         resolve(__dirname, 'docs/.vitepress/theme/HeroOrbit.vue'),
+        resolve(__dirname, 'docs/.vitepress/theme/HighlightGuide.vue'),
         resolve(__dirname, 'docs/.vitepress/theme/LandingHeader.vue'),
         resolve(__dirname, 'docs/.vitepress/theme/ProductHome.vue'),
         resolve(__dirname, 'docs/.vitepress/theme/ProductHomeEn.vue'),
