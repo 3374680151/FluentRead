@@ -356,6 +356,14 @@ describe('译文外观声明与页面样式表', () => {
             .toHaveProperty('--fluent-read-translation-surface-ink', '#ffffff');
     });
 
+    it.each(['none', 'initial', 'unset', 'currentcolor'])('背景重置 %s 清空图层，后续纯色可以重新配对正文', (reset) => {
+        expect(getTranslationAppearanceStyle({
+            customCss: `background: linear-gradient(red, blue); background: ${reset}; background-color: white`,
+        })).toHaveProperty('--fluent-read-translation-surface-ink', '#000000');
+        expect(getTranslationAppearanceStyle({customCss: `background: ${reset}`}))
+            .not.toHaveProperty('--fluent-read-translation-surface-ink');
+    });
+
     it('预览对象保留重复背景的最终声明次序，与网页样式表配对一致', () => {
         const dark = getTranslationAppearanceStyle({
             backgroundColor: '#fff', customCss: 'background-color: #fff; background: #000',

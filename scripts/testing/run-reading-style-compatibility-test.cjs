@@ -210,15 +210,15 @@ async function main() {
     const group=options.locator('.translation-style-group');await group.waitFor({state:'visible',timeout:30000});
     const preview=group.getByTestId('bilingual-highlight-preview-translation');
     report.metrics.customSurfacePairs=[];
-    for(const appearance of [
-      {...APPEARANCE,backgroundColor:'#000000'},
-      {...APPEARANCE,backgroundColor:'#ffffff'},
-      {...APPEARANCE,fillColor:'#111111'},
-      {...APPEARANCE,backgroundColor:'#ffffff',customCss:'background-color:#fff; background:#000'},
-      {...APPEARANCE,backgroundColor:'#000000',customCss:'background-color:#000; background:#fff'},
+    for(const {appearance,expected} of [
+      {appearance:{...APPEARANCE,backgroundColor:'#000000'},expected:'rgb(0, 0, 0)'},
+      {appearance:{...APPEARANCE,backgroundColor:'#ffffff'},expected:'rgb(255, 255, 255)'},
+      {appearance:{...APPEARANCE,fillColor:'#111111'},expected:'rgb(231, 231, 231)'},
+      {appearance:{...APPEARANCE,backgroundColor:'#ffffff',customCss:'background-color:#fff; background:#000'},expected:'rgb(0, 0, 0)'},
+      {appearance:{...APPEARANCE,backgroundColor:'#000000',customCss:'background-color:#000; background:#fff'},expected:'rgb(255, 255, 255)'},
+      ...['initial','unset','currentcolor'].map(reset=>({appearance:{...APPEARANCE,customCss:`background:linear-gradient(red,blue); background:${reset}; background-color:#fff`},expected:'rgb(255, 255, 255)'})),
     ]){
       await patch({translationAppearance:appearance});await untilConfig(config=>config.translationAppearance.customCss===appearance.customCss&&config.translationAppearance.backgroundColor===appearance.backgroundColor&&config.translationAppearance.fillColor===appearance.fillColor);
-      const expected=appearance.fillColor?'rgb(231, 231, 231)':appearance.customCss.includes('background:#000')?'rgb(0, 0, 0)':appearance.customCss.includes('background:#fff')?'rgb(255, 255, 255)':appearance.backgroundColor==='#000000'?'rgb(0, 0, 0)':'rgb(255, 255, 255)';
       await article.waitForFunction(expected=>getComputedStyle(document.querySelector('#style-7 > .fluent-read-bilingual-content')).backgroundColor===expected,expected);
       await options.waitForFunction(expected=>getComputedStyle(document.querySelector('[data-testid="bilingual-highlight-preview-translation"]')).backgroundColor===expected,expected);
       const actual=await measure(content(PRESETS[0]));const previewMetrics=await measure(preview);

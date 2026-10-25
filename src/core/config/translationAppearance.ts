@@ -488,7 +488,8 @@ function getTranslationSurfaceInk(declarations: readonly TranslationAppearanceDe
             || /^(?:color|color-mix|oklab|oklch|lab|lch|hwb|rgba?|hsla?)\(.*\)$/u.test(cssValue)
             || (property === 'background' && (cssValue === 'none' || /^[a-z-]+\(.*\)$/u.test(cssValue)))) {
             surface = '';
-            if (property === 'background') hasImage = cssValue !== 'none';
+            // initial/unset 和颜色简写会清空 background-image；继承、回滚与复杂图层仍不能猜测。
+            if (property === 'background') hasImage = !/^(?:none|initial|unset|currentcolor)$/u.test(cssValue);
         }
         // 其余无效值由浏览器忽略；不能抹掉前一条仍会生效的纯色背景。
     }
