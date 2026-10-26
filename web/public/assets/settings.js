@@ -17,6 +17,8 @@
     defService: document.getElementById("def-service"),
     autoFallback: document.getElementById("auto-fallback"),
     autoRead: document.getElementById("auto-read"),
+    selTranslate: document.getElementById("sel-translate"),
+    fabEnable: document.getElementById("fab-enable"),
     historyLimit: document.getElementById("history-limit"),
     themeSeg: document.getElementById("theme-seg"),
     ttsRate: document.getElementById("tts-rate"),
@@ -72,6 +74,10 @@
   els.autoFallback.addEventListener("change", function () { window.frSetPrefs({ autoFallback: els.autoFallback.checked }); saved(); });
   els.autoRead.checked = !!prefs.autoRead;
   els.autoRead.addEventListener("change", function () { window.frSetPrefs({ autoRead: els.autoRead.checked }); saved(); });
+  els.selTranslate.checked = !!prefs.selectionTranslate;
+  els.selTranslate.addEventListener("change", function () { window.frSetPrefs({ selectionTranslate: els.selTranslate.checked }); saved(); });
+  els.fabEnable.checked = !!prefs.fabEnabled;
+  els.fabEnable.addEventListener("change", function () { window.frSetPrefs({ fabEnabled: els.fabEnable.checked }); saved(); });
   els.historyLimit.value = prefs.historyLimit || 20;
   els.historyLimit.addEventListener("change", function () {
     var value = Math.min(100, Math.max(5, Number(els.historyLimit.value) || 20));
@@ -290,16 +296,35 @@
         text: supported ? "可在图片·字幕页使用圈选截图" : "当前浏览器不支持 getDisplayMedia",
       });
     });
-    // 6. OCR 引擎 CDN
+    // 6. OCR 引擎 CDN（多源探测：任一可达即可用）
     checks.push(function () {
+      var candidates = [
+        "https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js",
+        "https://fastly.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js",
+        "https://unpkg.com/tesseract.js@5/dist/tesseract.min.js",
+      ];
       var startedAt = Date.now();
-      return fetch("https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js", { method: "HEAD" })
-        .then(function () {
-          return { name: "OCR 引擎（CDN）", ok: true, badge: "可达 " + (Date.now() - startedAt) + "ms", text: "首次使用图片翻译会从 CDN 加载识别引擎与语言包" };
-        })
-        .catch(function () {
-          return { name: "OCR 引擎（CDN）", ok: false, badge: "不可达", text: "无法访问 cdn.jsdelivr.net，图片翻译不可用；字幕翻译不受影响" };
+      var chain = Promise.reject(new Error("start"));
+      var reachable = "";
+      candidates.forEach(function (url) {
+        chain = chain.catch(function () {
+          return fetch(url, { method: "HEAD" }).then(function () {
+            reachable = new URL(url).host;
+          });
         });
+      });
+      return chain.then(function () {
+        var langCdn = fetch("https://tessdata.projectnaptha.com/4.0.0/eng.traineddata.gz", { method: "HEAD" })
+          .then(function () { return true; }).catch(function () { return false; });
+        return langCdn.then(function (langOk) {
+          return {
+            name: "OCR 引擎（CDN）", ok: langOk, badge: "可达 " + (Date.now() - startedAt) + "ms",
+            text: "引擎源 " + reachable + (langOk ? " · 语言包 tessdata 官方源可用" : " · 语言包源不可达，识别会失败"),
+          };
+        });
+      }).catch(function () {
+        return { name: "OCR 引擎（CDN）", ok: false, badge: "不可达", text: "jsDelivr 主站/镜像与 unpkg 均无法访问，图片翻译不可用；字幕翻译不受影响" };
+      });
     });
     // 7. 本地存储
     checks.push(function () {

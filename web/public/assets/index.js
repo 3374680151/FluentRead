@@ -193,56 +193,25 @@
     els.dictResult.innerHTML = '<div class="callout"><span>词典由 AI 服务提供。请先到 <a href="services.html">翻译服务</a> 页配置任意 OpenAI 兼容服务（DeepSeek、智谱 GLM、OpenAI 等）。</span></div>';
   }
 
-  function parseAiJson(raw) {
-    var text = String(raw || "").trim().replace(/^```(?:json)?/i, "").replace(/```$/, "").trim();
-    var start = text.indexOf("{");
-    var end = text.lastIndexOf("}");
-    if (start >= 0 && end > start) text = text.slice(start, end + 1);
-    return JSON.parse(text);
-  }
-
   function lookupDict(word) {
     if (!word.trim()) { window.frToast("请输入要查询的词", true); return; }
     if (!window.frAiConfigured()) { renderDictGuidance(); return; }
     var context = els.src.value.trim().slice(0, 240);
     var spinner = window.frButtonBusy(els.dictGo, true);
     els.dictResult.innerHTML = '<div class="skeleton" style="height:18px;width:60%"></div>';
-    var styleNote = { "精讲（词根 + 搭配 + 例句）": "讲解包含词根词缀与常见搭配", "简明（一两句话）": "解释尽量简明", "苏格拉底式（先提问引导）": "先给出核心释义，再附一个引导思考的问题" }[prefs.aiExplainStyle] || "";
-    window.frAiChat([
-      { role: "system", content: "你是双语词典助手。对用户给出的词或短语，结合上下文输出严格的 JSON（禁止 markdown 代码块），格式：" +
-        '{"word":"原词","phonetic":"国际音标，查不到则空串","senses":[{"pos":"词性缩写如 n.","meaning":"简体中文释义"}],"examples":[{"src":"例句","dst":"例句中文译文"}]}。' +
-        "最多 4 个义项、2 个例句，释义面向中国学习者。" + (styleNote || "") + (prefs.aiPref ? "学习者偏好：" + prefs.aiPref : "") },
-      { role: "user", content: "词语：" + word + (context ? "\n上下文：" + context : "") },
-    ], { temperature: 0.2 }).then(function (result) {
+    window.frDictLookup(word, context).then(function (result) {
+      if (!result.ok && result.raw) {
+        els.dictResult.innerHTML = '<div class="callout"><span>AI 返回的不是预期的 JSON 结构：</span></div><p class="small" style="white-space:pre-wrap">' + window.frEscape(result.raw) + "</p>";
+        return;
+      }
       if (!result.ok) {
         els.dictResult.innerHTML = '<div class="callout"><span>查询失败：' + window.frEscape(result.error || "未知错误") + "</span></div>";
         return;
       }
-      var entry;
-      try { entry = parseAiJson(result.text); } catch (e) {
-        els.dictResult.innerHTML = '<div class="callout"><span>AI 返回的不是预期的 JSON 结构：</span></div><p class="small" style="white-space:pre-wrap">' + window.frEscape(result.text) + "</p>";
-        return;
-      }
-      var senses = (entry.senses || []).map(function (s) {
-        return '<li><span class="pos">' + window.frEscape(s.pos || "") + "</span><span>" + window.frEscape(s.meaning || "") + "</span></li>";
-      }).join("");
-      var examples = (entry.examples || []).map(function (ex) {
-        return '<li><span>' + window.frEscape(ex.src || "") + "</span><span class='muted'>" + window.frEscape(ex.dst || "") + "</span></li>";
-      }).join("");
-      els.dictResult.innerHTML =
-        '<div class="dict-entry">' +
-          '<span class="word">' + window.frEscape(entry.word || word) + "</span>" +
-          (entry.phonetic ? '<span class="phon">' + window.frEscape(entry.phonetic) + "</span>" : "") +
-          '<button class="icon-btn" id="dict-speak" aria-label="朗读单词">' +
-            '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M11 5 6 9H2v6h4l5 4z"/><path d="M15.5 8.5a5 5 0 0 1 0 7"/></svg>' +
-          "</button>" +
-        "</div>" +
-        (senses ? '<ul class="sense">' + senses + "</ul>" : "") +
-        (examples ? '<ul class="sense" style="margin-top:8px">' + examples + "</ul>" : "") +
-        '<p class="tiny" style="margin:10px 0 0">AI 生成 · 真实耗时 ' + result.ms + "ms · 释义仅供参考</p>";
-      var speakBtn = document.getElementById("dict-speak");
+      els.dictResult.innerHTML = window.frDictCardHtml(result.entry, result.ms);
+      var speakBtn = els.dictResult.querySelector("[data-dict-speak]");
       if (speakBtn) speakBtn.addEventListener("click", function () {
-        window.frSpeak(entry.word || word, "en-US");
+        window.frSpeak(result.entry.word || word, "en-US");
       });
     }).finally(function () {
       window.frButtonBusy(els.dictGo, false);

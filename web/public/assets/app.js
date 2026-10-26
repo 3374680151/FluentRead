@@ -27,6 +27,9 @@
     ttsVoice: "",
     historyLimit: 20,
     inlineDirect: true,
+    selectionTranslate: true,
+    fabEnabled: true,
+    fabPos: null,
     ai: null,
     customServices: [],
     aiExplainStyle: "精讲（词根 + 搭配 + 例句）",
@@ -69,6 +72,8 @@
     });
   }
   if (darkQuery && darkQuery.addEventListener) darkQuery.addEventListener("change", applyTheme);
+  // 偏好变化（含主题设置页、主题按钮、悬浮球写回）后重算并应用主题
+  document.addEventListener("frprefs", applyTheme);
   // 迁移旧版仅有的 fr-theme 键
   try {
     var legacy = localStorage.getItem("fr-theme");
@@ -332,6 +337,61 @@
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ baseURL: baseURL, apiKey: apiKey || "" }),
     }).then(function (r) { return r.json(); });
+  };
+
+  /* ==================== AI 词典（首页词典卡与划词弹窗共用） ==================== */
+  window.frParseAiJson = function (raw) {
+    var text = String(raw || "").trim().replace(/^```(?:json)?/i, "").replace(/```$/, "").trim();
+    var start = text.indexOf("{");
+    var end = text.lastIndexOf("}");
+    if (start >= 0 && end > start) text = text.slice(start, end + 1);
+    return JSON.parse(text);
+  };
+
+  /** 结合上下文查词；返回 {ok, entry?, raw?, ms?, error?}。 */
+  window.frDictLookup = function (word, context) {
+    if (!window.frAiConfigured()) {
+      return Promise.resolve({ ok: false, error: "AI 服务未配置" });
+    }
+    var p = window.frGetPrefs();
+    var styleNote = {
+      "精讲（词根 + 搭配 + 例句）": "讲解包含词根词缀与常见搭配",
+      "简明（一两句话）": "解释尽量简明",
+      "苏格拉底式（先提问引导）": "先给出核心释义，再附一个引导思考的问题",
+    }[p.aiExplainStyle] || "";
+    return window.frAiChat([
+      { role: "system", content: "你是双语词典助手。对用户给出的词或短语，结合上下文输出严格的 JSON（禁止 markdown 代码块），格式：" +
+        '{"word":"原词","phonetic":"国际音标，查不到则空串","senses":[{"pos":"词性缩写如 n.","meaning":"简体中文释义"}],"examples":[{"src":"例句","dst":"例句中文译文"}]}。' +
+        "最多 4 个义项、2 个例句，释义面向中国学习者。" + (styleNote || "") + (p.aiPref ? "学习者偏好：" + p.aiPref : "") },
+      { role: "user", content: "词语：" + word + (context ? "\n上下文：" + context : "") },
+    ], { temperature: 0.2 }).then(function (result) {
+      if (!result.ok) return { ok: false, error: result.error || "未知错误" };
+      try {
+        return { ok: true, entry: window.frParseAiJson(result.text), ms: result.ms };
+      } catch (e) {
+        return { ok: false, error: "AI 返回的不是预期的 JSON 结构", raw: result.text };
+      }
+    });
+  };
+
+  /** 词典卡 HTML（首页与划词弹窗共用；ms 为真实耗时，可为空）。 */
+  window.frDictCardHtml = function (entry, ms) {
+    var senses = (entry.senses || []).map(function (s) {
+      return '<li><span class="pos">' + window.frEscape(s.pos || "") + "</span><span>" + window.frEscape(s.meaning || "") + "</span></li>";
+    }).join("");
+    var examples = (entry.examples || []).map(function (ex) {
+      return '<li><span>' + window.frEscape(ex.src || "") + '</span><span class="muted">' + window.frEscape(ex.dst || "") + "</span></li>";
+    }).join("");
+    return '<div class="dict-entry">' +
+        '<span class="word">' + window.frEscape(entry.word || "") + "</span>" +
+        (entry.phonetic ? '<span class="phon">' + window.frEscape(entry.phonetic) + "</span>" : "") +
+        '<button class="icon-btn" data-dict-speak aria-label="朗读单词" title="朗读单词">' +
+          '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M11 5 6 9H2v6h4l5 4z"/><path d="M15.5 8.5a5 5 0 0 1 0 7"/></svg>' +
+        "</button>" +
+      "</div>" +
+      (senses ? '<ul class="sense">' + senses + "</ul>" : "") +
+      (examples ? '<ul class="sense" style="margin-top:8px">' + examples + "</ul>" : "") +
+      (ms ? '<p class="tiny" style="margin:8px 0 0">AI 生成 · 真实耗时 ' + ms + "ms · 释义仅供参考</p>" : "");
   };
 
   /* ==================== 朗读（浏览器 Web Speech API） ==================== */
