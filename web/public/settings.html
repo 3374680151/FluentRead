@@ -1,0 +1,194 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>偏好设置 · 流畅阅读 Web</title>
+<link rel="stylesheet" href="assets/app.css">
+</head>
+<body>
+<div class="app">
+
+  <aside class="sidebar">
+    <a class="brand" href="index.html">
+      <span class="brand-mark" aria-hidden="true"><svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M3 5h10"/><path d="M8 3v2c0 4-2 7-5 9"/><path d="M5.5 9c1 3 3 5 6 6"/><path d="m13 20 4-10 4 10"/><path d="M14.5 16.5h5"/></svg></span>
+      <span class="brand-name">流畅阅读<small>FLUENTREAD WEB</small></span>
+    </a>
+    <nav class="nav" aria-label="主导航">
+      <div class="nav-group">翻译</div>
+      <a class="nav-item" href="index.html"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" aria-hidden="true"><path d="M4 6h16"/><path d="M4 12h12"/><path d="M4 18h8"/></svg><span>文本·写作</span></a>
+      <a class="nav-item" href="media.html"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="9" cy="10" r="1.6"/><path d="m5 19 5.5-5.5L14 17l3-3 4 4"/></svg><span>图片·字幕</span></a>
+      <div class="nav-group">配置</div>
+      <a class="nav-item" href="services.html"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" aria-hidden="true"><rect x="3" y="4" width="18" height="7" rx="2"/><rect x="3" y="13" width="18" height="7" rx="2"/><path d="M7 7.5h.01M7 16.5h.01"/></svg><span>翻译服务</span></a>
+      <a class="nav-item" href="settings.html" aria-current="page"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" aria-hidden="true"><path d="M4 8h9M17.5 8H20M4 16h4M12.5 16H20"/><circle cx="15" cy="8" r="2.2"/><circle cx="10" cy="16" r="2.2"/></svg><span>偏好设置</span></a>
+    </nav>
+    <div class="sidebar-foot">
+      <button class="icon-btn" data-theme-btn aria-pressed="false" aria-label="切换深浅主题">
+        <svg class="i-moon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12.8A9 9 0 1 1 11.2 3 7 7 0 0 0 21 12.8z"/></svg>
+        <svg class="i-sun" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>
+      </button>
+      <div class="account">
+        <span class="avatar" aria-hidden="true">F</span>
+        <div><b>本地版</b><span>数据仅存本机浏览器</span></div>
+      </div>
+    </div>
+  </aside>
+
+  <div class="main">
+    <header class="topbar">
+      <div>
+        <h1>偏好设置</h1>
+        <div class="crumb">配置 / 偏好设置 · 修改即保存</div>
+      </div>
+      <div class="spacer"></div>
+      <span class="badge badge-ok" id="save-badge">全部已保存</span>
+    </header>
+
+    <main class="content">
+      <div class="grid" style="grid-template-columns:190px 1fr">
+        <nav class="toc card" aria-label="设置分区">
+          <div class="card-h" style="margin-bottom:8px"><h2>分区</h2></div>
+          <a href="#s-lang" class="active">语言与翻译</a>
+          <a href="#s-style">主题与朗读</a>
+          <a href="#s-ai">AI 助手</a>
+          <a href="#s-data">数据</a>
+          <a href="#s-diag">自助诊断</a>
+        </nav>
+
+        <div class="stack" style="gap:16px">
+          <!-- 语言与翻译 -->
+          <section class="card" id="s-lang" aria-labelledby="s-lang-h">
+            <div class="card-h"><h2 id="s-lang-h">语言与翻译</h2></div>
+            <div class="field">
+              <label>默认语言对（文本·写作页初始值）</label>
+              <div class="row">
+                <select class="select" id="def-src" style="width:auto" aria-label="默认源语言"></select>
+                <span aria-hidden="true">→</span>
+                <select class="select" id="def-dst" style="width:auto" aria-label="默认目标语言"></select>
+              </div>
+            </div>
+            <div class="field">
+              <label for="def-service">默认翻译服务</label>
+              <select class="select" id="def-service" style="width:320px"></select>
+              <span class="hint">免费服务与已配置的 AI 服务都会列出</span>
+            </div>
+            <label class="switch" style="justify-content:space-between;margin-bottom:14px"><span>失败自动换线（按翻译服务页的优先级顺序）</span><input type="checkbox" id="auto-fallback"><span class="track" aria-hidden="true"></span></label>
+            <label class="switch" style="justify-content:space-between;margin-bottom:14px"><span>翻译完成后自动朗读译文</span><input type="checkbox" id="auto-read"><span class="track" aria-hidden="true"></span></label>
+            <div class="field" style="margin-bottom:0">
+              <label for="history-limit">历史记录保留条数</label>
+              <input class="input" id="history-limit" type="number" min="5" max="100" step="5" value="20" style="max-width:140px">
+            </div>
+          </section>
+
+          <!-- 主题与朗读 -->
+          <section class="card" id="s-style" aria-labelledby="s-style-h">
+            <div class="card-h"><h2 id="s-style-h">主题与朗读</h2></div>
+            <div class="field">
+              <label>界面主题</label>
+              <div class="seg" id="theme-seg" role="group" aria-label="界面主题">
+                <button data-value="light" aria-pressed="false">浅色</button>
+                <button data-value="dark" aria-pressed="false">深色</button>
+                <button data-value="auto" aria-pressed="false">跟随系统</button>
+              </div>
+            </div>
+            <div class="field">
+              <label for="tts-rate">朗读语速 <b class="mono" id="tts-rate-label">1.0×</b></label>
+              <input type="range" id="tts-rate" min="0.5" max="2" step="0.1" value="1" style="accent-color:var(--primary-strong);max-width:360px">
+            </div>
+            <div class="field">
+              <label for="tts-voice">朗读音色</label>
+              <div class="row">
+                <select class="select" id="tts-voice" style="width:320px"><option value="">浏览器默认</option></select>
+                <button class="btn btn-outline btn-sm" id="tts-test"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M11 5 6 9H2v6h4l5 4z"/><path d="M15.5 8.5a5 5 0 0 1 0 7"/></svg>试听</button>
+              </div>
+              <span class="hint" id="tts-hint">音色来自浏览器/系统提供的语音，首次加载可能为空，稍后自动刷新</span>
+            </div>
+          </section>
+
+          <!-- AI 助手 -->
+          <section class="card" id="s-ai" aria-labelledby="s-ai-h">
+            <div class="card-h">
+              <h2 id="s-ai-h">AI 助手</h2>
+              <span class="badge" id="ai-state">检查中…</span>
+              <a class="btn btn-ghost btn-sm" href="services.html" style="margin-left:8px">去配置</a>
+            </div>
+            <p class="small muted" style="margin-top:0">AI 词典、AI 写作使用下面的偏好作为提示词的一部分；服务本体在<a href="services.html">翻译服务</a>页配置。</p>
+            <div class="field">
+              <label for="ai-style">词典与讲解风格</label>
+              <select class="select" id="ai-style" style="width:320px">
+                <option>精讲（词根 + 搭配 + 例句）</option>
+                <option>简明（一两句话）</option>
+                <option>苏格拉底式（先提问引导）</option>
+              </select>
+            </div>
+            <div class="field">
+              <label for="ai-tone">写作默认语气</label>
+              <select class="select" id="ai-tone" style="width:320px">
+                <option>礼貌正式</option>
+                <option>直接简洁</option>
+                <option>轻松随意</option>
+              </select>
+            </div>
+            <div class="field" style="margin-bottom:0">
+              <label for="ai-pref">学习偏好（加入 AI 提示词）</label>
+              <input class="input" id="ai-pref" placeholder="例如：考研词汇 · 侧重词根词缀记忆" style="max-width:420px">
+            </div>
+          </section>
+
+          <!-- 数据 -->
+          <section class="card" id="s-data" aria-labelledby="s-data-h">
+            <div class="card-h"><h2 id="s-data-h">数据</h2><span class="tiny">全部仅存本机浏览器 localStorage</span></div>
+            <div class="field">
+              <label>翻译历史</label>
+              <div class="row">
+                <span class="small" id="data-history-count">0 条</span>
+                <button class="btn btn-outline btn-sm" id="data-history-clear">清空历史</button>
+              </div>
+            </div>
+            <div class="field">
+              <label>备份与迁移</label>
+              <div class="row">
+                <button class="btn btn-outline btn-sm" id="data-export">导出全部数据（JSON）</button>
+                <button class="btn btn-outline btn-sm" id="data-import-btn">导入备份</button>
+                <input type="file" id="data-import" accept="application/json,.json" style="display:none" aria-label="选择备份文件">
+              </div>
+              <span class="hint">导出包含偏好、AI 配置与密钥、历史记录，请妥善保管备份文件</span>
+            </div>
+            <div class="card" style="border-color:var(--danger);margin-bottom:0">
+              <b class="small" style="color:var(--danger)">危险操作</b>
+              <div class="row" style="margin-top:10px">
+                <button class="btn btn-danger btn-sm" id="data-wipe">清除全部站点数据</button>
+                <span class="tiny">删除偏好、AI 配置（含密钥）与历史，立即生效</span>
+              </div>
+            </div>
+          </section>
+
+          <!-- 自助诊断 -->
+          <section class="card" id="s-diag" aria-labelledby="s-diag-h">
+            <div class="card-h">
+              <h2 id="s-diag-h">自助诊断</h2>
+              <button class="btn btn-outline btn-sm" style="margin-left:auto" id="diag-go">重新检测</button>
+            </div>
+            <div class="table-wrap">
+              <table class="tbl">
+                <thead><tr><th style="width:180px">检查项</th><th style="width:110px">结果</th><th>说明</th></tr></thead>
+                <tbody id="diag-rows">
+                  <tr><td colspan="3" class="tiny">点击「重新检测」开始（会发起真实请求）</td></tr>
+                </tbody>
+              </table>
+            </div>
+            <b class="small" style="display:block;margin-top:14px">免费服务连通性</b>
+            <div class="chips" id="diag-services" style="margin-top:8px">
+              <span class="tiny muted">点击「重新检测」后逐个真实测试</span>
+            </div>
+            <p class="tiny" style="margin:12px 0 0">检测只记录服务名、状态与耗时，不包含密钥与原文内容。</p>
+          </section>
+        </div>
+      </div>
+    </main>
+  </div>
+</div>
+<script src="assets/app.js"></script>
+<script src="assets/settings.js"></script>
+</body>
+</html>

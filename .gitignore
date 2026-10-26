@@ -100,3 +100,6 @@ web-ext.config.ts
 *.sw?
 .continue/
 .workbuddy-ai/
+
+# FluentRead Web 真站构建产物
+web/dist/
