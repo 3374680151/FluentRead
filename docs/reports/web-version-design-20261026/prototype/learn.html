@@ -1,0 +1,226 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>学习中心 · 流畅阅读 Web</title>
+<link rel="stylesheet" href="assets/app.css">
+</head>
+<body>
+<div class="app">
+
+  <aside class="sidebar">
+    <a class="brand" href="index.html">
+      <span class="brand-mark" aria-hidden="true"><svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M3 5h10"/><path d="M8 3v2c0 4-2 7-5 9"/><path d="M5.5 9c1 3 3 5 6 6"/><path d="m13 20 4-10 4 10"/><path d="M14.5 16.5h5"/></svg></span>
+      <span class="brand-name">流畅阅读<small>FLUENTREAD WEB</small></span>
+    </a>
+    <nav class="nav" aria-label="主导航">
+      <a class="nav-item" href="index.html"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 10.5 12 3l9 7.5"/><path d="M5 9.5V21h14V9.5"/></svg><span>工作台</span></a>
+      <div class="nav-group">翻译</div>
+      <a class="nav-item" href="text.html"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" aria-hidden="true"><path d="M4 6h16"/><path d="M4 12h12"/><path d="M4 18h8"/></svg><span>文本·写作</span></a>
+      <a class="nav-item" href="document.html"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 3H7a1 1 0 0 0-1 1v16a1 1 0 0 0 1 1h10a1 1 0 0 0 1-1V8z"/><path d="M14 3v5h5"/><path d="M9 13h6M9 17h6"/></svg><span>文档翻译</span></a>
+      <a class="nav-item" href="webpage.html"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M3 12h18"/><path d="M12 3c2.8 2.6 4 5.6 4 9s-1.2 6.4-4 9c-2.8-2.6-4-5.6-4-9s1.2-6.4 4-9z"/></svg><span>网页翻译</span></a>
+      <a class="nav-item" href="media.html"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="9" cy="10" r="1.6"/><path d="m5 19 5.5-5.5L14 17l3-3 4 4"/></svg><span>图片·字幕</span></a>
+      <div class="nav-group">学习</div>
+      <a class="nav-item" href="learn.html" aria-current="page"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 6c-1.8-1.6-4.4-2-8-2v14c3.6 0 6.2.4 8 2 1.8-1.6 4.4-2 8-2V4c-3.6 0-6.2.4-8 2z"/><path d="M12 6v14"/></svg><span>学习中心</span></a>
+      <div class="nav-group">词库</div>
+      <a class="nav-item" href="library.html"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 3h10a1 1 0 0 1 1 1v17l-6-4-6 4V4a1 1 0 0 1 1-1z"/></svg><span>术语库·校订</span></a>
+      <div class="nav-group">数据</div>
+      <a class="nav-item" href="stats.html"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" aria-hidden="true"><path d="M4 20v-6M10 20V6M16 20v-9M2 20h20"/></svg><span>统计·用量</span></a>
+      <div class="nav-group">配置</div>
+      <a class="nav-item" href="services.html"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" aria-hidden="true"><rect x="3" y="4" width="18" height="7" rx="2"/><rect x="3" y="13" width="18" height="7" rx="2"/><path d="M7 7.5h.01M7 16.5h.01"/></svg><span>翻译服务</span></a>
+      <a class="nav-item" href="settings.html"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" aria-hidden="true"><path d="M4 8h9M17.5 8H20M4 16h4M12.5 16H20"/><circle cx="15" cy="8" r="2.2"/><circle cx="10" cy="16" r="2.2"/></svg><span>偏好设置</span></a>
+    </nav>
+    <div class="sidebar-foot">
+      <button class="icon-btn" data-theme-btn aria-pressed="false" aria-label="切换深浅主题">
+        <svg class="i-moon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12.8A9 9 0 1 1 11.2 3 7 7 0 0 0 21 12.8z"/></svg>
+        <svg class="i-sun" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>
+      </button>
+      <div class="account">
+        <span class="avatar" aria-hidden="true">王</span>
+        <div><b>王同学</b><span>免费版 · 已同步</span></div>
+      </div>
+    </div>
+  </aside>
+
+  <div class="main">
+    <header class="topbar">
+      <div>
+        <h1>学习中心</h1>
+        <div class="crumb">学习 / 学习中心</div>
+      </div>
+      <div class="spacer"></div>
+      <a class="btn btn-outline" href="settings.html">学习偏好</a>
+    </header>
+
+    <main class="content">
+      <div class="grid grid-4" style="margin-bottom:20px">
+        <div class="card" style="padding:14px 18px"><span class="tiny">待复习</span><div style="font-size:26px;font-weight:800" class="mono">23</div></div>
+        <div class="card" style="padding:14px 18px"><span class="tiny">今日新学</span><div style="font-size:26px;font-weight:800" class="mono">12</div></div>
+        <div class="card" style="padding:14px 18px"><span class="tiny">连续复习</span><div style="font-size:26px;font-weight:800" class="mono">5 天</div></div>
+        <div class="card" style="padding:14px 18px"><span class="tiny">收藏总数</span><div style="font-size:26px;font-weight:800" class="mono">386</div></div>
+      </div>
+
+      <div class="tabs" role="tablist" data-tabs="l" aria-label="学习中心分区">
+        <button class="tab" role="tab" aria-selected="true" data-panel="p-vocab">单词本</button>
+        <button class="tab" role="tab" aria-selected="false" data-panel="p-review" tabindex="-1">复习</button>
+        <button class="tab" role="tab" aria-selected="false" data-panel="p-mat" tabindex="-1">学习材料</button>
+        <button class="tab" role="tab" aria-selected="false" data-panel="p-hist" tabindex="-1">阅读记录</button>
+      </div>
+
+      <!-- 单词本 -->
+      <section data-tab-panel="l" id="p-vocab" role="tabpanel" aria-label="单词本">
+        <div class="row" style="margin-bottom:14px">
+          <div class="chips" role="group" aria-label="筛选类型">
+            <button class="chip" aria-pressed="true">全部</button>
+            <button class="chip" aria-pressed="false">单词</button>
+            <button class="chip" aria-pressed="false">表达</button>
+            <button class="chip" aria-pressed="false">句子</button>
+          </div>
+          <select class="select" style="width:auto" aria-label="来源筛选"><option>全部来源</option><option>网页</option><option>文档</option><option>字幕</option></select>
+          <span style="flex:1"></span>
+          <button class="btn btn-outline btn-sm">导入</button>
+          <button class="btn btn-outline btn-sm">导出</button>
+        </div>
+        <div class="card">
+          <div class="table-wrap">
+            <table class="tbl">
+              <thead><tr><th>词条</th><th>释义</th><th>出处</th><th style="width:140px">掌握度</th><th></th></tr></thead>
+              <tbody>
+                <tr>
+                  <td><b>delve</b><div class="tiny mono">/delv/</div></td>
+                  <td class="small">v. 深入探究，钻研</td>
+                  <td class="small muted">Attention.pdf · 第 2 页</td>
+                  <td><div class="progress"><i style="width:70%"></i></div><span class="tiny">70%</span></td>
+                  <td class="row" style="gap:2px">
+                    <button class="icon-btn" aria-label="朗读 delve"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M11 5 6 9H2v6h4l5 4z"/><path d="M15.5 8.5a5 5 0 0 1 0 7"/></svg></button>
+                    <button class="icon-btn" aria-label="删除 delve"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 7h16"/><path d="M9 7V4h6v3"/><path d="M6 7l1 13h10l1-13"/></svg></button>
+                  </td>
+                </tr>
+                <tr>
+                  <td><b>hallucination</b><div class="tiny mono">/həˌluːsɪˈneɪʃn/</div></td>
+                  <td class="small">n. 幻觉；（模型）胡编</td>
+                  <td class="small muted">LLM Agents · 网页</td>
+                  <td><div class="progress"><i style="width:40%"></i></div><span class="tiny">40%</span></td>
+                  <td class="row" style="gap:2px">
+                    <button class="icon-btn" aria-label="朗读 hallucination"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M11 5 6 9H2v6h4l5 4z"/><path d="M15.5 8.5a5 5 0 0 1 0 7"/></svg></button>
+                    <button class="icon-btn" aria-label="删除 hallucination"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 7h16"/><path d="M9 7V4h6v3"/><path d="M6 7l1 13h10l1-13"/></svg></button>
+                  </td>
+                </tr>
+                <tr>
+                  <td><b>get out of your way</b></td>
+                  <td class="small">表达 · 不妨碍你，不挡路</td>
+                  <td class="small muted">podcast-ep42.srt · 01:15</td>
+                  <td><div class="progress"><i style="width:20%"></i></div><span class="tiny">20%</span></td>
+                  <td class="row" style="gap:2px">
+                    <button class="icon-btn" aria-label="朗读 get out of your way"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M11 5 6 9H2v6h4l5 4z"/><path d="M15.5 8.5a5 5 0 0 1 0 7"/></svg></button>
+                    <button class="icon-btn" aria-label="删除 get out of your way"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 7h16"/><path d="M9 7V4h6v3"/><path d="M6 7l1 13h10l1-13"/></svg></button>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <p class="tiny" style="margin:10px 0 0">阅读时开启"再次遇见"，收藏的表达会在新文章里高亮并显示之前的原句。</p>
+        </div>
+      </section>
+
+      <!-- 复习 -->
+      <section data-tab-panel="l" id="p-review" role="tabpanel" aria-label="复习" hidden>
+        <div class="row" style="margin-bottom:16px">
+          <span class="small muted">今日队列</span>
+          <b class="mono">3 / 23</b>
+          <div class="progress" style="flex:1;max-width:260px"><i style="width:13%"></i></div>
+        </div>
+        <div class="flash" role="button" tabindex="0" aria-label="复习卡片，点击翻面">
+          <div class="inner">
+            <div class="face">
+              <div>
+                <div style="font-size:34px;font-weight:800">delve</div>
+                <div class="tiny mono" style="margin-top:6px">/delv/ · v.</div>
+                <p class="tiny" style="margin-top:14px">点击卡片翻面</p>
+              </div>
+            </div>
+            <div class="face back">
+              <div>
+                <div style="font-size:22px;font-weight:800">深入探究，钻研</div>
+                <p class="small muted" style="margin-top:12px">"We need to <b>delve into</b> the root cause of the hallucination."</p>
+                <p class="tiny" style="margin-top:6px">我们需要深入研究幻觉的根因。— 收藏自 Attention.pdf</p>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="row" style="margin-top:18px;justify-content:center">
+          <button class="btn btn-outline" style="border-color:var(--danger);color:var(--danger)">忘记</button>
+          <button class="btn btn-outline">模糊</button>
+          <button class="btn btn-primary">认识</button>
+        </div>
+      </section>
+
+      <!-- 学习材料 -->
+      <section data-tab-panel="l" id="p-mat" role="tabpanel" aria-label="学习材料" hidden>
+        <div class="grid grid-3">
+          <div class="card">
+            <div style="height:110px;border-radius:8px;background:linear-gradient(135deg,var(--primary-soft),var(--surface-2));display:grid;place-items:center;margin-bottom:12px" aria-hidden="true">
+              <svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="var(--primary-strong)" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3H7a1 1 0 0 0-1 1v16a1 1 0 0 0 1 1h10a1 1 0 0 0 1-1V8z"/><path d="M14 3v5h5"/></svg>
+            </div>
+            <div class="card-h" style="margin-bottom:6px"><h3>Attention Is All You Need</h3><span class="badge">文档</span></div>
+            <div class="progress" style="margin:4px 0 8px"><i style="width:65%"></i></div>
+            <div class="row" style="justify-content:space-between"><span class="tiny">读到 3.1 节 · 65%</span><a class="btn btn-soft btn-sm" href="document.html">继续</a></div>
+          </div>
+          <div class="card">
+            <div style="height:110px;border-radius:8px;background:linear-gradient(135deg,var(--accent-soft),var(--surface-2));display:grid;place-items:center;margin-bottom:12px" aria-hidden="true">
+              <svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="1.5" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M3 12h18"/><path d="M12 3c2.8 2.6 4 5.6 4 9s-1.2 6.4-4 9c-2.8-2.6-4-5.6-4-9s1.2-6.4 4-9z"/></svg>
+            </div>
+            <div class="card-h" style="margin-bottom:6px"><h3>LLM Powered Autonomous Agents</h3><span class="badge">网页</span></div>
+            <div class="progress" style="margin:4px 0 8px"><i style="width:100%"></i></div>
+            <div class="row" style="justify-content:space-between"><span class="tiny">已读完 · 收藏 6 段</span><a class="btn btn-ghost btn-sm" href="webpage.html">重读</a></div>
+          </div>
+          <div class="card">
+            <div style="height:110px;border-radius:8px;background:linear-gradient(135deg,var(--ok-soft),var(--surface-2));display:grid;place-items:center;margin-bottom:12px" aria-hidden="true">
+              <svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="var(--ok)" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m8 5 11 7-11 7z"/></svg>
+            </div>
+            <div class="card-h" style="margin-bottom:6px"><h3>Podcast EP42 · Transcript</h3><span class="badge">字幕</span></div>
+            <div class="progress" style="margin:4px 0 8px"><i style="width:34%"></i></div>
+            <div class="row" style="justify-content:space-between"><span class="tiny">听到 12:05 · 收藏 2 句</span><a class="btn btn-ghost btn-sm" href="media.html">继续</a></div>
+          </div>
+        </div>
+        <p class="tiny" style="margin-top:14px">材料身份与阅读位置（文档段落 / 网页锚点 / 视频时间点）自动保存，跨设备同步。</p>
+      </section>
+
+      <!-- 阅读记录 -->
+      <section data-tab-panel="l" id="p-hist" role="tabpanel" aria-label="阅读记录" hidden>
+        <div class="card">
+          <div class="table-wrap">
+            <table class="tbl">
+              <thead><tr><th>时间</th><th>选中文本</th><th>讲解摘要</th><th></th></tr></thead>
+              <tbody>
+                <tr>
+                  <td class="small muted">今天 14:20</td>
+                  <td class="mono small">"dispensing with recurrence"</td>
+                  <td class="small">dispense with = 摒弃、省去；此处指不再用循环结构</td>
+                  <td class="row" style="gap:2px"><button class="btn btn-ghost btn-sm">查看</button><button class="btn btn-ghost btn-sm">删除</button></td>
+                </tr>
+                <tr>
+                  <td class="small muted">昨天 09:11</td>
+                  <td class="mono small">"streaming translation"</td>
+                  <td class="small">流式翻译：边到边译，与批量翻译相对</td>
+                  <td class="row" style="gap:2px"><button class="btn btn-ghost btn-sm">查看</button><button class="btn btn-ghost btn-sm">删除</button></td>
+                </tr>
+                <tr>
+                  <td class="small muted">3 天前</td>
+                  <td class="mono small">"get out of your way"</td>
+                  <td class="small">习语：不碍事、不挡路（产品哲学常用）</td>
+                  <td class="row" style="gap:2px"><button class="btn btn-ghost btn-sm">查看</button><button class="btn btn-ghost btn-sm">删除</button></td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <p class="tiny" style="margin:10px 0 0">AI 讲解历史在本机保存 30 天，可随时恢复会话或清空。</p>
+        </div>
+      </section>
+    </main>
+  </div>
+</div>
+<script src="assets/app.js"></script>
+</body>
+</html>

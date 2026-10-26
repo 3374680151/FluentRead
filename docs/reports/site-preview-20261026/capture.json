@@ -1,0 +1,66 @@
+[
+  {
+    "name": "01-home-zh",
+    "url": "https://read.thinkstu.com/",
+    "w": 1440,
+    "h": 5895,
+    "file": "/Users/wang/worker/english/FluentRead/docs/reports/site-preview-20261026/01-home-zh.png",
+    "title": "流畅阅读"
+  },
+  {
+    "name": "02-docs-index",
+    "url": "https://read.thinkstu.com/docs/",
+    "w": 1440,
+    "h": 2086,
+    "file": "/Users/wang/worker/english/FluentRead/docs/reports/site-preview-20261026/02-docs-index.png",
+    "title": "使用文档 | 流畅阅读"
+  },
+  {
+    "name": "03-features",
+    "url": "https://read.thinkstu.com/guide/features",
+    "w": 1440,
+    "h": 3995,
+    "file": "/Users/wang/worker/english/FluentRead/docs/reports/site-preview-20261026/03-features.png",
+    "title": "功能概览 | 流畅阅读"
+  },
+  {
+    "name": "04-getting-started",
+    "url": "https://read.thinkstu.com/guide/getting-started",
+    "w": 1440,
+    "h": 3135,
+    "file": "/Users/wang/worker/english/FluentRead/docs/reports/site-preview-20261026/04-getting-started.png",
+    "title": "快速开始 | 流畅阅读"
+  },
+  {
+    "name": "05-home-en",
+    "url": "https://read.thinkstu.com/en/",
+    "w": 1440,
+    "h": 5920,
+    "file": "/Users/wang/worker/english/FluentRead/docs/reports/site-preview-20261026/05-home-en.png",
+    "title": "FluentRead"
+  },
+  {
+    "name": "06-home-mobile",
+    "url": "https://read.thinkstu.com/",
+    "w": 390,
+    "h": 6596,
+    "file": "/Users/wang/worker/english/FluentRead/docs/reports/site-preview-20261026/06-home-mobile.png",
+    "title": "流畅阅读"
+  },
+  {
+    "name": "07-webpage-translation",
+    "url": "https://read.thinkstu.com/guide/webpage-translation",
+    "w": 1440,
+    "h": 3549,
+    "file": "/Users/wang/worker/english/FluentRead/docs/reports/site-preview-20261026/07-webpage-translation.png",
+    "title": "网页翻译 | 流畅阅读"
+  },
+  {
+    "name": "08-design-system",
+    "url": "https://read.thinkstu.com/guide/design-system",
+    "w": 1440,
+    "h": 1479,
+    "file": "/Users/wang/worker/english/FluentRead/docs/reports/site-preview-20261026/08-design-system.png",
+    "title": "设计系统与组件预览 | 流畅阅读"
+  }
+]

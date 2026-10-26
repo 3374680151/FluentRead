@@ -1,0 +1,267 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>偏好设置 · 流畅阅读 Web</title>
+<link rel="stylesheet" href="assets/app.css">
+</head>
+<body>
+<div class="app">
+
+  <aside class="sidebar">
+    <a class="brand" href="index.html">
+      <span class="brand-mark" aria-hidden="true"><svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M3 5h10"/><path d="M8 3v2c0 4-2 7-5 9"/><path d="M5.5 9c1 3 3 5 6 6"/><path d="m13 20 4-10 4 10"/><path d="M14.5 16.5h5"/></svg></span>
+      <span class="brand-name">流畅阅读<small>FLUENTREAD WEB</small></span>
+    </a>
+    <nav class="nav" aria-label="主导航">
+      <a class="nav-item" href="index.html"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 10.5 12 3l9 7.5"/><path d="M5 9.5V21h14V9.5"/></svg><span>工作台</span></a>
+      <div class="nav-group">翻译</div>
+      <a class="nav-item" href="text.html"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" aria-hidden="true"><path d="M4 6h16"/><path d="M4 12h12"/><path d="M4 18h8"/></svg><span>文本·写作</span></a>
+      <a class="nav-item" href="document.html"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 3H7a1 1 0 0 0-1 1v16a1 1 0 0 0 1 1h10a1 1 0 0 0 1-1V8z"/><path d="M14 3v5h5"/><path d="M9 13h6M9 17h6"/></svg><span>文档翻译</span></a>
+      <a class="nav-item" href="webpage.html"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M3 12h18"/><path d="M12 3c2.8 2.6 4 5.6 4 9s-1.2 6.4-4 9c-2.8-2.6-4-5.6-4-9s1.2-6.4 4-9z"/></svg><span>网页翻译</span></a>
+      <a class="nav-item" href="media.html"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="9" cy="10" r="1.6"/><path d="m5 19 5.5-5.5L14 17l3-3 4 4"/></svg><span>图片·字幕</span></a>
+      <div class="nav-group">学习</div>
+      <a class="nav-item" href="learn.html"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 6c-1.8-1.6-4.4-2-8-2v14c3.6 0 6.2.4 8 2 1.8-1.6 4.4-2 8-2V4c-3.6 0-6.2.4-8 2z"/><path d="M12 6v14"/></svg><span>学习中心</span></a>
+      <div class="nav-group">词库</div>
+      <a class="nav-item" href="library.html"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 3h10a1 1 0 0 1 1 1v17l-6-4-6 4V4a1 1 0 0 1 1-1z"/></svg><span>术语库·校订</span></a>
+      <div class="nav-group">数据</div>
+      <a class="nav-item" href="stats.html"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" aria-hidden="true"><path d="M4 20v-6M10 20V6M16 20v-9M2 20h20"/></svg><span>统计·用量</span></a>
+      <div class="nav-group">配置</div>
+      <a class="nav-item" href="services.html"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" aria-hidden="true"><rect x="3" y="4" width="18" height="7" rx="2"/><rect x="3" y="13" width="18" height="7" rx="2"/><path d="M7 7.5h.01M7 16.5h.01"/></svg><span>翻译服务</span></a>
+      <a class="nav-item" href="settings.html" aria-current="page"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" aria-hidden="true"><path d="M4 8h9M17.5 8H20M4 16h4M12.5 16H20"/><circle cx="15" cy="8" r="2.2"/><circle cx="10" cy="16" r="2.2"/></svg><span>偏好设置</span></a>
+    </nav>
+    <div class="sidebar-foot">
+      <button class="icon-btn" data-theme-btn aria-pressed="false" aria-label="切换深浅主题">
+        <svg class="i-moon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12.8A9 9 0 1 1 11.2 3 7 7 0 0 0 21 12.8z"/></svg>
+        <svg class="i-sun" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>
+      </button>
+      <div class="account">
+        <span class="avatar" aria-hidden="true">王</span>
+        <div><b>王同学</b><span>免费版 · 已同步</span></div>
+      </div>
+    </div>
+  </aside>
+
+  <div class="main">
+    <header class="topbar">
+      <div>
+        <h1>偏好设置</h1>
+        <div class="crumb">配置 / 偏好设置</div>
+      </div>
+      <div class="spacer"></div>
+      <span class="badge badge-ok">全部已保存</span>
+    </header>
+
+    <main class="content">
+      <div class="grid" style="grid-template-columns:190px 1fr">
+        <nav class="toc card" aria-label="设置分区">
+          <div class="card-h" style="margin-bottom:8px"><h2>分区</h2></div>
+          <a href="#s-lang" class="active">语言与翻译</a>
+          <a href="#s-style">显示风格</a>
+          <a href="#s-tts">朗读</a>
+          <a href="#s-hotkey">快捷键</a>
+          <a href="#s-ai">AI 助手</a>
+          <a href="#s-privacy">隐私与数据</a>
+          <a href="#s-account">账号与同步</a>
+        </nav>
+
+        <div class="stack" style="gap:16px">
+          <!-- 语言与翻译 -->
+          <section class="card" id="s-lang" aria-labelledby="s-lang-h">
+            <div class="card-h"><h2 id="s-lang-h">语言与翻译</h2></div>
+            <div class="field">
+              <label>默认语言对</label>
+              <div class="row">
+                <select class="select" style="width:auto" aria-label="默认源语言"><option>自动检测</option><option>English</option></select>
+                <span aria-hidden="true">→</span>
+                <select class="select" style="width:auto" aria-label="默认目标语言"><option>简体中文</option><option>English</option></select>
+              </div>
+            </div>
+            <div class="field">
+              <label>排除语言（检测到则不翻译）</label>
+              <div class="chips">
+                <button class="chip" aria-pressed="true">中文</button>
+                <button class="chip" aria-pressed="false">日语</button>
+                <button class="chip" aria-pressed="false">法语</button>
+              </div>
+            </div>
+            <div class="field">
+              <label for="gran">翻译粒度</label>
+              <select class="select" id="gran" style="width:260px"><option>按段落（推荐，省 Token）</option><option>按句子（逐句对照更细）</option></select>
+            </div>
+            <div class="field">
+              <label>站点名单</label>
+              <div class="grid grid-2">
+                <div class="card" style="padding:12px">
+                  <b class="small">始终翻译</b>
+                  <div class="stack" style="gap:6px;margin-top:8px">
+                    <span class="chip" aria-pressed="true">arxiv.org ×</span>
+                    <span class="chip" aria-pressed="true">github.com ×</span>
+                  </div>
+                  <div class="row" style="margin-top:8px"><input class="input" placeholder="添加域名…" aria-label="添加始终翻译域名"><button class="btn btn-ghost btn-sm">添加</button></div>
+                </div>
+                <div class="card" style="padding:12px">
+                  <b class="small">从不翻译</b>
+                  <div class="stack" style="gap:6px;margin-top:8px">
+                    <span class="chip" aria-pressed="true">mail.example.com ×</span>
+                  </div>
+                  <div class="row" style="margin-top:8px"><input class="input" placeholder="添加域名…" aria-label="添加从不翻译域名"><button class="btn btn-ghost btn-sm">添加</button></div>
+                </div>
+              </div>
+            </div>
+          </section>
+
+          <!-- 显示风格 -->
+          <section class="card" id="s-style" aria-labelledby="s-style-h">
+            <div class="card-h"><h2 id="s-style-h">显示风格</h2></div>
+            <div class="field">
+              <label>译文样式（点选即时预览）</label>
+              <div class="chips">
+                <button class="chip" aria-pressed="true">下划线</button>
+                <button class="chip" aria-pressed="false">变色</button>
+                <button class="chip" aria-pressed="false">底色</button>
+                <button class="chip" aria-pressed="false">无边饰</button>
+              </div>
+              <div class="card" style="margin-top:10px;padding:14px;background:var(--surface-2)">
+                <p class="small muted" style="margin-bottom:2px">The dominant sequence transduction models are based on recurrent networks.</p>
+                <p class="small" style="margin:0"><span class="dst-underline">主流的序列转换模型基于循环神经网络。</span></p>
+              </div>
+            </div>
+            <div class="field">
+              <label for="layout">双语排列</label>
+              <select class="select" id="layout" style="width:260px"><option>上下对照（默认）</option><option>仅译文，悬停看原文</option><option>左右分栏</option></select>
+            </div>
+            <div class="field">
+              <label>主题</label>
+              <div class="seg" role="group" aria-label="界面主题">
+                <button aria-pressed="false">浅色</button>
+                <button aria-pressed="false">深色</button>
+                <button aria-pressed="true">跟随系统</button>
+              </div>
+            </div>
+            <div class="field" style="margin-bottom:0">
+              <label for="uilang">界面语言</label>
+              <select class="select" id="uilang" style="width:260px"><option>简体中文</option><option>English</option><option>日本語</option></select>
+            </div>
+          </section>
+
+          <!-- 朗读 -->
+          <section class="card" id="s-tts" aria-labelledby="s-tts-h">
+            <div class="card-h"><h2 id="s-tts-h">朗读</h2></div>
+            <div class="field">
+              <label for="tts-engine">引擎</label>
+              <select class="select" id="tts-engine" style="width:300px"><option>Edge 在线语音（推荐 · 多音色）</option><option>本地 Kokoro（离线 · 56 MB）</option><option>系统语音</option></select>
+            </div>
+            <div class="field">
+              <label for="tts-voice">音色</label>
+              <div class="row">
+                <select class="select" id="tts-voice" style="width:260px"><option>zh-CN-XiaoxiaoNeural（女·温暖）</option><option>zh-CN-YunjianNeural（男·沉稳）</option></select>
+                <button class="btn btn-outline btn-sm"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M11 5 6 9H2v6h4l5 4z"/><path d="M15.5 8.5a5 5 0 0 1 0 7"/></svg>试听</button>
+              </div>
+            </div>
+            <div class="field">
+              <label for="tts-rate">语速 <b class="mono">1.0×</b></label>
+              <input type="range" id="tts-rate" min="0.5" max="2" step="0.1" value="1" style="accent-color:var(--primary-strong);max-width:360px">
+            </div>
+            <label class="switch" style="justify-content:space-between"><span>划词后自动朗读</span><input type="checkbox"><span class="track" aria-hidden="true"></span></label>
+          </section>
+
+          <!-- 快捷键 -->
+          <section class="card" id="s-hotkey" aria-labelledby="s-hotkey-h">
+            <div class="card-h"><h2 id="s-hotkey-h">快捷键</h2><span class="tiny">站点内生效，录入时按键即可</span></div>
+            <div class="table-wrap">
+              <table class="tbl">
+                <thead><tr><th>动作</th><th>键位</th><th></th></tr></thead>
+                <tbody>
+                  <tr><td class="small">翻译当前输入 / 选区</td><td><span class="kbd">Ctrl</span> + <span class="kbd">Enter</span></td><td><button class="btn btn-ghost btn-sm">重录</button></td></tr>
+                  <tr><td class="small">交换源语言与目标语言</td><td><span class="kbd">Ctrl</span> + <span class="kbd">Shift</span> + <span class="kbd">S</span></td><td><button class="btn btn-ghost btn-sm">重录</button></td></tr>
+                  <tr><td class="small">朗读 / 停止</td><td><span class="kbd">Alt</span> + <span class="kbd">R</span></td><td><button class="btn btn-ghost btn-sm">重录</button></td></tr>
+                  <tr><td class="small">收藏当前词条</td><td><span class="kbd">Alt</span> + <span class="kbd">D</span></td><td><button class="btn btn-ghost btn-sm">重录</button></td></tr>
+                </tbody>
+              </table>
+            </div>
+            <p class="tiny" style="margin:10px 0 0">与浏览器/输入法冲突的键位会标红提示。</p>
+          </section>
+
+          <!-- AI 助手 -->
+          <section class="card" id="s-ai" aria-labelledby="s-ai-h">
+            <div class="card-h"><h2 id="s-ai-h">AI 助手</h2></div>
+            <div class="field">
+              <label for="ai-style">讲解风格</label>
+              <select class="select" id="ai-style" style="width:300px"><option>精讲（词根 + 搭配 + 例句）</option><option>简明（一两句话）</option><option>苏格拉底式（先提问引导）</option></select>
+            </div>
+            <div class="field">
+              <label for="ai-write">写作默认语气</label>
+              <select class="select" id="ai-write" style="width:300px"><option>礼貌正式</option><option>直接简洁</option><option>轻松随意</option></select>
+            </div>
+            <div class="field">
+              <label for="ai-pref">学习偏好（AI 讲解会参考）</label>
+              <input class="input" id="ai-pref" value="考研词汇 · 侧重词根词缀记忆" style="max-width:420px">
+            </div>
+            <label class="switch" style="justify-content:space-between;margin-bottom:12px"><span>阅读时"再次遇见"已收藏表达</span><input type="checkbox" checked><span class="track" aria-hidden="true"></span></label>
+            <div class="field" style="margin-bottom:0">
+              <label for="ai-quota">每日 AI 用量提醒</label>
+              <input class="input" id="ai-quota" type="number" value="200000" style="max-width:180px">
+              <span class="hint">超过该 Token 数时提醒，不硬性拦截</span>
+            </div>
+          </section>
+
+          <!-- 隐私与数据 -->
+          <section class="card" id="s-privacy" aria-labelledby="s-pri-h">
+            <div class="card-h"><h2 id="s-pri-h">隐私与数据</h2></div>
+            <div class="field">
+              <label>翻译缓存</label>
+              <div class="row">
+                <div class="progress" style="flex:1;max-width:300px"><i style="width:81%"></i></div>
+                <span class="tiny mono">8.1 MiB / 10 MiB · 12,400 条</span>
+              </div>
+              <div class="row">
+                <button class="btn btn-outline btn-sm">清理过期（24h 前）</button>
+                <button class="btn btn-outline btn-sm">清空全部缓存</button>
+              </div>
+            </div>
+            <div class="field">
+              <label>本地数据</label>
+              <div class="row">
+                <button class="btn btn-outline btn-sm">导出全部数据（JSON）</button>
+                <button class="btn btn-outline btn-sm">清除阅读记录</button>
+              </div>
+            </div>
+            <label class="switch" style="justify-content:space-between"><span>匿名使用统计（帮助改进产品）</span><input type="checkbox" checked><span class="track" aria-hidden="true"></span></label>
+          </section>
+
+          <!-- 账号与同步 -->
+          <section class="card" id="s-account" aria-labelledby="s-acc-h">
+            <div class="card-h"><h2 id="s-acc-h">账号与同步</h2></div>
+            <div class="row" style="margin-bottom:16px">
+              <span class="avatar" aria-hidden="true">王</span>
+              <div><b class="small">王同学</b><div class="tiny">wang@example.com · 免费版</div></div>
+              <button class="btn btn-ghost btn-sm" style="margin-left:12px">升级专业版</button>
+            </div>
+            <label class="switch" style="justify-content:space-between;margin-bottom:14px"><span>多设备同步（词书 / 术语库 / 偏好）</span><input type="checkbox" checked><span class="track" aria-hidden="true"></span></label>
+            <div class="field">
+              <label>云备份</label>
+              <div class="row">
+                <select class="select" style="width:auto"><option>WebDAV</option><option>云盘（OAuth）</option></select>
+                <input class="input" placeholder="https://dav.example.com/backup" style="flex:1;max-width:300px" aria-label="WebDAV 地址">
+                <button class="btn btn-outline btn-sm">立即备份</button>
+              </div>
+              <span class="hint">上次备份：今天 08:00 · 成功</span>
+            </div>
+            <div class="card" style="border-color:var(--danger);margin-top:4px">
+              <b class="small" style="color:var(--danger)">危险操作</b>
+              <div class="row" style="margin-top:10px">
+                <button class="btn btn-outline btn-sm">登出</button>
+                <button class="btn btn-danger btn-sm">删除账号与全部数据</button>
+              </div>
+            </div>
+          </section>
+        </div>
+      </div>
+    </main>
+  </div>
+</div>
+<script src="assets/app.js"></script>
+</body>
+</html>
