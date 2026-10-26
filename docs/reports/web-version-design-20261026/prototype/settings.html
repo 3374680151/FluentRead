@@ -61,9 +61,11 @@
           <a href="#s-style">显示风格</a>
           <a href="#s-tts">朗读</a>
           <a href="#s-hotkey">快捷键</a>
+          <a href="#s-scheme">快捷翻译方案</a>
           <a href="#s-ai">AI 助手</a>
           <a href="#s-privacy">隐私与数据</a>
           <a href="#s-account">账号与同步</a>
+          <a href="#s-diag">自助诊断</a>
         </nav>
 
         <div class="stack" style="gap:16px">
@@ -184,6 +186,59 @@
             <p class="tiny" style="margin:10px 0 0">与浏览器/输入法冲突的键位会标红提示。</p>
           </section>
 
+          <!-- 快捷翻译方案 -->
+          <section class="card" id="s-scheme" aria-labelledby="s-scheme-h">
+            <div class="card-h">
+              <h2 id="s-scheme-h">快捷翻译方案</h2>
+              <button class="btn btn-outline btn-sm" style="margin-left:auto">新建方案</button>
+            </div>
+            <p class="small muted" style="margin:-4px 0 12px">为悬浮 / 全文 / 局部三种触发方式配置多套独立方案，每套方案可单独指定键位、服务、模型、语言与展示策略；同一触发方式下用第二键位轮换。</p>
+            <div class="table-wrap">
+              <table class="tbl">
+                <thead><tr><th>触发方式</th><th>方案</th><th>键位</th><th>服务 / 模型</th><th>语言</th><th>展示策略</th><th></th></tr></thead>
+                <tbody>
+                  <tr>
+                    <td class="small">悬浮翻译</td>
+                    <td class="small"><b>默认方案</b> <span class="badge badge-primary">启用</span></td>
+                    <td><span class="kbd">Alt</span> 长按 + 划过</td>
+                    <td class="small">免费翻译服务</td>
+                    <td class="small">自动 → 中</td>
+                    <td class="small">悬浮跟随</td>
+                    <td><button class="btn btn-ghost btn-sm">编辑</button></td>
+                  </tr>
+                  <tr>
+                    <td class="small"></td>
+                    <td class="small">精读方案</td>
+                    <td><span class="kbd">Alt</span> + <span class="kbd">Q</span></td>
+                    <td class="small">DeepSeek · deepseek-chat</td>
+                    <td class="small">自动 → 中</td>
+                    <td class="small">悬浮 + AI 讲解</td>
+                    <td><button class="btn btn-ghost btn-sm">编辑</button></td>
+                  </tr>
+                  <tr>
+                    <td class="small">全文翻译</td>
+                    <td class="small"><b>沉浸方案</b> <span class="badge badge-primary">启用</span></td>
+                    <td><span class="kbd">Ctrl</span> + <span class="kbd">Alt</span> + <span class="kbd">F</span></td>
+                    <td class="small">智谱 GLM · glm-4.6</td>
+                    <td class="small">自动 → 中</td>
+                    <td class="small">双语对照</td>
+                    <td><button class="btn btn-ghost btn-sm">编辑</button></td>
+                  </tr>
+                  <tr>
+                    <td class="small">局部翻译</td>
+                    <td class="small"><b>点选方案</b> <span class="badge badge-primary">启用</span></td>
+                    <td><span class="kbd">Ctrl</span> + <span class="kbd">Alt</span> + <span class="kbd">L</span></td>
+                    <td class="small">免费翻译服务</td>
+                    <td class="small">自动 → 中</td>
+                    <td class="small">替换原文（可撤销）</td>
+                    <td><button class="btn btn-ghost btn-sm">编辑</button></td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+            <p class="tiny" style="margin:10px 0 0">方案配置跟随账号同步；键位冲突标红提示，与上方全局快捷键共用冲突检测。</p>
+          </section>
+
           <!-- AI 助手 -->
           <section class="card" id="s-ai" aria-labelledby="s-ai-h">
             <div class="card-h"><h2 id="s-ai-h">AI 助手</h2></div>
@@ -255,6 +310,45 @@
                 <button class="btn btn-outline btn-sm">登出</button>
                 <button class="btn btn-danger btn-sm">删除账号与全部数据</button>
               </div>
+            </div>
+          </section>
+
+          <!-- 自助诊断 -->
+          <section class="card" id="s-diag" aria-labelledby="s-diag-h">
+            <div class="card-h">
+              <h2 id="s-diag-h">自助诊断</h2>
+              <button class="btn btn-outline btn-sm" style="margin-left:auto">重新检测</button>
+            </div>
+            <b class="small">环境检查</b>
+            <div class="table-wrap" style="margin-top:8px">
+              <table class="tbl">
+                <thead><tr><th>检查项</th><th style="width:90px">结果</th><th>说明</th></tr></thead>
+                <tbody>
+                  <tr><td class="small">本地词典（ECDICT）</td><td><span class="badge badge-ok">正常</span></td><td class="tiny">已加载 3.4M 词条，划词翻译可离线查词</td></tr>
+                  <tr><td class="small">Edge 在线语音</td><td><span class="badge badge-ok">可用</span></td><td class="tiny">朗读引擎连通，延迟 120ms</td></tr>
+                  <tr><td class="small">本地 TTS（Kokoro）</td><td><span class="badge badge-warn">未就绪</span></td><td class="tiny">模型未下载（56 MB）<button class="btn btn-ghost btn-sm" style="min-height:22px;padding:0 6px">去下载</button></td></tr>
+                  <tr><td class="small">WASM 运行时</td><td><span class="badge badge-ok">正常</span></td><td class="tiny">本地模型 / OCR 依赖就绪</td></tr>
+                  <tr><td class="small">WebGPU</td><td><span class="badge badge-warn">不支持</span></td><td class="tiny">当前浏览器未开放，已自动回退 CPU 推理</td></tr>
+                  <tr><td class="small">屏幕捕获（圈选翻译）</td><td><span class="badge badge-ok">可用</span></td><td class="tiny">支持 getDisplayMedia，图片仅在本地处理</td></tr>
+                  <tr><td class="small">IndexedDB 存储</td><td><span class="badge badge-ok">正常</span></td><td class="tiny mono">8.1 MiB / 10 MiB</td></tr>
+                </tbody>
+              </table>
+            </div>
+            <b class="small" style="display:block;margin-top:16px">服务连通性</b>
+            <div class="row" style="margin-top:8px">
+              <button class="btn btn-soft btn-sm">批量测试已配置服务</button>
+              <span class="tiny">上次测试：3 分钟前 · 12 个服务 11 个正常、1 个超时</span>
+            </div>
+            <div class="chips" style="margin-top:10px">
+              <span class="chip" aria-pressed="true">DeepSeek 0.6s ✓</span>
+              <span class="chip" aria-pressed="true">智谱 GLM 0.8s ✓</span>
+              <span class="chip" aria-pressed="true">DeepLX（公共）超时 ✕</span>
+              <button class="chip" aria-pressed="false">重测失败项</button>
+            </div>
+            <div class="row" style="margin-top:16px">
+              <button class="btn btn-outline btn-sm">导出诊断日志</button>
+              <button class="btn btn-ghost btn-sm">常见问题（帮助中心）</button>
+              <span class="hint">日志不含密钥与原文，仅含服务名、状态码与耗时</span>
             </div>
           </section>
         </div>

@@ -144,4 +144,71 @@
       if (e.key === "Enter" || e.key === " ") { e.preventDefault(); card.classList.toggle("flip"); }
     });
   });
+
+  /* ---------- 通用开关 chip / 按钮（aria-pressed 切换，可选开启提示） ---------- */
+  document.addEventListener("click", function (e) {
+    var chip = e.target.closest("[data-toggle]");
+    if (!chip) return;
+    var on = chip.getAttribute("aria-pressed") === "true";
+    chip.setAttribute("aria-pressed", on ? "false" : "true");
+    var msg = chip.dataset.toggleMsg;
+    if (msg && !on) window.frToast(msg);
+  });
+
+  /* ---------- 悬浮球（webpage.html）：点按开合面板、拖拽移动、方向键微调、双击复位 ---------- */
+  var ball = document.getElementById("fball");
+  if (ball) {
+    var panel = document.getElementById("fball-panel");
+    function setPanel(open) {
+      panel.hidden = !open;
+      ball.setAttribute("aria-expanded", open ? "true" : "false");
+    }
+    ball.addEventListener("click", function () {
+      if (ball.dataset.dragged === "1") return; // 拖拽结束后的那次 click 不开合面板
+      setPanel(panel.hidden);
+    });
+    function clamp(v, min, max) { return Math.max(min, Math.min(max, v)); }
+    function place(x, y) {
+      ball.style.right = "auto"; ball.style.bottom = "auto";
+      ball.style.left = clamp(x, 8, window.innerWidth - 56) + "px";
+      ball.style.top = clamp(y, 8, window.innerHeight - 56) + "px";
+    }
+    var drag = null;
+    ball.addEventListener("pointerdown", function (e) {
+      drag = { x: e.clientX, y: e.clientY, l: ball.offsetLeft, t: ball.offsetTop, moved: false };
+      ball.setPointerCapture(e.pointerId);
+    });
+    ball.addEventListener("pointermove", function (e) {
+      if (!drag) return;
+      var dx = e.clientX - drag.x, dy = e.clientY - drag.y;
+      if (!drag.moved && Math.abs(dx) + Math.abs(dy) < 6) return;
+      drag.moved = true;
+      place(drag.l + dx, drag.t + dy);
+    });
+    ball.addEventListener("pointerup", function () {
+      if (drag && drag.moved) {
+        ball.dataset.dragged = "1";
+        setTimeout(function () { ball.dataset.dragged = ""; }, 0);
+      }
+      drag = null;
+    });
+    ball.addEventListener("dblclick", function () {
+      ball.style.left = ""; ball.style.top = ""; ball.style.right = ""; ball.style.bottom = "";
+      window.frToast("悬浮球已复位到右下角");
+    });
+    ball.addEventListener("keydown", function (e) {
+      var step = 16;
+      var delta = { ArrowLeft: [-step, 0], ArrowRight: [step, 0], ArrowUp: [0, -step], ArrowDown: [0, step] }[e.key];
+      if (!delta) return;
+      e.preventDefault();
+      place(ball.offsetLeft + delta[0], ball.offsetTop + delta[1]);
+    });
+    document.addEventListener("click", function (e) {
+      if (!e.target.closest("[data-fb-close]")) return;
+      setPanel(false);
+    });
+    document.addEventListener("keydown", function (e) {
+      if (e.key === "Escape" && !panel.hidden) setPanel(false);
+    });
+  }
 })();

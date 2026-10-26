@@ -57,6 +57,7 @@
       <div class="tabs" role="tablist" data-tabs="m" aria-label="媒体类型">
         <button class="tab" role="tab" aria-selected="true" data-panel="p-image">图片翻译</button>
         <button class="tab" role="tab" aria-selected="false" data-panel="p-sub" tabindex="-1">字幕翻译</button>
+        <button class="tab" role="tab" aria-selected="false" data-panel="p-area" tabindex="-1">圈选截图</button>
       </div>
 
       <!-- 图片 -->
@@ -165,6 +166,62 @@
             <div><b>今天我们来聊聊引擎背后的工作原理</b></div>
           </div>
         </section>
+      </section>
+
+      <!-- 圈选截图 -->
+      <section data-tab-panel="m" id="p-area" role="tabpanel" aria-label="圈选截图翻译" hidden>
+        <div class="grid" style="grid-template-columns:1fr 1.3fr">
+          <section class="card">
+            <div class="card-h"><h2>屏幕圈选翻译</h2><span class="badge badge-primary">本地 OCR</span></div>
+            <p class="small muted">通过屏幕共享捕获画面后框选任意区域即可翻译：视频内嵌字幕、Canvas 画面、无法选中文字的应用窗口都适用。</p>
+            <div class="field">
+              <label for="area-lang">识别语言</label>
+              <select class="select" id="area-lang" style="width:260px"><option>英语</option><option>日语</option><option>韩语</option><option>自动检测</option></select>
+            </div>
+            <div class="row" style="margin-bottom:14px">
+              <button class="btn btn-primary" data-toggle aria-pressed="false" data-toggle-msg="已捕获屏幕画面（演示）· 在画面上拖出矩形即可识别">开始圈选</button>
+              <span class="tiny">需要浏览器屏幕共享授权</span>
+            </div>
+            <ol class="small muted" style="margin:0 0 14px;padding-left:20px;display:grid;gap:4px">
+              <li>点击"开始圈选"，选择要共享的屏幕或窗口</li>
+              <li>在画面上拖出矩形，松开即完成识别</li>
+              <li>译文悬浮展示，可复制或收藏到单词本</li>
+            </ol>
+            <label class="switch" style="justify-content:space-between;margin-bottom:12px"><span>识别后自动翻译</span><input type="checkbox" checked><span class="track" aria-hidden="true"></span></label>
+            <p class="tiny" style="margin:0">画面仅在本地处理、不上传；关闭标签页后共享自动结束。</p>
+          </section>
+
+          <div class="stack">
+            <section class="card">
+              <div class="card-h">
+                <h2>识别结果</h2>
+                <span class="badge badge-ok">英语 → 中文 · 0.6s</span>
+                <button class="btn btn-ghost btn-sm" data-copy="area-text" style="margin-left:auto">全部复制</button>
+              </div>
+              <div class="area-stage" role="img" aria-label="屏幕画面模拟：深色视频画面，其中一行字幕区域被虚线矩形框选">
+                <div class="area-shot" aria-hidden="true">
+                  <span><b>▶ Streaming translation pipeline</b> — episode 42</span>
+                  <span>The model processes audio incrementally, keeping latency under 500 ms…</span>
+                  <span>00:12:36 · 1080p · EN</span>
+                </div>
+                <div class="area-sel" aria-hidden="true"><i></i><i></i><i></i><i></i><span class="size">862 × 96</span></div>
+              </div>
+              <div class="table-wrap" style="margin-top:12px">
+                <table class="tbl" id="area-text">
+                  <thead><tr><th style="width:46%">识别原文</th><th>译文</th><th>置信度</th></tr></thead>
+                  <tbody>
+                    <tr><td class="mono">The model processes audio incrementally…</td><td>模型逐块增量地处理音频……</td><td><span class="badge badge-ok">97%</span></td></tr>
+                    <tr><td class="mono">keeping latency under 500 ms</td><td>将延迟控制在 500 毫秒以内</td><td><span class="badge badge-ok">95%</span></td></tr>
+                  </tbody>
+                </table>
+              </div>
+              <div class="row" style="margin-top:12px">
+                <button class="btn btn-soft btn-sm">收藏译文</button>
+                <button class="btn btn-outline btn-sm">重新圈选</button>
+              </div>
+            </section>
+          </div>
+        </div>
       </section>
     </main>
   </div>

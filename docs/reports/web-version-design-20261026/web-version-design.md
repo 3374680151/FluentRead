@@ -37,7 +37,7 @@ FluentRead Web
 │   ├─ 文本·写作          text.html      （翻译 / 写作 / 多服务对比 三页签）
 │   ├─ 文档翻译           document.html  （PDF/EPUB/DOCX/HTML/MD 阅读工作台）
 │   ├─ 网页翻译           webpage.html   （URL → 代理渲染双语页）
-│   └─ 图片·字幕          media.html     （图片 OCR / 漫画 / 字幕文件）
+│   └─ 图片·字幕          media.html     （图片 OCR / 漫画 / 字幕 / 圈选截图）
 ├─ 学习
 │   └─ 学习中心           learn.html     （单词本 / 复习 / 材料 / 阅读记录）
 ├─ 词库
@@ -147,6 +147,8 @@ FluentRead Web
 | 显示风格 | 译文样式预设（颜色/下划线/背景，实时预览块）、双语排列、译文/原文字号、主题（亮/暗/跟随系统）、界面语言 |
 | 朗读 | 引擎（Edge 在线 / 本地 Kokoro / 系统语音）、音色试听、语速、自动朗读开关 |
 | 快捷键 | 页面内动作键位表（翻译/交换/朗读/收藏…），录入框 + 冲突检测 |
+| 快捷翻译方案 | 悬浮/全文/局部各配多套方案（键位、服务、模型、语言、展示策略），方案表 + 新建/编辑 |
+| 自助诊断 | 环境检查（词典/TTS/WASM/WebGPU/屏幕捕获/存储）、服务连通性批量测试、诊断日志导出 |
 | AI 助手 | 讲解风格与篇幅、写作默认长度/语气/身份、学习偏好（再次遇见开关）、API 限额 |
 | 隐私与数据 | 翻译缓存管理（容量/清空）、本地数据导出、统计数据清除、匿名化开关 |
 | 账号与同步 | 登录态、WebDAV / 云盘备份、多设备同步开关、登出与删除账号 |
@@ -166,12 +168,16 @@ FluentRead Web
 | 翻译中心 | text.html 对比页签 | |
 | 单词本/学习中心/材料库 | learn.html | 账号化持久化 |
 | 术语库/个人校订 | library.html | |
-| 翻译统计/模型用量 | stats.html | |
+| 翻译统计/模型用量 | stats.html | 原型已落地：双页签，SVG 图表附数据表降级 |
 | 设置中心 | services.html + settings.html | 拆为服务与偏好两页 |
+| 自助诊断 | settings.html 自助诊断分区 | 环境检查、服务连通性批量测试、日志导出 |
 | 分享卡片 | 译文工具栏入口 | Canvas 纯前端 |
 | 页面通知 | 全局 toast | |
-| 悬浮球/popup | 侧边栏 + 顶栏替代 | 不再需要 |
-| 圈选翻译/输入框翻译/段落复制 | 舍弃或后续版本 | 圈选可屏共享实现，暂缓 |
+| 悬浮球 | webpage.html 阅读页悬浮球 | 保留为阅读快捷面板；拖拽移动 + 方向键微调 + 双击复位（WCAG 拖拽替代） |
+| 快捷翻译方案 | settings.html 快捷翻译方案分区 | 悬浮/全文/局部各配多套独立方案 |
+| 圈选翻译 | media.html 圈选截图页签 | getDisplayMedia 屏幕捕获 + 本地 OCR，原型已落地 |
+| 输入框翻译 | text.html "输入框直译"开关 | 输入 /// 触发整段替换 |
+| 段落复制 | webpage.html 段落工具 | 已落地：段落级复制按钮 |
 | 本地模型（翻译/TTS/转写） | services.html 本地分类 + media/朗读入口 | Web Worker + WASM |
 | Chrome 内置翻译/MAIN world 桥/跨域 iframe 中继 | 不迁移 | 扩展特有 |
 
@@ -194,7 +200,7 @@ FluentRead Web
 
 ## 八、原型说明
 
-- 目录：`prototype/`，入口 `index.html`，共享 `assets/app.css` 与 `assets/app.js`（页签切换、主题切换、少量演示交互）。
+- 目录：`prototype/`，入口 `index.html`，共 10 页（含 `stats.html` 统计·用量），共享 `assets/app.css` 与 `assets/app.js`（页签切换、主题切换、悬浮球拖拽、开关 chip、少量演示交互）。
 - 数据均为静态演示文案；文本翻译页的"翻译"按钮演示了请求→shimmer→出稿的交互流。
 - 正式工程建议：Vue 3 + `<script setup>` + TS（复用 `src/ui` token 与组件思路），路由按本 IA 落地；翻译请求统一走 `/api/translate` 服务端代理（对应扩展 broker 的编排：缓存、去重、免费池换线、限流）。
 

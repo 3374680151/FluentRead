@@ -505,3 +505,75 @@ table.tbl { width: 100%; border-collapse: collapse; font-size: 14px; }
   .sub-row { grid-template-columns: 1fr; }
   .sub-row .time { order: -1; }
 }
+
+/* ---------- 补充组件（2026-10-26 功能补充：条形图 / 悬浮球 / 划词弹卡 / 圈选截图） ---------- */
+
+/* 条形统计行：服务分布、失败原因、Token 构成复用 */
+.bars { display: flex; flex-direction: column; gap: 10px; }
+.bars-row { display: grid; grid-template-columns: 132px 1fr 58px; gap: 10px; align-items: center; }
+.bars-row .label { font-size: 13px; font-weight: 600; color: var(--ink-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.bars-row .track { height: 18px; border-radius: 6px; background: var(--surface-2); border: 1px solid var(--border); overflow: hidden; }
+.bars-row .fill { display: block; height: 100%; border-radius: inherit; }
+.bars-row .val { font-family: var(--mono); font-size: 12.5px; text-align: right; color: var(--ink-2); }
+@media (max-width: 680px) {
+  .bars-row { grid-template-columns: 96px 1fr 50px; }
+}
+
+/* 悬浮球：网页翻译阅读页快捷工具球；可拖拽移动，方向键微调，双击复位（WCAG 拖拽替代） */
+.fball {
+  position: fixed; right: 26px; bottom: 26px; z-index: 50;
+  width: 48px; height: 48px; border-radius: 50%;
+  border: 1px solid var(--border-strong);
+  background: var(--primary-strong); color: #fff;
+  display: grid; place-items: center; cursor: grab;
+  box-shadow: 0 6px 18px rgba(2, 10, 9, .22);
+  transition: background-color var(--t), border-color var(--t);
+}
+.fball:hover { background: var(--primary); }
+.fball:active { cursor: grabbing; }
+.fball:focus-visible { outline: 2px solid var(--ring); outline-offset: 3px; }
+.fball-panel {
+  position: fixed; right: 26px; bottom: 86px; z-index: 50;
+  width: 272px; padding: 14px 16px;
+  background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
+}
+.fball-panel[hidden] { display: none; }
+.fball-panel .stack { gap: 10px; }
+.fball-panel .switch { justify-content: space-between; }
+
+/* 划词弹卡：阅读页内选词后的演示卡片 */
+.sel-pop {
+  float: right; width: 240px; margin: 4px 0 12px 16px;
+  padding: 12px 14px; font-size: 13px;
+  background: var(--surface); border: 1px solid var(--primary); border-radius: var(--radius-sm);
+}
+.sel-pop .word { font-weight: 800; font-size: 15px; }
+.sel-pop .phon { color: var(--ink-3); font-family: var(--mono); font-size: 12px; margin-left: 6px; }
+.sel-pop .sense { margin: 8px 0 10px; padding: 0; list-style: none; color: var(--ink-2); }
+.sel-pop .sense li { padding-left: 2.2em; text-indent: -2.2em; }
+.sel-pop .sense .pos { display: inline-block; min-width: 2em; color: var(--primary-strong); font-weight: 700; }
+
+/* 圈选截图：屏幕画面模拟 + 框选矩形 */
+.area-stage {
+  position: relative; border: 1px solid var(--border); border-radius: var(--radius);
+  background: var(--surface-2); overflow: hidden; aspect-ratio: 16 / 9;
+}
+.area-shot {
+  position: absolute; inset: 0; padding: 16px;
+  display: flex; flex-direction: column; gap: 8px; justify-content: center;
+  /* 模拟深色视频画面，固定深色，不随主题变化 */
+  background: linear-gradient(135deg, #101B2E, #0A1420);
+  color: #93A6BC; font-family: var(--mono); font-size: 12px; line-height: 2;
+}
+.area-shot b { color: #FFFFFF; font-weight: 700; }
+.area-sel {
+  position: absolute; left: 16%; top: 18%; width: 48%; height: 46%;
+  border: 2px dashed var(--primary-strong); border-radius: 6px;
+  background: color-mix(in srgb, var(--primary) 12%, transparent);
+}
+.area-sel i { position: absolute; width: 8px; height: 8px; background: var(--primary-strong); border: 1.5px solid var(--surface); border-radius: 2px; }
+.area-sel i:nth-child(1) { left: -5px; top: -5px; }
+.area-sel i:nth-child(2) { right: -5px; top: -5px; }
+.area-sel i:nth-child(3) { left: -5px; bottom: -5px; }
+.area-sel i:nth-child(4) { right: -5px; bottom: -5px; }
+.area-sel .size { position: absolute; left: 0; top: -24px; padding: 1px 7px; border-radius: 4px; background: var(--primary-strong); color: #fff; font-family: var(--mono); font-size: 11px; white-space: nowrap; }

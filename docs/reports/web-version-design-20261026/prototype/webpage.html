@@ -71,8 +71,9 @@
               <button aria-pressed="true">双语对照</button>
               <button aria-pressed="false">仅译文</button>
             </div>
-            <button class="chip" aria-pressed="false">悬停模式</button>
-            <button class="chip" aria-pressed="true">智能高亮</button>
+            <button class="chip" data-toggle aria-pressed="false" data-toggle-msg="悬停模式：按住 Alt 移动鼠标，段落译文悬浮跟随（演示）">悬停模式</button>
+            <button class="chip" data-toggle aria-pressed="false" data-toggle-msg="局部翻译模式：点选页面任意区域，仅翻译所选内容（演示）">局部翻译</button>
+            <button class="chip" data-toggle aria-pressed="true">智能高亮</button>
             <span style="flex:1"></span>
             <button class="icon-btn" aria-label="减小字号"><span style="font-size:12px;font-weight:700">A-</span></button>
             <button class="icon-btn" aria-label="增大字号"><span style="font-size:15px;font-weight:700">A+</span></button>
@@ -92,6 +93,19 @@
           </div>
 
           <div class="par">
+            <div class="sel-pop" role="group" aria-label="划词弹卡演示">
+              <b class="word">plan ahead</b><span class="phon">/plæn əˈhed/</span>
+              <ul class="sense">
+                <li><span class="pos">phr.</span>提前规划；未雨绸缪</li>
+                <li><span class="pos">析</span>plan（规划）+ ahead（向前）→ 预先安排</li>
+              </ul>
+              <div class="row" style="gap:6px">
+                <button class="btn btn-soft btn-sm">收藏</button>
+                <button class="btn btn-outline btn-sm" aria-label="朗读 plan ahead">朗读</button>
+                <a class="btn btn-ghost btn-sm" href="text.html">AI 讲解 →</a>
+              </div>
+              <p class="tiny" style="margin:6px 0 0">划词弹卡演示 · 词典 / TTS / 收藏</p>
+            </div>
             <p class="src">A complicated task usually involves many steps. An agent needs to be aware of past actions and <span class="hl-key">plan ahead</span> — decomposition, reflection, and self-critique.</p>
             <p class="dst"><span class="dst-underline" id="w2-dst">复杂任务往往包含许多步骤。智能体需要清楚已执行的操作并<span class="hl-key">提前规划</span>——包括任务分解、反思与自我批评。</span></p>
             <p class="tiny">◈ 命中术语库：agent → 智能体（本文共 37 处）· reflection → 反思</p>
@@ -148,6 +162,27 @@
     </main>
   </div>
 </div>
+<!-- 悬浮球：阅读快捷面板入口（可拖拽移动，方向键微调，双击复位） -->
+<button class="fball" id="fball" aria-expanded="false" aria-controls="fball-panel" aria-label="阅读快捷面板（可拖动，方向键微调位置，双击复位）" title="阅读快捷面板">
+  <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 5h10"/><path d="M8 3v2c0 4-2 7-5 9"/><path d="M5.5 9c1 3 3 5 6 6"/><path d="m13 20 4-10 4 10"/><path d="M14.5 16.5h5"/></svg>
+</button>
+<div class="fball-panel" id="fball-panel" role="group" aria-label="阅读快捷面板" hidden>
+  <div class="row" style="justify-content:space-between;margin-bottom:10px">
+    <b class="small">阅读快捷面板</b>
+    <button class="icon-btn" data-fb-close aria-label="关闭快捷面板"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg></button>
+  </div>
+  <div class="stack">
+    <label class="switch"><span>全文翻译</span><input type="checkbox" checked><span class="track" aria-hidden="true"></span></label>
+    <label class="switch"><span>悬停模式（按住 Alt）</span><input type="checkbox"><span class="track" aria-hidden="true"></span></label>
+    <label class="switch"><span>局部翻译</span><input type="checkbox"><span class="track" aria-hidden="true"></span></label>
+  </div>
+  <div class="row" style="margin-top:12px">
+    <button class="btn btn-outline btn-sm" aria-label="朗读当前段落">朗读本段</button>
+    <button class="btn btn-ghost btn-sm" aria-label="复制当前段落译文">复制本段</button>
+  </div>
+  <p class="tiny" style="margin:10px 0 0">拖动调整位置 · 方向键微调 · 双击复位</p>
+</div>
+
 <script src="assets/app.js"></script>
 </body>
 </html>
