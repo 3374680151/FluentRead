@@ -33,6 +33,8 @@
     /* 字幕翻译 */
     subDrop: document.getElementById("sub-drop"),
     subFile: document.getElementById("sub-file"),
+    subPaste: document.getElementById("sub-paste"),
+    subParse: document.getElementById("sub-parse"),
     subCard: document.getElementById("sub-card"),
     subName: document.getElementById("sub-name"),
     subMeta: document.getElementById("sub-meta"),
@@ -62,7 +64,6 @@
     areaText: document.getElementById("area-text"),
   };
   var prefs = window.frGetPrefs();
-  var TESSERACT_CDN = "https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js";
 
   window.frCatalog().then(function (catalog) {
     els.apiBadge.textContent = "本地服务在线";
@@ -99,19 +100,47 @@
   els.ocrLang.addEventListener("change", function () { window.frSetPrefs({ ocrLang: els.ocrLang.value }); });
   els.areaLang.value = prefs.ocrLang || "eng";
 
-  /* ==================== OCR 引擎（Tesseract.js，按需加载） ==================== */
-  var tesseractLoading = null;
-  function ensureTesseract() {
-    if (window.Tesseract) return Promise.resolve();
-    if (tesseractLoading) return tesseractLoading;
-    tesseractLoading = new Promise(function (resolve, reject) {
+  /* ==================== OCR 引擎（Tesseract.js，按需加载，多 CDN 自动回退） ==================== */
+  var OCR_CDNS = [
+    { label: "cdn.jsdelivr.net", script: "https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js", base: "https://cdn.jsdelivr.net/npm" },
+    { label: "fastly.jsdelivr.net", script: "https://fastly.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js", base: "https://fastly.jsdelivr.net/npm" },
+    { label: "unpkg.com", script: "https://unpkg.com/tesseract.js@5/dist/tesseract.min.js", base: "https://unpkg.com" },
+  ];
+  // 语言包（traineddata）使用 tessdata 官方源；与脚本源分开，避免单一镜像故障
+  var OCR_LANG_CDN = "https://tessdata.projectnaptha.com/4.0.0";
+  var ocrCdn = null; // 本次会话选中的 CDN
+  function loadScriptOnce(url) {
+    return new Promise(function (resolve, reject) {
       var script = document.createElement("script");
-      script.src = TESSERACT_CDN;
+      script.src = url;
       script.onload = resolve;
-      script.onerror = function () { reject(new Error("无法从 CDN 加载 OCR 引擎，请检查网络")); };
+      script.onerror = function () { script.remove(); reject(new Error("加载失败")); };
       document.head.appendChild(script);
     });
-    return tesseractLoading;
+  }
+  function ensureTesseract() {
+    if (window.Tesseract && ocrCdn) return Promise.resolve();
+    var cached = null;
+    try { cached = sessionStorage.getItem("frweb-ocr-cdn"); } catch (e) { /* 忽略 */ }
+    if (cached) {
+      var saved = OCR_CDNS.filter(function (c) { return c.label === cached; })[0];
+      if (saved) {
+        ocrCdn = saved;
+        return loadScriptOnce(saved.script).then(function () { /* 已缓存可用源 */ });
+      }
+    }
+    var chain = Promise.reject(new Error("start"));
+    OCR_CDNS.forEach(function (candidate) {
+      chain = chain.catch(function () {
+        return loadScriptOnce(candidate.script).then(function () {
+          ocrCdn = candidate;
+          try { sessionStorage.setItem("frweb-ocr-cdn", candidate.label); } catch (e) { /* 忽略 */ }
+        });
+      });
+    });
+    return chain.catch(function () {
+      throw new Error("无法从任何 CDN 加载 OCR 引擎（jsDelivr 主站/镜像与 unpkg 均不可达），请检查网络");
+    });
   }
 
   var ocrWorker = null;
@@ -124,11 +153,17 @@
         ocrWorker = null;
         return getOcrWorker(lang);
       });
-      return window.Tesseract.createWorker(lang, 1, {
+      // 显式指定 worker/core/lang 路径：Tesseract.js 的默认值硬编码主站 CDN，
+      // 主站不可达时必须随选中的镜像一起切换
+      var options = {
+        workerPath: ocrCdn.base + "/tesseract.js@5/dist/worker.min.js",
+        corePath: ocrCdn.base + "/tesseract.js-core@5",
+        langPath: OCR_LANG_CDN,
         logger: function (m) {
           if (progressHandler) progressHandler(m);
         },
-      }).then(function (worker) {
+      };
+      return window.Tesseract.createWorker(lang, 1, options).then(function (worker) {
         ocrWorker = worker;
         ocrWorkerLang = lang;
         return worker;
@@ -154,6 +189,7 @@
     };
     els.ocrProgress.hidden = false;
     return getOcrWorker(lang).then(function (worker) {
+      els.ocrStatus.textContent = "识别引擎：" + (ocrCdn ? ocrCdn.label : "默认") + " · 识别中…";
       return worker.recognize(source);
     }).then(function (data) {
       els.ocrProgress.hidden = true;
@@ -365,24 +401,34 @@
     if (cues[index]) cues[index].trans = cell.textContent.trim();
   });
 
+  function loadSubtitleText(raw, baseName) {
+    var parsed = parseSubtitle(raw);
+    if (!parsed.length) {
+      window.frToast("没有解析出字幕条目，请确认是 SRT 或 VTT 内容", true);
+      return;
+    }
+    cues = parsed;
+    subBaseName = baseName || "subtitle";
+    els.subCard.hidden = false;
+    els.subName.textContent = subBaseName + ".srt";
+    els.subMeta.textContent = parsed.length + " 条";
+    els.subState.textContent = "待翻译";
+    els.subState.className = "badge";
+    els.subStatus.textContent = "";
+    els.subProgress.hidden = true;
+    renderSubRows();
+    window.frToast("已解析 " + parsed.length + " 条字幕");
+  }
+
+  els.subParse.addEventListener("click", function () {
+    var raw = els.subPaste.value.trim();
+    if (!raw) { window.frToast("请先粘贴字幕内容", true); return; }
+    loadSubtitleText(raw, "pasted-subtitle");
+  });
+
   function loadSubtitle(file) {
     file.text().then(function (raw) {
-      var parsed = parseSubtitle(raw);
-      if (!parsed.length) {
-        window.frToast("没有解析出字幕条目，请确认是 SRT 或 VTT 文件", true);
-        return;
-      }
-      cues = parsed;
-      subBaseName = file.name.replace(/\.(srt|vtt)$/i, "");
-      els.subCard.hidden = false;
-      els.subName.textContent = file.name;
-      els.subMeta.textContent = parsed.length + " 条";
-      els.subState.textContent = "待翻译";
-      els.subState.className = "badge";
-      els.subStatus.textContent = "";
-      els.subProgress.hidden = true;
-      renderSubRows();
-      window.frToast("已解析 " + parsed.length + " 条字幕");
+      loadSubtitleText(raw, file.name.replace(/\.(srt|vtt)$/i, ""));
     }).catch(function (error) {
       window.frToast("读取文件失败：" + error.message, true);
     });

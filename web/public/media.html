@@ -91,7 +91,7 @@
               <span class="tiny" id="ocr-status">等待图片</span>
             </div>
             <div class="progress" id="ocr-progress" hidden><i style="width:0%"></i></div>
-            <p class="tiny" style="margin:10px 0 0">图片只在你的浏览器里完成识别（Tesseract.js WASM），仅识别出的文字会发送给所选翻译服务；首次使用会从 jsDelivr CDN 下载识别引擎。</p>
+            <p class="tiny" style="margin:10px 0 0">图片只在你的浏览器里完成识别（Tesseract.js WASM），仅识别出的文字会发送给所选翻译服务；识别引擎与语言包按需从 jsDelivr（自动切换主站/镜像/unpkg）与 tessdata 官方源加载。</p>
           </section>
 
           <div class="stack">
@@ -131,6 +131,15 @@
             <p style="margin:0"><b>上传字幕文件</b> · 支持 SRT / VTT，逐条批量翻译后可导出译文或双语字幕</p>
           </div>
           <input type="file" id="sub-file" accept=".srt,.vtt,text/plain" style="display:none" aria-label="选择字幕文件">
+        </div>
+        <div class="row" style="margin-bottom:16px;align-items:flex-start">
+          <div style="flex:1">
+            <textarea class="textarea" id="sub-paste" rows="4" style="min-height:88px" placeholder="或直接把 SRT / VTT 内容粘贴到这里…" aria-label="粘贴字幕内容"></textarea>
+            <div class="row" style="margin-top:8px">
+              <button class="btn btn-soft btn-sm" id="sub-parse">解析粘贴内容</button>
+              <span class="tiny">与上传文件等效，方便处理复制来的字幕文本</span>
+            </div>
+          </div>
         </div>
 
         <section class="card" id="sub-card" hidden>
@@ -241,5 +250,6 @@
 
 <script src="assets/app.js"></script>
 <script src="assets/media.js"></script>
+<script src="assets/widget.js"></script>
 </body>
 </html>
