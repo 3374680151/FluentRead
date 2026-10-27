@@ -20,7 +20,6 @@
     dstLang: "zh-Hans",
     defaultService: "microsoft",
     serviceOrder: ["microsoft", "transmart", "alibaba", "mymemory", "google"],
-    compareServices: ["microsoft", "google"],
     autoFallback: true,
     autoRead: false,
     ttsRate: 1,
@@ -33,10 +32,7 @@
     ai: null,
     customServices: [],
     aiExplainStyle: "精讲（词根 + 搭配 + 例句）",
-    aiWriteTone: "礼貌正式",
-    aiPref: "",
-    ocrLang: "eng",
-    autoTranslateOcr: true
+    aiPref: ""
   };
   var prefs = (function () {
     var stored = {};
@@ -105,23 +101,6 @@
     toastZone.appendChild(t);
     setTimeout(function () { t.remove(); }, 3200);
   };
-
-  /* ==================== 页签 ==================== */
-  document.querySelectorAll("[data-tabs]").forEach(function (group) {
-    group.addEventListener("click", function (e) {
-      var tab = e.target.closest('[role="tab"]');
-      if (!tab) return;
-      var tabs = Array.prototype.slice.call(group.querySelectorAll('[role="tab"]'));
-      tabs.forEach(function (t2) {
-        var sel = t2 === tab;
-        t2.setAttribute("aria-selected", sel ? "true" : "false");
-        t2.tabIndex = sel ? 0 : -1;
-      });
-      document.querySelectorAll('[data-tab-panel="' + group.dataset.tabs + '"]').forEach(function (p) {
-        p.hidden = p.id !== tab.dataset.panel;
-      });
-    });
-  });
 
   /* ==================== 抽屉 / 对话框 ==================== */
   function openLayer(el) {
