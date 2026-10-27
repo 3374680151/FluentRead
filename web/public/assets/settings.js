@@ -28,7 +28,6 @@
     ttsHint: document.getElementById("tts-hint"),
     aiState: document.getElementById("ai-state"),
     aiStyle: document.getElementById("ai-style"),
-    aiTone: document.getElementById("ai-tone"),
     aiPref: document.getElementById("ai-pref"),
     historyCount: document.getElementById("data-history-count"),
     historyClear: document.getElementById("data-history-clear"),
@@ -147,8 +146,6 @@
   refreshAiState();
   els.aiStyle.value = prefs.aiExplainStyle;
   els.aiStyle.addEventListener("change", function () { window.frSetPrefs({ aiExplainStyle: els.aiStyle.value }); saved(); });
-  els.aiTone.value = prefs.aiWriteTone;
-  els.aiTone.addEventListener("change", function () { window.frSetPrefs({ aiWriteTone: els.aiTone.value }); saved(); });
   els.aiPref.value = prefs.aiPref || "";
   els.aiPref.addEventListener("change", function () { window.frSetPrefs({ aiPref: els.aiPref.value.trim() }); saved(); });
 
@@ -287,46 +284,7 @@
       var count = window.speechSynthesis.getVoices().length;
       return Promise.resolve({ name: "语音朗读", ok: true, badge: "支持", text: count ? "系统提供 " + count + " 个音色" : "音色列表异步加载中" });
     });
-    // 5. 屏幕捕获
-    checks.push(function () {
-      var supported = !!(navigator.mediaDevices && navigator.mediaDevices.getDisplayMedia);
-      return Promise.resolve({
-        name: "屏幕捕获（圈选翻译）", ok: supported,
-        badge: supported ? "支持" : "不支持",
-        text: supported ? "可在图片·字幕页使用圈选截图" : "当前浏览器不支持 getDisplayMedia",
-      });
-    });
-    // 6. OCR 引擎 CDN（多源探测：任一可达即可用）
-    checks.push(function () {
-      var candidates = [
-        "https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js",
-        "https://fastly.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js",
-        "https://unpkg.com/tesseract.js@5/dist/tesseract.min.js",
-      ];
-      var startedAt = Date.now();
-      var chain = Promise.reject(new Error("start"));
-      var reachable = "";
-      candidates.forEach(function (url) {
-        chain = chain.catch(function () {
-          return fetch(url, { method: "HEAD" }).then(function () {
-            reachable = new URL(url).host;
-          });
-        });
-      });
-      return chain.then(function () {
-        var langCdn = fetch("https://tessdata.projectnaptha.com/4.0.0/eng.traineddata.gz", { method: "HEAD" })
-          .then(function () { return true; }).catch(function () { return false; });
-        return langCdn.then(function (langOk) {
-          return {
-            name: "OCR 引擎（CDN）", ok: langOk, badge: "可达 " + (Date.now() - startedAt) + "ms",
-            text: "引擎源 " + reachable + (langOk ? " · 语言包 tessdata 官方源可用" : " · 语言包源不可达，识别会失败"),
-          };
-        });
-      }).catch(function () {
-        return { name: "OCR 引擎（CDN）", ok: false, badge: "不可达", text: "jsDelivr 主站/镜像与 unpkg 均无法访问，图片翻译不可用；字幕翻译不受影响" };
-      });
-    });
-    // 7. 本地存储
+    // 5. 本地存储
     checks.push(function () {
       var size = 0;
       try { size = (localStorage.getItem("frweb-prefs") || "").length + (localStorage.getItem("frweb-history") || "").length; } catch (e) { /* 忽略 */ }

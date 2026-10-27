@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>文本·写作 · 流畅阅读 Web</title>
+<title>文本翻译 · 流畅阅读 Web</title>
 <link rel="stylesheet" href="assets/app.css">
 </head>
 <body>
@@ -16,8 +16,7 @@
     </a>
     <nav class="nav" aria-label="主导航">
       <div class="nav-group">翻译</div>
-      <a class="nav-item" href="index.html" aria-current="page"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" aria-hidden="true"><path d="M4 6h16"/><path d="M4 12h12"/><path d="M4 18h8"/></svg><span>文本·写作</span></a>
-      <a class="nav-item" href="media.html"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="9" cy="10" r="1.6"/><path d="m5 19 5.5-5.5L14 17l3-3 4 4"/></svg><span>图片·字幕</span></a>
+      <a class="nav-item" href="index.html" aria-current="page"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" aria-hidden="true"><path d="M4 6h16"/><path d="M4 12h12"/><path d="M4 18h8"/></svg><span>文本翻译</span></a>
       <div class="nav-group">配置</div>
       <a class="nav-item" href="services.html"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" aria-hidden="true"><rect x="3" y="4" width="18" height="7" rx="2"/><rect x="3" y="13" width="18" height="7" rx="2"/><path d="M7 7.5h.01M7 16.5h.01"/></svg><span>翻译服务</span></a>
       <a class="nav-item" href="settings.html"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" aria-hidden="true"><path d="M4 8h9M17.5 8H20M4 16h4M12.5 16H20"/><circle cx="15" cy="8" r="2.2"/><circle cx="10" cy="16" r="2.2"/></svg><span>偏好设置</span></a>
@@ -37,22 +36,15 @@
   <div class="main">
     <header class="topbar">
       <div>
-        <h1>文本·写作</h1>
-        <div class="crumb">翻译 / 文本·写作</div>
+        <h1>文本翻译</h1>
+        <div class="crumb">翻译 / 文本翻译 · 选中页面文字或双击单词即可弹窗翻译</div>
       </div>
       <div class="spacer"></div>
       <span class="badge" id="api-badge">检测本地服务…</span>
     </header>
 
     <main class="content">
-      <div class="tabs" role="tablist" data-tabs="t" aria-label="文本翻译模式">
-        <button class="tab" role="tab" aria-selected="true" data-panel="p-translate">翻译</button>
-        <button class="tab" role="tab" aria-selected="false" data-panel="p-write" tabindex="-1">AI 写作</button>
-        <button class="tab" role="tab" aria-selected="false" data-panel="p-compare" tabindex="-1">多服务对比</button>
-      </div>
-
-      <!-- 翻译 -->
-      <section data-tab-panel="t" id="p-translate" role="tabpanel" aria-label="翻译">
+      <section aria-label="翻译">
         <div class="langbar">
           <label class="tiny" for="src-lang">源语言</label>
           <select class="select" id="src-lang"></select>
@@ -120,79 +112,6 @@
             </table>
           </div>
         </section>
-      </section>
-
-      <!-- AI 写作 -->
-      <section data-tab-panel="t" id="p-write" role="tabpanel" aria-label="AI 写作" hidden>
-        <div class="grid" style="grid-template-columns:1fr 1.2fr">
-          <section class="card">
-            <div class="card-h"><h2>起草草稿</h2><span class="badge badge-primary" id="write-engine">AI 写作</span></div>
-            <div class="field">
-              <label for="write-intent">想写什么？</label>
-              <textarea id="write-intent" class="textarea" placeholder="用中文描述意图，例如：回复导师，本周实验需要重跑，申请把周报截止时间推迟到周四"></textarea>
-            </div>
-            <div class="field">
-              <label>输出语言</label>
-              <div class="chips" id="write-lang">
-                <button class="chip" data-value="en" aria-pressed="true">English</button>
-                <button class="chip" data-value="ja" aria-pressed="false">日本語</button>
-                <button class="chip" data-value="zh-Hans" aria-pressed="false">简体中文</button>
-              </div>
-            </div>
-            <div class="field">
-              <label>长度</label>
-              <div class="chips" id="write-len">
-                <button class="chip" data-value="简短" aria-pressed="false">简短</button>
-                <button class="chip" data-value="适中" aria-pressed="true">适中</button>
-                <button class="chip" data-value="详细" aria-pressed="false">详细</button>
-              </div>
-            </div>
-            <div class="field">
-              <label>语气（保存到偏好设置）</label>
-              <div class="chips" id="write-tone">
-                <button class="chip" data-value="礼貌正式" aria-pressed="false">礼貌正式</button>
-                <button class="chip" data-value="直接简洁" aria-pressed="false">直接简洁</button>
-                <button class="chip" data-value="轻松随意" aria-pressed="false">轻松随意</button>
-              </div>
-            </div>
-            <div class="field">
-              <label for="write-tpl">用途模板</label>
-              <select class="select" id="write-tpl" style="width:260px"><option>学术邮件</option><option>GitHub Issue / PR</option><option>商务回复</option><option>自由写作</option></select>
-            </div>
-            <button class="btn btn-primary" id="write-go">生成草稿</button>
-          </section>
-
-          <section class="card">
-            <div class="card-h"><h2>草稿</h2><span class="badge" id="write-status"></span>
-              <span style="flex:1"></span>
-              <button class="btn btn-ghost btn-sm" data-copy="write-out">复制</button>
-            </div>
-            <div id="write-out" class="muted" style="white-space:pre-wrap;min-height:180px">草稿将显示在这里。生成需要已配置 AI 服务（翻译服务页）。</div>
-            <div class="callout" style="margin-top:10px">
-              <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true" style="margin-top:2px"><circle cx="12" cy="12" r="9"/><path d="M12 8h.01M12 11v5"/></svg>
-              <span>草稿不直接发送；复制后粘贴到你的邮箱或编辑器。</span>
-            </div>
-          </section>
-        </div>
-      </section>
-
-      <!-- 多服务对比 -->
-      <section data-tab-panel="t" id="p-compare" role="tabpanel" aria-label="多服务对比" hidden>
-        <div class="langbar">
-          <span class="small muted">同一段文本真实并发请求勾选的免费服务，横向对比译文与耗时。</span>
-          <span style="flex:1"></span>
-          <button class="btn btn-primary btn-sm" id="cmp-go">开始对比</button>
-        </div>
-        <div class="field">
-          <label for="cmp-src">对比文本</label>
-          <textarea id="cmp-src" class="textarea" style="min-height:80px" placeholder="输入要对比翻译的文本"></textarea>
-        </div>
-        <div class="field">
-          <label>参与对比的服务（勾选保存到偏好）</label>
-          <div class="chips" id="cmp-services"></div>
-        </div>
-        <div class="grid grid-3" id="cmp-results"></div>
-      </section>
     </main>
   </div>
 </div>

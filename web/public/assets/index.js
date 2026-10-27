@@ -1,9 +1,9 @@
 /**
  * @file web/public/assets/index.js
  *
- * 文件职责：文本·写作页（index.html）的页面逻辑——真实调用本地 /api/translate 与 /api/ai：
+ * 文件职责：文本翻译页（index.html）的页面逻辑——真实调用本地 /api/translate 与 /api/ai：
  * 翻译（失败自动换线）、输入框 /// 直译、译文朗读与复制、AI 词典（结构化查询原文词语）、
- * AI 写作（按语言/长度/语气/模板起草）、多服务并发对比、最近翻译历史（localStorage）。
+ * 最近翻译历史（localStorage）。划词/点词弹窗翻译与悬浮球由共享的 widget.js 提供。
  * 模块边界：只操作本页 DOM；共享能力（偏好、请求封装、主题、toast）来自 app.js。
  */
 (function () {
@@ -31,19 +31,6 @@
     dictBadge: document.getElementById("dict-badge"),
     history: document.getElementById("history"),
     hisClear: document.getElementById("his-clear"),
-    writeIntent: document.getElementById("write-intent"),
-    writeLang: document.getElementById("write-lang"),
-    writeLen: document.getElementById("write-len"),
-    writeTone: document.getElementById("write-tone"),
-    writeTpl: document.getElementById("write-tpl"),
-    writeGo: document.getElementById("write-go"),
-    writeOut: document.getElementById("write-out"),
-    writeStatus: document.getElementById("write-status"),
-    writeEngine: document.getElementById("write-engine"),
-    cmpSrc: document.getElementById("cmp-src"),
-    cmpServices: document.getElementById("cmp-services"),
-    cmpGo: document.getElementById("cmp-go"),
-    cmpResults: document.getElementById("cmp-results"),
   };
   var prefs = window.frGetPrefs();
 
@@ -282,129 +269,6 @@
     window.frToast("历史已清空");
   });
   renderHistory();
-
-  /* ---------- AI 写作 ---------- */
-  function bindChips(container, onChange) {
-    container.addEventListener("click", function (e) {
-      var chip = e.target.closest(".chip[data-value]");
-      if (!chip) return;
-      container.querySelectorAll(".chip").forEach(function (c) {
-        c.setAttribute("aria-pressed", c === chip ? "true" : "false");
-      });
-      if (onChange) onChange(chip.dataset.value);
-    });
-  }
-  function chipValue(container) {
-    var active = container.querySelector('.chip[aria-pressed="true"]');
-    return active ? active.dataset.value : null;
-  }
-  function setChip(container, value) {
-    container.querySelectorAll(".chip").forEach(function (c) {
-      c.setAttribute("aria-pressed", c.dataset.value === value ? "true" : "false");
-    });
-  }
-  bindChips(els.writeLang);
-  bindChips(els.writeLen);
-  bindChips(els.writeTone, function (value) { window.frSetPrefs({ aiWriteTone: value }); });
-  setChip(els.writeTone, prefs.aiWriteTone);
-
-  els.writeGo.addEventListener("click", function () {
-    var intent = els.writeIntent.value.trim();
-    if (!intent) { window.frToast("请先描述想写什么", true); return; }
-    if (!window.frAiConfigured()) {
-      els.writeStatus.textContent = "未配置 AI";
-      els.writeStatus.className = "badge badge-danger";
-      els.writeOut.innerHTML = '生成草稿需要 AI 服务。请到 <a href="services.html">翻译服务</a> 页配置任意 OpenAI 兼容服务。';
-      els.writeOut.classList.remove("muted");
-      return;
-    }
-    var lang = chipValue(els.writeLang) || "en";
-    var length = chipValue(els.writeLen) || "适中";
-    var tone = chipValue(els.writeTone) || "礼貌正式";
-    var tpl = els.writeTpl.value;
-    var spinner = window.frButtonBusy(els.writeGo, true);
-    els.writeStatus.textContent = "生成中…";
-    els.writeStatus.className = "badge";
-    window.frAiChat([
-      { role: "system", content: "你是写作助手。用" + lang + "语言、" + length + "的篇幅、" + tone + "的语气起草一段" + tpl + "。只输出正文本身，不要解释。" + (prefs.aiPref ? "参考偏好：" + prefs.aiPref : "") },
-      { role: "user", content: intent },
-    ], { temperature: 0.7, maxTokens: 1200 }).then(function (result) {
-      if (!result.ok) {
-        els.writeStatus.textContent = "失败";
-        els.writeStatus.className = "badge badge-danger";
-        els.writeOut.textContent = "生成失败：" + (result.error || "未知错误");
-        return;
-      }
-      els.writeOut.textContent = result.text.trim();
-      els.writeOut.classList.remove("muted");
-      els.writeStatus.textContent = (prefs.ai && (prefs.ai.name || prefs.ai.model) || "AI") + " · " + result.ms + "ms";
-      els.writeStatus.className = "badge badge-ok";
-    }).finally(function () {
-      window.frButtonBusy(els.writeGo, false);
-    });
-  });
-
-  /* ---------- 多服务对比 ---------- */
-  function renderCompareChips() {
-    window.frCatalog().then(function (catalog) {
-      var services = catalog.services || [];
-      els.cmpServices.innerHTML = services.map(function (s) {
-        var on = (prefs.compareServices || []).indexOf(s.id) >= 0;
-        return '<button class="chip" data-svc="' + s.id + '" aria-pressed="' + on + '">' + window.frEscape(s.label) + "</button>";
-      }).join("");
-    });
-  }
-  renderCompareChips();
-  els.cmpServices.addEventListener("click", function (e) {
-    var chip = e.target.closest("[data-svc]");
-    if (!chip) return;
-    var on = chip.getAttribute("aria-pressed") !== "true";
-    chip.setAttribute("aria-pressed", on ? "true" : "false");
-    var selected = Array.prototype.slice.call(els.cmpServices.querySelectorAll('[aria-pressed="true"]')).map(function (c) { return c.dataset.svc; });
-    window.frSetPrefs({ compareServices: selected });
-  });
-  els.cmpGo.addEventListener("click", function () {
-    var text = els.cmpSrc.value.trim();
-    var services = Array.prototype.slice.call(els.cmpServices.querySelectorAll('[aria-pressed="true"]')).map(function (c) { return c.dataset.svc; });
-    if (!text) { window.frToast("请输入对比文本", true); return; }
-    if (!services.length) { window.frToast("请至少勾选一个服务", true); return; }
-    var spinner = window.frButtonBusy(els.cmpGo, true);
-    els.cmpResults.innerHTML = '<p class="tiny" style="grid-column:1/-1;margin:0">并发请求 ' + services.length + " 个服务中…</p>";
-    fetch("/api/translate", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ text: text, from: els.srcLang.value, to: els.dstLang.value, services: services }),
-    }).then(function (r) { return r.json(); }).then(function (data) {
-      if (data.error) {
-        els.cmpResults.innerHTML = '<p class="tiny" style="grid-column:1/-1;margin:0;color:var(--danger)">' + window.frEscape(data.error) + "</p>";
-        return;
-      }
-      els.cmpResults.innerHTML = data.results.map(function (r) {
-        var head = "<b>" + window.frEscape(r.label) + "</b> " +
-          (r.ok ? '<span class="badge badge-ok">' + r.ms + "ms</span>"
-                : '<span class="badge badge-danger">失败 · ' + r.ms + "ms</span>");
-        var body = r.ok
-          ? '<p class="small" style="margin:8px 0 0">' + window.frEscape(r.text) + "</p>"
-          : '<p class="small" style="margin:8px 0 0;color:var(--danger)">' + window.frEscape(r.error || "未知错误") + "</p>";
-        var action = r.ok
-          ? '<button class="btn btn-soft btn-sm" style="margin-top:8px" data-pick="' + window.frEscape(r.text) + '">采用此译文</button>'
-          : "";
-        return '<div class="card" style="padding:16px"><div class="card-h" style="margin-bottom:0">' + head + "</div>" + body + action + "</div>";
-      }).join("");
-    }).catch(function (error) {
-      els.cmpResults.innerHTML = '<p class="tiny" style="grid-column:1/-1;margin:0;color:var(--danger)">' + window.frEscape(error.message) + "</p>";
-    }).finally(function () {
-      window.frButtonBusy(els.cmpGo, false);
-    });
-  });
-  els.cmpResults.addEventListener("click", function (e) {
-    var pick = e.target.closest("[data-pick]");
-    if (!pick) return;
-    lastResult = pick.dataset.pick;
-    els.out.textContent = lastResult;
-    els.out.classList.remove("muted");
-    window.frToast("已采用该译文到译文栏");
-  });
 
   /* ---------- 站内快捷键 ---------- */
   document.addEventListener("keydown", function (e) {
