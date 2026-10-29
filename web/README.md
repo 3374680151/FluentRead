@@ -49,6 +49,21 @@ pnpm web:start   # 启动 http://127.0.0.1:8787
 
 端口可用环境变量 `FR_WEB_PORT` 覆盖。
 
+## 嵌入到你的网站（免安装翻译能力）
+
+站长在任意页面（如文档站）加一行代码，访客即可获得划词翻译 / 点词词典 / 生词收藏 / 悬浮球快捷翻译，
+无需安装浏览器扩展；演示见 [`embed-demo.html`](public/embed-demo.html)。
+
+```html
+<script src="https://你的部署地址/fluentread-sdk.js" data-fr-to="zh-Hans"></script>
+```
+
+- 配置：`data-fr-*` 属性或 `window.FluentReadConfig`（`serverUrl` / `from` / `to` / `ball` / `selection` / `capture` / `theme`）。
+- UI 渲染在 Shadow DOM 内，不污染宿主页面；API 与词书模块已开 CORS，跨域站点可直接调用。
+- 生词收藏写入 SDK 服务源绑定的词书库（与本站学习中心同库互通）；词书模块不可用时降级为宿主站
+  localStorage 暂存并如实提示。设计方案见
+  [docs/reports/web-embed-sdk-design-20261030](../docs/reports/web-embed-sdk-design-20261030/web-embed-sdk-design.md)。
+
 ## 数据与词典说明
 
 - 词书数据存浏览器 IndexedDB（Dexie，库 `FluentReadVocabularyBook`，与扩展同 schema）；

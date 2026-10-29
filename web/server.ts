@@ -8,7 +8,8 @@
  * 主要内容：静态文件服务；POST /api/translate 单服务与多服务并发对比翻译；GET /api/services
  * 服务目录；POST /api/ai 聊天补全转发；POST /api/ai/models 模型列表拉取；
  * GET /api/word 单词词典查询（ECDICT 本地优先 + 机器翻译兜底，供学习工作台点词）；
- * 每请求独立超时与取消；结果含真实耗时与失败原因。
+ * 每请求独立超时与取消；结果含真实耗时与失败原因；API 与静态资源带 CORS 头，
+ * 支持任意站点经 fluentread-sdk.js 一行接入（OPTIONS 预检直接放行）。
  * 模块边界：只做 HTTP 编排与静态转发；不实现页面 DOM；API 密钥仅随请求使用，不落盘、
  * 不写入日志、不参与缓存；不缓存翻译与 AI 结果。
  */
@@ -168,9 +169,16 @@ function readJsonBody(raw: string): {text: string; from: string; to: string; ser
     return {text: body.text, from, to, services};
 }
 
+/** 嵌入式 SDK 的跨域响应头：任意站点经一行 <script> 接入后，浏览器直接调用本服务的 API 与词书模块。 */
+const CORS_HEADERS = {
+    'access-control-allow-origin': '*',
+    'access-control-allow-methods': 'GET, POST, OPTIONS',
+    'access-control-allow-headers': 'content-type',
+};
+
 function sendJson(res: import('node:http').ServerResponse, status: number, payload: unknown): void {
     const body = JSON.stringify(payload);
-    res.writeHead(status, {'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store'});
+    res.writeHead(status, {'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store', ...CORS_HEADERS});
     res.end(body);
 }
 
@@ -300,6 +308,11 @@ function readAiChatBody(raw: string): AiChatRequestBody {
 const server = createServer(async (req, res) => {
     const url = new URL(req.url ?? '/', `http://127.0.0.1:${PORT}`);
     try {
+        if (req.method === 'OPTIONS') {
+            res.writeHead(204, CORS_HEADERS);
+            res.end();
+            return;
+        }
         if (url.pathname === '/api/services') {
             sendJson(res, 200, {
                 languages: LANGUAGES,
@@ -393,7 +406,8 @@ const server = createServer(async (req, res) => {
             const info = await stat(target);
             const file = info.isDirectory() ? join(target, 'index.html') : target;
             const content = await readFile(file);
-            res.writeHead(200, {'content-type': MIME[extname(file)] ?? 'application/octet-stream'});
+            // SDK 与词书模块需要被任意嵌入站点跨域加载（动态 import 受 CORS 约束），静态资源同样放开。
+            res.writeHead(200, {'content-type': MIME[extname(file)] ?? 'application/octet-stream', ...CORS_HEADERS});
             res.end(content);
         } catch {
             res.writeHead(404, {'content-type': 'text/plain; charset=utf-8'});

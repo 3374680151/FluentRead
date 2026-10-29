@@ -1,0 +1,91 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>North Star Docs — Getting Started</title>
+<!-- 这是一个模拟的"用户自己的文档站"：自有样式与 FluentRead 无关，
+     仅在页面底部多一行 <script src="/fluentread-sdk.js"> 即为访客提供
+     划词翻译 / 点词词典 / 生词收藏 / 悬浮球快捷翻译，无需安装任何扩展。 -->
+<style>
+  body { margin: 0; font-family: Georgia, 'Times New Roman', serif; color: #1a1a1a; background: #FBF9F4; }
+  header { background: #1F3A5F; color: #fff; padding: 18px 32px; }
+  header h1 { margin: 0; font-size: 20px; font-weight: 600; letter-spacing: .3px; }
+  header small { opacity: .75; font-size: 12px; letter-spacing: 1.5px; }
+  .notice { background: #FFF3D6; border-bottom: 1px solid #EAD59B; padding: 10px 32px; font: 13px/1.6 -apple-system, 'PingFang SC', sans-serif; color: #6B5518; }
+  .notice code { background: #fff; padding: 1px 6px; border-radius: 4px; border: 1px solid #EAD59B; font-size: 12px; }
+  main { max-width: 760px; margin: 0 auto; padding: 40px 24px 80px; }
+  h2 { font-size: 24px; border-bottom: 1px solid #E2DDD2; padding-bottom: 8px; margin-top: 40px; }
+  h3 { font-size: 18px; margin-top: 28px; }
+  p, li { font-size: 16px; line-height: 1.85; }
+  code, pre { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+  pre { background: #F0EDE6; border: 1px solid #E2DDD2; border-radius: 8px; padding: 14px 16px; overflow-x: auto; font-size: 13px; line-height: 1.7; }
+  .callout { border-left: 4px solid #1F3A5F; background: #EEF2F7; padding: 12px 16px; font-size: 15px; }
+  footer { border-top: 1px solid #E2DDD2; margin-top: 60px; padding-top: 16px; color: #8A8474; font-size: 13px; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>North Star Docs</h1>
+  <small>PRODUCT DOCUMENTATION · v2.4</small>
+</header>
+
+<div class="notice">
+  📌 这是<b>你的文档站</b>演示：本页没有引入任何 FluentRead 页面样式，只在底部嵌入了一行
+  <code>&lt;script src="/fluentread-sdk.js"&gt;</code>。访客无需安装扩展即可：选中文字翻译（单词自动给词典）、
+  朗读、收藏生词（自动带上下文，在 <a href="/learn.html" style="color:inherit">学习中心</a> 复习）、右下角悬浮球快捷翻译。
+  试试双击选中下面正文中的单词，或拖选整句。
+</div>
+
+<main>
+  <h2>Getting Started with North Star</h2>
+  <p>North Star is a lightweight documentation platform designed for teams that value
+  clarity and velocity. This guide walks you through the essential concepts and helps
+  you publish your first document in under ten minutes. If you have never worked with
+  a static documentation generator before, do not worry: the workflow is deliberately
+  mundane, and every command is idempotent.</p>
+
+  <h3>Installation</h3>
+  <p>Install the CLI globally with your preferred package manager. The installer will
+  scaffold a minimal project, download the default theme, and register a local preview
+  server that watches your files for changes.</p>
+  <pre>npm install -g @northstar/cli
+northstar init my-docs
+cd my-docs &amp;&amp; northstar dev</pre>
+
+  <h3>Writing content</h3>
+  <p>Every document is a plain Markdown file. The first heading becomes the page title,
+  and consecutive pages are stitched into a navigation tree based on the directory
+  layout. You can annotate paragraphs with arbitrary metadata and reference other
+  sections by stable anchors, which remain valid even when you reorder chapters.</p>
+  <div class="callout">
+    <strong>Tip:</strong> ambiguous terminology is the enemy of good documentation.
+    Keep a glossary of domain-specific expressions and use it consistently; the
+    built-in linter will flag inconsistent phrasing before you publish.
+  </div>
+
+  <h3>Publishing</h3>
+  <p>When you are satisfied with the preview, run the publish command. The generator
+  compiles your content into static assets, purges stale fragments, and deploys the
+  bundle to the storage backend configured in your project manifest. Incremental
+  builds are deterministic: identical inputs always produce identical output.</p>
+  <ul>
+    <li>Previews expire automatically after seven days of inactivity.</li>
+    <li>Every publish creates an immutable snapshot you can roll back to.</li>
+    <li>Search indexes are rebuilt incrementally, so large sites stay fast.</li>
+  </ul>
+
+  <h3>Troubleshooting</h3>
+  <p>If the preview server fails to start, verify that the port is not already occupied
+  and that your Node.js version satisfies the engines constraint. Stale caches can be
+  discarded with a single command, and verbose logging will reveal which plugin
+  swallowed an error. For anything else, the community forum is remarkably responsive.</p>
+
+  <footer>© 2026 North Star Team · This page embeds FluentRead translation as a demonstration.</footer>
+</main>
+
+<!-- 一行接入：访客免安装获得划词翻译 / 点词词典 / 生词收藏 / 悬浮球快捷翻译 -->
+<script src="/fluentread-sdk.js" data-fr-to="zh-Hans" data-fr-ball="true" data-fr-selection="true"></script>
+</body>
+</html>
