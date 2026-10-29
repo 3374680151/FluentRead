@@ -487,3 +487,76 @@ table.tbl { width: 100%; border-collapse: collapse; font-size: 14px; }
 .sel-bubble .sb-meta { display: flex; align-items: center; gap: 8px; margin-top: 8px; }
 .sel-bubble .sb-actions { margin-left: auto; display: flex; gap: 2px; }
 .sel-bubble .sb-note { margin-top: 6px; }
+
+/* ---------- 学习工作台与词卡（study.html / learn.html，真实版） ---------- */
+
+/* 空态块与翻卡（远端精简版移除了原型样式，学习中心仍需要） */
+.empty { text-align: center; padding: 48px 20px; color: var(--ink-2); }
+.empty svg { color: var(--border-strong); margin-bottom: 12px; }
+.flash { perspective: 1000px; height: 240px; cursor: pointer; }
+.flash .inner {
+  position: relative; width: 100%; height: 100%;
+  transition: transform .45s cubic-bezier(.2, .7, .3, 1);
+  transform-style: preserve-3d;
+}
+.flash.flip .inner { transform: rotateY(180deg); }
+.flash .face {
+  position: absolute; inset: 0; backface-visibility: hidden;
+  display: grid; place-items: center; text-align: center; padding: 24px;
+  border: 1px solid var(--border); border-radius: 14px; background: var(--surface);
+}
+.flash .back { transform: rotateY(180deg); }
+
+/* 学习工作台三栏：输入侧（句子列表）/ 译文侧（双语对照 + 点词）/ 学习侧（生词托盘） */
+.workbench { display: grid; grid-template-columns: minmax(240px, 300px) minmax(0, 1fr) minmax(220px, 270px); gap: 16px; align-items: start; }
+.workbench .stack { gap: 10px; }
+.sent-card { border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); padding: 14px 16px; }
+.sent-card.error { border-color: var(--danger); }
+.sent-card .tools { display: flex; gap: 2px; opacity: 0; transition: opacity var(--t); }
+.sent-card:hover .tools, .sent-card:focus-within .tools { opacity: 1; }
+.sent-tokens { font-size: 15.5px; line-height: 1.9; color: var(--ink); }
+.sent-dst { margin-top: 6px; font-size: 15px; font-weight: 600; color: var(--ink-2); }
+/* 可点击单词：悬停高亮 + 点线提示可查词 */
+button.fr-w {
+  border: none; background: none; padding: 0; margin: 0;
+  font: inherit; color: inherit; cursor: pointer;
+  border-bottom: 1px dotted var(--border-strong);
+  border-radius: 3px;
+  transition: background-color var(--t), color var(--t), border-color var(--t);
+}
+button.fr-w:hover { background: var(--primary-soft); color: var(--primary-soft-ink); border-bottom-color: var(--primary); }
+button.fr-w.fr-w-saved { border-bottom: 2px solid var(--primary); }
+/* 生词托盘 */
+.tray-item { display: flex; align-items: baseline; gap: 8px; padding: 7px 2px; border-bottom: 1px solid var(--border); font-size: 13.5px; }
+.tray-item:last-of-type { border-bottom: none; }
+.tray-item b { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tray-item .tiny { flex: none; }
+
+/* 词卡浮层（word-popup.js）：点词后的词典卡 */
+.fr-wpopup {
+  position: fixed; z-index: 90;
+  width: min(340px, calc(100vw - 20px));
+  max-height: min(420px, calc(100vh - 20px));
+  overflow-y: auto;
+  background: var(--surface);
+  border: 1px solid var(--primary);
+  border-radius: var(--radius);
+  box-shadow: 0 10px 32px rgba(2, 10, 9, .18);
+  padding: 13px 15px;
+  animation: bubble-in .16s ease;
+}
+.fr-wpopup[hidden] { display: none; }
+.fr-wpopup-h { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+.fr-wpopup-word { font-size: 19px; font-weight: 800; }
+.fr-wpopup-phon { font-family: var(--mono); font-size: 12.5px; color: var(--ink-3); }
+.fr-wpopup .sense { margin: 2px 0 8px; }
+.fr-wpopup-source { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-bottom: 10px; }
+.fr-wpopup-actions { display: flex; gap: 8px; }
+
+@media (max-width: 1080px) {
+  .workbench { grid-template-columns: minmax(200px, 240px) minmax(0, 1fr); }
+  .workbench-tray { grid-column: 1 / -1; }
+}
+@media (max-width: 760px) {
+  .workbench { grid-template-columns: 1fr; }
+}

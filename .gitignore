@@ -103,3 +103,6 @@ web-ext.config.ts
 
 # FluentRead Web 真站构建产物
 web/dist/
+web/public/assets/vendor/
+# FluentRead Web 本地缓存（可选完整 ECDICT 词库）
+web/.cache/

@@ -7,6 +7,7 @@
  * 按请求转发到用户在页面里配置的 Base URL。运行时 fetch 使用 Node 原生全局实现。
  * 主要内容：静态文件服务；POST /api/translate 单服务与多服务并发对比翻译；GET /api/services
  * 服务目录；POST /api/ai 聊天补全转发；POST /api/ai/models 模型列表拉取；
+ * GET /api/word 单词词典查询（ECDICT 本地优先 + 机器翻译兜底，供学习工作台点词）；
  * 每请求独立超时与取消；结果含真实耗时与失败原因。
  * 模块边界：只做 HTTP 编排与静态转发；不实现页面 DOM；API 密钥仅随请求使用，不落盘、
  * 不写入日志、不参与缓存；不缓存翻译与 AI 结果。
@@ -24,6 +25,7 @@ import {translateOfficialFreeWebText} from '@/src/providers/translation/free-off
 import {createTranslationProviderConfigSnapshot} from '@/src/services/translation/requestSnapshot';
 import {TRANSLATION_PROVIDER_CONFIG,
     type TranslationProviderRequestContext} from '@/src/services/translation/types';
+import {lookupWord} from './wordDictionary';
 
 const DIST_DIR = fileURLToPath(new URL('.', import.meta.url));
 const PUBLIC_DIR = resolve(DIST_DIR, '../public');
@@ -303,6 +305,25 @@ const server = createServer(async (req, res) => {
                 languages: LANGUAGES,
                 services: Object.entries(SERVICES).map(([id, meta]) => ({id, label: meta.label})),
             });
+            return;
+        }
+        if (url.pathname === '/api/word') {
+            const from = url.searchParams.get('from') ?? 'auto';
+            const to = url.searchParams.get('to') ?? 'zh-Hans';
+            if (from !== 'auto' && !(from in LANGUAGES)) {
+                sendJson(res, 400, {error: '不支持的源语言'});
+                return;
+            }
+            if (to === 'auto' || !(to in LANGUAGES)) {
+                sendJson(res, 400, {error: '不支持的目标语言'});
+                return;
+            }
+            try {
+                const result = await lookupWord(url.searchParams.get('term') ?? '', from, to);
+                sendJson(res, 200, result);
+            } catch (error) {
+                sendJson(res, (error as {statusCode?: number}).statusCode ?? 500, {error: (error as Error).message});
+            }
             return;
         }
         if (url.pathname === '/api/ai' && req.method === 'POST') {

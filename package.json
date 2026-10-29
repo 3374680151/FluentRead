@@ -13,7 +13,7 @@
     "test:chatgpt-bridge": "node --test tests/chatgptPlanBridge.test.mjs",
     "dev": "wxt",
     "dev:firefox": "wxt -b firefox",
-    "web:build": "vite build --ssr web/server.ts --outDir web/dist --config web/vite.config.ts",
+    "web:build": "vite build --ssr web/server.ts --outDir web/dist --config web/vite.config.ts && vite build --config web/vite.config.client.ts",
     "web:start": "node web/dist/server.js",
     "build": "node scripts/testing/run-resource-safe.mjs -- wxt build",
     "build:userscript": "node scripts/testing/run-resource-safe.mjs -- vite build --config userscript/vite.config.ts",
