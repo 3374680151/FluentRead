@@ -146,15 +146,31 @@
     });
   }
 
+  /* ==================== 访客偏好（localStorage 持久化：划词开关 / 目标语言） ==================== */
+  function readPref(key, fallback) {
+    try {
+      var value = localStorage.getItem(key);
+      return value === null ? fallback : value;
+    } catch (e) { return fallback; }
+  }
+  function writePref(key, value) {
+    try { localStorage.setItem(key, String(value)); } catch (e) { /* 隐私模式忽略 */ }
+  }
+  /** 生效目标语言：面板切换后持久化，优先于嵌入配置。 */
+  function targetLang() { return readPref("fr-sdk-to", String(config.to || "zh-Hans")); }
+
   /* ==================== 翻译 API（免费线路依次换线） ==================== */
   var servicesCache = null;
+  var languagesCache = null;
   function loadServices() {
     if (servicesCache) return Promise.resolve(servicesCache);
     return fetch(SERVER + "/api/services").then(function (r) { return r.json(); }).then(function (data) {
       servicesCache = (data.services || []).map(function (s) { return s.id; });
+      languagesCache = data.languages || {};
       return servicesCache;
     }).catch(function () {
       servicesCache = ["microsoft", "transmart", "alibaba", "mymemory", "google"];
+      languagesCache = { "zh-Hans": "简体中文", en: "English", ja: "日本語" };
       return servicesCache;
     });
   }
@@ -170,7 +186,7 @@
   }
   /** 依次尝试全部免费线路，返回首个成功结果；全部失败时如实返回最后一次错误。 */
   function translateSmart(text) {
-    var to = String(config.to || "zh-Hans");
+    var to = targetLang();
     return loadServices().then(function (ids) {
       var chain = ids.length ? ids : ["microsoft"];
       var attempts = [];
@@ -191,7 +207,7 @@
     });
   }
   function lookupWord(term) {
-    var query = new URLSearchParams({ term: term, from: String(config.from || "auto"), to: String(config.to || "zh-Hans") });
+    var query = new URLSearchParams({ term: term, from: String(config.from || "auto"), to: targetLang() });
     return fetch(SERVER + "/api/word?" + query.toString())
       .then(function (r) { return r.json(); })
       .then(function (data) {
@@ -222,7 +238,7 @@
    * 词书模块不可用时降级为宿主站 localStorage 暂存，并明确告知用户数据位置。
    */
   function captureWord(draft) {
-    var to = String(config.to || "zh-Hans");
+    var to = targetLang();
     return loadVocabModule().then(function (mod) {
       return mod.vocabularyBook.upsert({
         sourceLanguage: draft.kind === "sentence" ? (/^[\u4e00-\u9fff]/.test(draft.term) ? "zh-Hans" : "en") : "en",
@@ -272,6 +288,8 @@
   var sameOrigin = SERVER === location.origin;
   panel.innerHTML =
     '<h2>快捷翻译</h2>' +
+    '<div class="frsdk-langrow"><label class="frsdk-label" for="frsdk-to">目标语言</label>' +
+      '<select class="frsdk-select" id="frsdk-to" data-fab-to aria-label="目标语言"></select></div>' +
     '<textarea class="frsdk-textarea" data-fab-src placeholder="输入要翻译的文本…" aria-label="要翻译的文本"></textarea>' +
     '<button class="frsdk-btn" data-fab-go type="button">翻译</button>' +
     '<div class="frsdk-out" data-fab-out>译文将显示在这里。</div>' +
@@ -288,7 +306,7 @@
   var fabOut = panel.querySelector("[data-fab-out]");
   var fabMeta = panel.querySelector("[data-fab-meta]");
   var fabResult = "";
-  var selectionOn = config.selection !== false && config.selection !== "false";
+  var selectionOn = readPref("fr-sdk-selection", String(config.selection !== false && config.selection !== "false")) === "true";
 
   function setPanel(open) {
     panel.hidden = !open;
@@ -371,16 +389,36 @@
   fabSrc.addEventListener("keydown", function (e) {
     if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) { e.preventDefault(); fabGo.click(); }
   });
+  /* 目标语言下拉：服务目录加载后填充，切换即持久化 */
+  loadServices().then(function () {
+    var select = panel.querySelector("[data-fab-to]");
+    if (!select) return;
+    var labels = languagesCache || {};
+    var codes = Object.keys(labels).filter(function (code) { return code !== "auto"; });
+    if (codes.indexOf(targetLang()) < 0) codes.unshift(targetLang());
+    codes.forEach(function (code) {
+      var option = createEl("option");
+      option.value = code;
+      option.textContent = labels[code] || code;
+      select.appendChild(option);
+    });
+    select.value = targetLang();
+    select.addEventListener("change", function () {
+      writePref("fr-sdk-to", select.value);
+      toast("目标语言已切换为 " + (labels[select.value] || select.value));
+    });
+  });
   panel.querySelector("[data-fab-copy]").addEventListener("click", function () {
     copyText(fabResult, "已复制到剪贴板");
   });
   panel.querySelector("[data-fab-speak]").addEventListener("click", function () {
-    if (fabResult) speak(fabResult, config.to);
+    if (fabResult) speak(fabResult, targetLang());
   });
   var fabSel = panel.querySelector("[data-fab-sel]");
   fabSel.checked = selectionOn;
   fabSel.addEventListener("change", function () {
     selectionOn = fabSel.checked;
+    writePref("fr-sdk-selection", selectionOn);
     if (!selectionOn) hideBubble();
   });
 
@@ -477,7 +515,7 @@
     bubble.querySelector("[data-copy]").addEventListener("click", function () {
       copyText(payload.ok ? payload.text : "", "已复制");
     });
-    bubble.querySelector("[data-speak]").addEventListener("click", function () { speak(payload.ok ? payload.text : text, payload.ok ? config.to : "en"); });
+    bubble.querySelector("[data-speak]").addEventListener("click", function () { speak(payload.ok ? payload.text : text, payload.ok ? targetLang() : "en"); });
     bubble.querySelector("[data-close]").addEventListener("click", hideBubble);
     bubble.querySelector("[data-retry]").addEventListener("click", function () { showFor(lastText, lastRect, lastContext); });
   }
